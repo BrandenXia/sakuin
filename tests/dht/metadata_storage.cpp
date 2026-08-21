@@ -1,8 +1,12 @@
 import std;
 
+import sakuin.config;
 import sakuin.core;
+import sakuin.dht;
+import sakuin.integration.metadata_config;
 import sakuin.integration.metadata_storage;
 import sakuin.model.torrent;
+import sakuin.runtime;
 import sakuin.storage;
 import sakuin.storage.dataset.torrents;
 
@@ -21,6 +25,16 @@ sakuin::core::InfoHash hash(std::uint8_t value) {
   result.bytes.fill(value);
   return result;
 }
+
+class TransportFactory final : public sakuin::runtime::StreamTransportFactory {
+public:
+  sakuin::core::Result<std::shared_ptr<sakuin::runtime::StreamTransport>>
+  create(sakuin::runtime::StreamTransportOptions) override {
+    return std::unexpected(sakuin::core::Error{
+        sakuin::core::ErrorCode::IoError,
+        "Storage composition test does not open a transport"});
+  }
+};
 
 } // namespace
 
@@ -78,6 +92,24 @@ int main() {
       !sink.last_error() ||
       sink.last_error()->code != core::ErrorCode::InvalidArgument)
     return 6;
+
+  TransportFactory factory;
+  dht::PeerId peer_id{};
+  std::ranges::iota(peer_id, std::uint8_t{1});
+  auto metadata_config = config::defaults().network.dht.metadata;
+  metadata_config.enabled = false;
+  auto disabled = integration::TorrentMetadataAcquisition::create(
+      peer_id, factory, dataset, metadata_config);
+  if (!disabled || (*disabled)->enabled() || (*disabled)->controller())
+    return 7;
+
+  metadata_config.enabled = true;
+  metadata_config.maximum_in_flight = 2;
+  auto enabled = integration::TorrentMetadataAcquisition::create(
+      peer_id, factory, dataset, metadata_config);
+  if (!enabled || !(*enabled)->enabled() || !(*enabled)->controller())
+    return 8;
+  (*enabled)->stop();
 
   return 0;
 }
