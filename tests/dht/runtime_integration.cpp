@@ -3,6 +3,7 @@ import std;
 import sakuin.config;
 import sakuin.core;
 import sakuin.dht;
+import sakuin.integration.dht_config;
 import sakuin.integration.dht_runtime;
 import sakuin.integration.metadata_config;
 import sakuin.model.observation;
@@ -51,6 +52,27 @@ public:
 
 private:
   sakuin::runtime::StreamEndpoint remote_;
+};
+
+class FailingDatagramTransport final
+    : public sakuin::runtime::DatagramTransport {
+public:
+  sakuin::core::Result<void>
+  start(sakuin::runtime::DatagramReceiver &) override {
+    started = true;
+    return {};
+  }
+  sakuin::core::Result<void> send(sakuin::runtime::DatagramEndpoint,
+                                  sakuin::core::ByteBuffer) override {
+    return std::unexpected(sakuin::core::Error{sakuin::core::ErrorCode::IoError,
+                                               "Synthetic UDP send failure"});
+  }
+  sakuin::runtime::DatagramEndpoint local_endpoint() const noexcept override {
+    return {};
+  }
+  void stop() noexcept override { started = false; }
+
+  bool started{};
 };
 
 class TransportFactory final : public sakuin::runtime::StreamTransportFactory {
@@ -111,6 +133,31 @@ int main() {
       mapped.storage_conflict_attempts != 4)
     return 1;
 
+  auto dht_config = config::defaults().network.dht;
+  dht_config.query_timeout = std::chrono::seconds{9};
+  dht_config.bootstrap_maximum_in_flight = 3;
+  dht_config.bootstrap_maximum_attempts = 5;
+  dht_config.bootstrap_retry_delay = std::chrono::seconds{7};
+  dht_config.routing.maximum_queued = 222;
+  dht_config.routing.maximum_in_flight = 4;
+  dht_config.routing.maximum_attempts = 6;
+  dht_config.routing.retry_delay = std::chrono::seconds{8};
+  const auto node_options =
+      integration::dht_node_options(dht_config, runtime::AddressFamily::IPv6);
+  const auto configured_bootstrap = integration::bootstrap_options(dht_config);
+  const auto configured_routing =
+      integration::routing_maintenance_options(dht_config.routing);
+  if (node_options.query_timeout != std::chrono::seconds{9} ||
+      node_options.address_family != runtime::AddressFamily::IPv6 ||
+      configured_bootstrap.maximum_in_flight != 3 ||
+      configured_bootstrap.maximum_attempts != 5 ||
+      configured_bootstrap.retry_delay != std::chrono::seconds{7} ||
+      configured_routing.maximum_queued != 222 ||
+      configured_routing.maximum_in_flight != 4 ||
+      configured_routing.maximum_attempts != 6 ||
+      configured_routing.retry_delay != std::chrono::seconds{8})
+    return 32;
+
   TransportFactory factory;
   MetadataSink metadata_sink;
   dht::PeerId peer_id{};
@@ -121,15 +168,49 @@ int main() {
     return 2;
 
   ObservationSink observations;
-  auto pump = integration::DhtRuntimeActionPump::create(observations,
-                                                        controller->get());
+  dht::AnnounceTokenSecret token_secret;
+  auto tokens = dht::RotatingAnnounceTokenProvider::create(token_secret);
+  dht::krpc::NodeId local_node{};
+  dht::DhtNode routing_node{local_node,
+                            *tokens,
+                            {.query_timeout = std::chrono::seconds{2},
+                             .address_family = runtime::AddressFamily::IPv4}};
+  const auto routing_contact = [](std::uint8_t suffix) {
+    dht::NodeContact result{
+        .endpoint = {.address = runtime::IpAddress::loopback_v4(),
+                     .port = static_cast<std::uint16_t>(6'000 + suffix)},
+        .last_seen = core::Timestamp{std::chrono::seconds{1}}};
+    result.id.bytes.front() = 0x80;
+    result.id.bytes.back() = suffix;
+    result.endpoint.address.bytes[3] = static_cast<std::uint8_t>(suffix + 1);
+    return result;
+  };
+  for (std::uint8_t index = 0; index < dht::k_bucket_size; ++index)
+    routing_node.routing_table().observe(routing_contact(index));
+  auto routing_update =
+      routing_node.routing_table().observe(routing_contact(20));
+  auto routing = dht::RoutingMaintenancePlanner::create(
+      routing_node, {.maximum_queued = 2,
+                     .maximum_in_flight = 1,
+                     .maximum_attempts = 1,
+                     .retry_delay = std::chrono::seconds{1}});
+  if (!routing_update.probe || !routing)
+    return 20;
+  auto pump = integration::DhtRuntimeActionPump::create(
+      observations, {.metadata = controller->get(),
+                     .node = &routing_node,
+                     .routing = routing->get()});
   auto invalid_pump = integration::DhtRuntimeActionPump::create(
-      observations, nullptr, {.maximum_pending_actions = 0});
+      observations, {}, {.maximum_pending_actions = 0});
+  auto missing_owner = integration::DhtRuntimeActionPump::create(
+      observations, {.routing = routing->get()});
   if (!pump || invalid_pump ||
-      invalid_pump.error().code != core::ErrorCode::InvalidArgument)
+      invalid_pump.error().code != core::ErrorCode::InvalidArgument ||
+      missing_owner ||
+      missing_owner.error().code != core::ErrorCode::InvalidArgument)
     return 3;
   auto bounded_pump = integration::DhtRuntimeActionPump::create(
-      observations, nullptr,
+      observations, {},
       {.maximum_pending_actions = 1, .maximum_pending_errors = 1});
   if (!bounded_pump)
     return 4;
@@ -140,6 +221,101 @@ int main() {
   auto bounded = (*bounded_pump)->poll({});
   if (bounded.errors.size() != 3 || (*bounded_pump)->pending() != 0)
     return 5;
+
+  (*pump)->on_actions(
+      dht::DhtActions{.probes_required = {*routing_update.probe}});
+  const auto routing_now = core::Timestamp{std::chrono::seconds{10}};
+  auto probe_started = (*pump)->poll(routing_now);
+  if (probe_started.routing_probes_accepted != 1 || !probe_started.routing ||
+      probe_started.routing->sends.size() != 1 || (*routing)->in_flight() != 1)
+    return 21;
+  auto probe_query =
+      dht::krpc::decode(probe_started.routing->sends.front().payload);
+  const auto *typed_probe =
+      probe_query ? std::get_if<dht::krpc::Query>(&*probe_query) : nullptr;
+  if (!typed_probe)
+    return 22;
+  auto probe_response = dht::krpc::encode(
+      dht::krpc::Response{.transaction = typed_probe->transaction,
+                          .sender = routing_update.probe->incumbent.id});
+  auto probe_completion =
+      probe_response ? routing_node.handle(
+                           {.source = routing_update.probe->incumbent.endpoint,
+                            .payload = std::move(*probe_response)},
+                           routing_now + std::chrono::seconds{1})
+                     : core::Result<dht::DhtActions>{
+                           std::unexpected(probe_response.error())};
+  if (!probe_completion)
+    return 23;
+  (*pump)->on_actions(std::move(*probe_completion));
+  auto probe_finished = (*pump)->poll(routing_now + std::chrono::seconds{1});
+  if (!probe_finished.actions.empty() || !probe_finished.routing ||
+      (*routing)->in_flight() != 0 || (*routing)->queued() != 0)
+    return 24;
+
+  auto unowned_query =
+      routing_node.get_peers(routing_update.probe->incumbent.endpoint, hash(90),
+                             routing_now + std::chrono::seconds{2});
+  if (!unowned_query)
+    return 25;
+  auto expired = (*pump)->poll(routing_now + std::chrono::seconds{4});
+  if (expired.queries_expired != 1 || expired.unhandled_timeouts.size() != 1 ||
+      expired.unhandled_timeouts.front().kind != dht::krpc::QueryKind::GetPeers)
+    return 26;
+
+  dht::DhtNode bootstrap_node{
+      local_node, *tokens, {.query_timeout = std::chrono::seconds{2}}};
+  const std::array bootstrap_endpoints{
+      routing_update.probe->incumbent.endpoint};
+  auto bootstrap =
+      dht::BootstrapPlanner::create(bootstrap_node, bootstrap_endpoints,
+                                    {.maximum_in_flight = 1,
+                                     .maximum_attempts = 2,
+                                     .retry_delay = std::chrono::seconds{1}});
+  if (!bootstrap)
+    return 27;
+  auto bootstrap_pump = integration::DhtRuntimeActionPump::create(
+      observations, {.node = &bootstrap_node, .bootstrap = bootstrap->get()});
+  if (!bootstrap_pump)
+    return 28;
+  const auto bootstrap_now = core::Timestamp{std::chrono::seconds{200}};
+  auto bootstrap_started = (*bootstrap_pump)->poll(bootstrap_now);
+  if (!bootstrap_started.bootstrap ||
+      bootstrap_started.bootstrap->sends.size() != 1)
+    return 29;
+  auto bootstrap_timed_out =
+      (*bootstrap_pump)->poll(bootstrap_now + std::chrono::seconds{2});
+  if (bootstrap_timed_out.queries_expired != 1 ||
+      !bootstrap_timed_out.unhandled_timeouts.empty() ||
+      !bootstrap_timed_out.bootstrap ||
+      bootstrap_timed_out.bootstrap->next_wakeup !=
+          bootstrap_now + std::chrono::seconds{3})
+    return 30;
+  auto bootstrap_retry =
+      (*bootstrap_pump)->poll(bootstrap_now + std::chrono::seconds{3});
+  if (!bootstrap_retry.bootstrap ||
+      bootstrap_retry.bootstrap->sends.size() != 1)
+    return 31;
+  FailingDatagramTransport failing_datagrams;
+  dht::DhtRuntimeDriver bootstrap_driver{
+      bootstrap_node, failing_datagrams, **bootstrap_pump,
+      [bootstrap_now] { return bootstrap_now + std::chrono::seconds{3}; }};
+  if (!bootstrap_driver.start())
+    return 33;
+  auto dispatch = integration::dispatch_dht_runtime(
+      bootstrap_retry, bootstrap_driver, **bootstrap_pump,
+      bootstrap_now + std::chrono::seconds{3});
+  if (dispatch.attempted != 1 || dispatch.accepted != 0 ||
+      dispatch.failed != 1 || dispatch.errors.size() != 1 ||
+      !bootstrap_retry.bootstrap->sends.empty() ||
+      bootstrap_node.outstanding_queries() != 0)
+    return 34;
+  auto bootstrap_complete =
+      (*bootstrap_pump)->poll(bootstrap_now + std::chrono::seconds{3});
+  if (!bootstrap_complete.bootstrap || !bootstrap_complete.bootstrap->complete)
+    return 35;
+  bootstrap_driver.stop();
+
   runtime::IpAddress peer_address = runtime::IpAddress::loopback_v4();
   peer_address.bytes[3] = 9;
   const auto wanted = hash(10);

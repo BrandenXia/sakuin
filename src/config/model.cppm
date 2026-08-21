@@ -34,6 +34,13 @@ struct MetadataAcquisitionConfig {
   std::size_t storage_conflict_attempts{3};
 };
 
+struct RoutingMaintenanceConfig {
+  std::size_t maximum_queued{1'024};
+  std::size_t maximum_in_flight{8};
+  std::size_t maximum_attempts{2};
+  core::Duration retry_delay{std::chrono::seconds{5}};
+};
+
 struct DhtConfig {
   bool private_network{};
   std::size_t maximum_in_flight{128};
@@ -43,6 +50,7 @@ struct DhtConfig {
   core::Duration bootstrap_retry_delay{std::chrono::seconds{5}};
   std::vector<std::string> bootstrap;
   DhtIdentityConfig identity;
+  RoutingMaintenanceConfig routing;
   MetadataAcquisitionConfig metadata;
 };
 
@@ -217,6 +225,26 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.network.dht.bootstrap_retry_delay = *value;
+    } else if (name == "network.dht.routing.maximum_queued") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.routing.maximum_queued = *value;
+    } else if (name == "network.dht.routing.maximum_in_flight") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.routing.maximum_in_flight = *value;
+    } else if (name == "network.dht.routing.maximum_attempts") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.routing.maximum_attempts = *value;
+    } else if (name == "network.dht.routing.retry_delay_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.routing.retry_delay = *value;
     } else if (name == "network.dht.identity.mode") {
       if (text == "bep42")
         config.network.dht.identity.mode = DhtIdentityMode::Bep42;
@@ -440,6 +468,14 @@ core::Result<void> validate(const AppConfig &config) {
   if (config.network.dht.query_timeout <= core::Duration::zero() ||
       config.network.dht.bootstrap_retry_delay <= core::Duration::zero())
     return std::unexpected(invalid("DHT timeouts must be positive"));
+  const auto &routing = config.network.dht.routing;
+  if (routing.maximum_queued == 0 || routing.maximum_queued > 1'000'000 ||
+      routing.maximum_in_flight == 0 ||
+      routing.maximum_in_flight > config.network.dht.maximum_in_flight ||
+      routing.maximum_attempts == 0 || routing.maximum_attempts > 32 ||
+      routing.retry_delay <= core::Duration::zero())
+    return std::unexpected(
+        invalid("DHT routing-maintenance limits are invalid"));
   if (config.network.dht.identity.mode == DhtIdentityMode::Bep42 &&
       (config.network.dht.identity.observation_quorum < 2 ||
        config.network.dht.identity.vote_window <= core::Duration::zero()))

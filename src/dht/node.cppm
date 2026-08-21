@@ -55,7 +55,7 @@ struct DhtActions {
   std::vector<DatagramSend> sends;
   std::optional<model::ObservationRecord> observation;
   std::optional<PeerMetadataCandidate> metadata_candidate;
-  std::vector<NodeContact> probes_required;
+  std::vector<RoutingProbe> probes_required;
   std::optional<QueryCompletion> query_completion;
   std::optional<ObservedAddressReport> observed_address;
 };
@@ -323,8 +323,8 @@ core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
     auto update = routing_.observe(NodeContact{.id = response_message->sender,
                                                .endpoint = datagram.source,
                                                .last_seen = received_at});
-    if (update.least_recently_seen)
-      actions.probes_required.push_back(*update.least_recently_seen);
+    if (update.probe)
+      actions.probes_required.push_back(std::move(*update.probe));
 
     for (const auto [name, family] :
          {std::pair{std::string_view{"nodes"}, runtime::AddressFamily::IPv4},
@@ -343,9 +343,8 @@ core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
         return std::unexpected(contacts.error());
       for (auto &contact : *contacts) {
         auto contact_update = routing_.observe(std::move(contact));
-        if (contact_update.least_recently_seen)
-          actions.probes_required.push_back(
-              *contact_update.least_recently_seen);
+        if (contact_update.probe)
+          actions.probes_required.push_back(std::move(*contact_update.probe));
       }
     }
     actions.query_completion =
@@ -374,8 +373,8 @@ core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
       routing_.observe(NodeContact{.id = query->sender,
                                    .endpoint = datagram.source,
                                    .last_seen = received_at});
-  if (routing_update.least_recently_seen)
-    actions.probes_required.push_back(*routing_update.least_recently_seen);
+  if (routing_update.probe)
+    actions.probes_required.push_back(std::move(*routing_update.probe));
   if (query->info_hash)
     actions.observation = model::ObservationRecord{
         .info_hash = *query->info_hash, .observed_at = received_at};

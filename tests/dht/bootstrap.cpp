@@ -34,11 +34,11 @@ int main() {
   auto tokens = dht::RotatingAnnounceTokenProvider::create(secret);
   dht::DhtNode node_engine{node(100), *tokens};
   const std::array routers{endpoint(2, 6881)};
-  auto planner = dht::BootstrapPlanner::create(
-      node_engine, routers,
-      {.maximum_in_flight = 1,
-       .maximum_attempts = 3,
-       .retry_delay = std::chrono::seconds{1}});
+  auto planner =
+      dht::BootstrapPlanner::create(node_engine, routers,
+                                    {.maximum_in_flight = 1,
+                                     .maximum_attempts = 3,
+                                     .retry_delay = std::chrono::seconds{1}});
   if (!planner || dht::BootstrapPlanner::create(node_engine, {}, {}))
     return 1;
 
@@ -53,9 +53,8 @@ int main() {
       typed_query->target != node_engine.routing_table().local_id())
     return 3;
 
-  const dht::NodeContact discovered{.id = node(20),
-                                    .endpoint = endpoint(3, 6881),
-                                    .last_seen = seconds(1)};
+  const dht::NodeContact discovered{
+      .id = node(20), .endpoint = endpoint(3, 6881), .last_seen = seconds(1)};
   const std::array contacts{discovered};
   auto compact =
       dht::encode_compact_nodes(contacts, runtime::AddressFamily::IPv4);
@@ -75,10 +74,14 @@ int main() {
       expansion->known_candidates != 2)
     return 5;
 
-  auto waiting = (*planner)->poll(seconds(16));
-  if (!waiting || !waiting->sends.empty() || waiting->timeouts.size() != 1 ||
-      waiting->next_wakeup != seconds(17))
+  const auto timeouts = node_engine.expire_queries(seconds(16));
+  if (timeouts.size() != 1 ||
+      !(*planner)->consume_timeout(timeouts.front(), seconds(16)))
     return 6;
+  auto waiting = (*planner)->poll(seconds(16));
+  if (!waiting || !waiting->sends.empty() ||
+      waiting->next_wakeup != seconds(17))
+    return 11;
   auto retry = (*planner)->poll(seconds(17));
   if (!retry || retry->sends.size() != 1)
     return 7;

@@ -27,9 +27,14 @@ enum class RoutingMutation {
   ProbeRequired,
 };
 
+struct RoutingProbe {
+  NodeContact incumbent;
+  NodeContact replacement;
+};
+
 struct RoutingUpdate {
   RoutingMutation mutation{RoutingMutation::IgnoredSelf};
-  std::optional<NodeContact> least_recently_seen;
+  std::optional<RoutingProbe> probe;
 };
 
 std::optional<std::size_t> bucket_index(const krpc::NodeId &local,
@@ -91,8 +96,8 @@ core::Error malformed(std::string message) {
 
 } // namespace
 
-std::optional<std::size_t>
-bucket_index(const krpc::NodeId &local, const krpc::NodeId &remote) noexcept {
+std::optional<std::size_t> bucket_index(const krpc::NodeId &local,
+                                        const krpc::NodeId &remote) noexcept {
   for (std::size_t index = 0; index < local.bytes.size(); ++index) {
     const auto difference =
         static_cast<std::uint8_t>(local.bytes[index] ^ remote.bytes[index]);
@@ -136,7 +141,8 @@ RoutingUpdate RoutingTable::observe(NodeContact contact) {
     return {.mutation = RoutingMutation::Inserted};
   }
   return {.mutation = RoutingMutation::ProbeRequired,
-          .least_recently_seen = bucket.front()};
+          .probe = RoutingProbe{.incumbent = bucket.front(),
+                                .replacement = std::move(contact)}};
 }
 
 bool RoutingTable::replace_unresponsive(const krpc::NodeId &incumbent,
@@ -174,8 +180,8 @@ bool RoutingTable::remove(const krpc::NodeId &id) {
   return true;
 }
 
-std::vector<NodeContact>
-RoutingTable::closest(const krpc::NodeId &target, std::size_t limit) const {
+std::vector<NodeContact> RoutingTable::closest(const krpc::NodeId &target,
+                                               std::size_t limit) const {
   auto result = all_contacts();
   std::ranges::sort(result, [&](const auto &left, const auto &right) {
     return closer_to(left.id, right.id, target);
