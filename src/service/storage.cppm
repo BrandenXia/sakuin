@@ -1,3 +1,11 @@
+module;
+
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+
 export module sakuin.service.storage;
 
 import std;
@@ -6,7 +14,11 @@ import sakuin.config.model;
 import sakuin.core.result;
 import sakuin.dht.observation;
 import sakuin.integration.dht_storage;
+import sakuin.storage.admin;
+import sakuin.storage.admin.compaction;
+import sakuin.storage.admin.row_v1;
 import sakuin.storage.blob.local;
+import sakuin.storage.catalog.manifest;
 import sakuin.storage.catalog.local;
 import sakuin.storage.dataset.observations;
 import sakuin.storage.dataset.torrents;
@@ -14,6 +26,8 @@ import sakuin.storage.format.block;
 import sakuin.storage.format.segment;
 
 export namespace sakuin::service {
+
+enum class LocalDataset { Observations, Torrents };
 
 // Owns the canonical local storage graph. Both DHT address-family runtimes may
 // share observations(); the buffered sink serializes publication to its
@@ -31,6 +45,10 @@ public:
 
   core::Result<void> flush();
 
+  core::Result<storage::CompactionResult> compact(LocalDataset dataset);
+  core::Result<storage::VerifyResult> verify(LocalDataset dataset);
+  core::Result<storage::GcResult> garbage_collect(LocalDataset dataset);
+
   dht::ObservationSink &observations() noexcept { return *observation_sink_; }
   storage::ObservationDataset &observation_dataset() noexcept {
     return *observations_;
@@ -39,10 +57,12 @@ public:
   std::size_t observation_batch_size() const noexcept {
     return observation_batch_size_;
   }
+  const std::filesystem::path &root() const noexcept { return root_; }
 
 private:
   explicit LocalCanonicalStorage(std::filesystem::path root);
 
+  std::filesystem::path root_;
   storage::LocalBlobStore blobs_;
   std::unique_ptr<storage::LocalManifestCatalog> observation_catalog_;
   std::unique_ptr<storage::LocalManifestCatalog> torrent_catalog_;
@@ -50,6 +70,8 @@ private:
   std::unique_ptr<storage::TorrentDataset> torrents_;
   std::unique_ptr<integration::BufferedObservationSink> observation_sink_;
   std::size_t observation_batch_size_{};
+  storage::CompactionPolicy compaction_policy_;
+  int lock_file_{-1};
 };
 
 } // namespace sakuin::service
@@ -94,7 +116,7 @@ std::size_t calculated_observation_batch_size(std::uint64_t target_bytes) {
 } // namespace
 
 LocalCanonicalStorage::LocalCanonicalStorage(std::filesystem::path root)
-    : blobs_(std::move(root) / "objects") {}
+    : root_(std::move(root)), blobs_(root_ / "objects") {}
 
 core::Result<std::unique_ptr<LocalCanonicalStorage>>
 LocalCanonicalStorage::open(const config::StorageConfig &configuration) {
@@ -113,6 +135,29 @@ LocalCanonicalStorage::open(const config::StorageConfig &configuration) {
 
   auto result = std::unique_ptr<LocalCanonicalStorage>{
       new LocalCanonicalStorage{configuration.local_root}};
+  std::error_code directory_error;
+  const auto operational = configuration.local_root / "operational";
+  std::filesystem::create_directories(operational, directory_error);
+  if (directory_error)
+    return std::unexpected(
+        core::Error{core::ErrorCode::IoError,
+                    "Could not create local storage operational directory: " +
+                        directory_error.message()});
+  const auto lock_path = operational / "storage.lock";
+  result->lock_file_ =
+      ::open(lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+  if (result->lock_file_ < 0)
+    return std::unexpected(core::Error{core::ErrorCode::IoError,
+                                       "Could not open local storage lock: " +
+                                           std::string{std::strerror(errno)}});
+  if (::flock(result->lock_file_, LOCK_EX | LOCK_NB) != 0)
+    return std::unexpected(core::Error{
+        errno == EWOULDBLOCK ? core::ErrorCode::Conflict
+                             : core::ErrorCode::IoError,
+        errno == EWOULDBLOCK
+            ? "Local storage is already open by another Sakuin process"
+            : "Could not lock local storage: " +
+                  std::string{std::strerror(errno)}});
   auto observation_catalog = storage::LocalManifestCatalog::open(
       configuration.local_root / "manifests" / "observations", result->blobs_);
   if (!observation_catalog)
@@ -131,6 +176,11 @@ LocalCanonicalStorage::open(const config::StorageConfig &configuration) {
       result->blobs_, *result->torrent_catalog_, *header);
   result->observation_batch_size_ =
       calculated_observation_batch_size(configuration.segment_target_bytes);
+  result->compaction_policy_ = {
+      .minimum_segment_count = configuration.compaction_minimum_segments,
+      .target_block_size = header->target_block_size,
+      .compression = header->compression,
+      .compression_level = configuration.compression_level};
   result->observation_sink_ =
       std::make_unique<integration::BufferedObservationSink>(
           *result->observations_, result->observation_batch_size_);
@@ -140,10 +190,34 @@ LocalCanonicalStorage::open(const config::StorageConfig &configuration) {
 LocalCanonicalStorage::~LocalCanonicalStorage() {
   if (observation_sink_)
     static_cast<void>(observation_sink_->flush());
+  if (lock_file_ >= 0)
+    ::close(lock_file_);
 }
 
 core::Result<void> LocalCanonicalStorage::flush() {
   return observation_sink_->flush();
+}
+
+core::Result<storage::CompactionResult>
+LocalCanonicalStorage::compact(LocalDataset dataset) {
+  if (dataset == LocalDataset::Torrents)
+    return torrents_->compact(compaction_policy_);
+  return storage::RowV1DatasetMaintenance::compact(
+      blobs_, *observation_catalog_, compaction_policy_);
+}
+
+core::Result<storage::VerifyResult>
+LocalCanonicalStorage::verify(LocalDataset dataset) {
+  auto &catalog = dataset == LocalDataset::Observations ? *observation_catalog_
+                                                        : *torrent_catalog_;
+  return storage::RowV1DatasetMaintenance::verify(blobs_, catalog);
+}
+
+core::Result<storage::GcResult>
+LocalCanonicalStorage::garbage_collect(LocalDataset dataset) {
+  auto &catalog = dataset == LocalDataset::Observations ? *observation_catalog_
+                                                        : *torrent_catalog_;
+  return storage::RowV1DatasetMaintenance::garbage_collect(catalog);
 }
 
 } // namespace sakuin::service

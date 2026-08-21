@@ -4,6 +4,7 @@ import std;
 
 import sakuin.config.model;
 import sakuin.core.result;
+import sakuin.core.time;
 import sakuin.dht.identity;
 import sakuin.dht.krpc;
 import sakuin.dht.observation;
@@ -11,6 +12,7 @@ import sakuin.integration.dht_worker;
 import sakuin.runtime.asio_resolver;
 import sakuin.runtime.datagram;
 import sakuin.runtime.traffic;
+import sakuin.scheduler.work;
 import sakuin.service.dht;
 import sakuin.service.traffic;
 import sakuin.storage.dataset.torrents;
@@ -41,6 +43,8 @@ struct AsioDhtRuntimeDependencies {
   dht::ObservationSink *observations{};
   storage::TorrentDataset *torrents{};
   DhtRuntimeObserver *observer{};
+  scheduler::WorkCoordinator *work{};
+  core::Duration worker_heartbeat_interval{std::chrono::seconds{10}};
   std::function<void(std::uint64_t)> on_torrent_committed;
 };
 
@@ -212,6 +216,8 @@ AsioDhtRuntime::create_family(runtime::AddressFamily family,
        .torrents = dependencies_.torrents,
        .observer = observer,
        .traffic = traffic_.get(),
+       .work = dependencies_.work,
+       .worker_heartbeat_interval = dependencies_.worker_heartbeat_interval,
        .on_torrent_committed = dependencies_.on_torrent_committed});
 }
 

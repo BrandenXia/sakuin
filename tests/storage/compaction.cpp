@@ -18,8 +18,8 @@ struct TemporaryDirectory {
 sakuin::model::ObservationRecord observation(std::uint8_t value) {
   sakuin::core::InfoHash hash;
   hash.bytes.fill(value);
-  return {hash, sakuin::core::Timestamp{
-                    sakuin::core::Timestamp::duration{value}}};
+  return {hash,
+          sakuin::core::Timestamp{sakuin::core::Timestamp::duration{value}}};
 }
 
 } // namespace
@@ -48,9 +48,9 @@ int main() {
   if (!old_snapshot || !old_manifest ||
       (*old_manifest)->manifest().segments.size() != 2)
     return 3;
-  const auto old_objects = std::array{
-      (*old_manifest)->manifest().segments[0].object,
-      (*old_manifest)->manifest().segments[1].object};
+  const auto old_objects =
+      std::array{(*old_manifest)->manifest().segments[0].object,
+                 (*old_manifest)->manifest().segments[1].object};
 
   auto compacted = storage::RowV1DatasetMaintenance::compact(blobs, **catalog);
   if (!compacted || compacted->segments_created != 1 ||
@@ -58,7 +58,12 @@ int main() {
       (*catalog)->current_id().generation != 3)
     return 4;
   auto current_manifest = (*catalog)->pin_current();
-  if (!current_manifest || (*current_manifest)->manifest().segments.size() != 1)
+  if (!current_manifest ||
+      (*current_manifest)->manifest().segments.size() != 1 ||
+      (*current_manifest)->manifest().segments[0].tier !=
+          storage::SegmentTier::Hot ||
+      (*current_manifest)->manifest().segments[0].format_version !=
+          storage::StorageFormatVersion{1, 1})
     return 5;
 
   auto verified = storage::RowV1DatasetMaintenance::verify(blobs, **catalog);
@@ -95,8 +100,7 @@ int main() {
       (*catalog)->current_id().generation != 3)
     return 12;
 
-  auto pinned_gc =
-      storage::RowV1DatasetMaintenance::garbage_collect(**catalog);
+  auto pinned_gc = storage::RowV1DatasetMaintenance::garbage_collect(**catalog);
   if (!pinned_gc || pinned_gc->objects_deleted != 0)
     return 13;
   for (const auto &object : old_objects) {
@@ -107,8 +111,7 @@ int main() {
 
   old_snapshot->reset();
   old_manifest->reset();
-  auto reclaimed =
-      storage::RowV1DatasetMaintenance::garbage_collect(**catalog);
+  auto reclaimed = storage::RowV1DatasetMaintenance::garbage_collect(**catalog);
   if (!reclaimed || reclaimed->objects_deleted != 2 ||
       reclaimed->bytes_reclaimed == 0)
     return 15;

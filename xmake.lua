@@ -10,6 +10,7 @@ add_requires("asio")
 add_requires("toml++ 3.4.0")
 add_requires("llhttp 9.4.3")
 add_requires("nlohmann_json 3.12.0")
+add_requires("spdlog")
 
 target("sakuin-core")
   set_kind("static")
@@ -26,7 +27,7 @@ target("sakuin-config")
 target("sakuin-api")
   set_kind("static")
   add_files("src/api/**.cppm", {public = true})
-  add_deps("sakuin-core", "sakuin-search")
+  add_deps("sakuin-core", "sakuin-search", "sakuin-index")
   add_packages("nlohmann_json")
 
 target("sakuin-api-credentials")
@@ -99,7 +100,7 @@ target("sakuin-integrations")
   set_kind("static")
   add_files("src/integration/**.cppm", {public = true})
   add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
-           "sakuin-model-codecs", "sakuin-dht")
+           "sakuin-model-codecs", "sakuin-dht", "sakuin-scheduler")
 
 target("sakuin-service")
   set_kind("static")
@@ -109,12 +110,14 @@ target("sakuin-service")
            "sakuin-integrations", "sakuin-runtime-asio", "sakuin-scheduler",
            "sakuin-api", "sakuin-api-credentials", "sakuin-http",
            "sakuin-runtime-http", "sakuin-runtime-asio-http", "sakuin-search",
-           "sakuin-search-pipeline")
+           "sakuin-search-local", "sakuin-search-pipeline", "sakuin-index",
+           "sakuin-index-local")
 
 target("sakuin")
   set_kind("binary")
   add_files("tools/sakuin.cpp")
   add_deps("sakuin-core", "sakuin-config", "sakuin-dht", "sakuin-service")
+  add_packages("spdlog")
 
 target("sakuin-index")
   set_kind("static")
@@ -122,10 +125,22 @@ target("sakuin-index")
   add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
            "sakuin-model-codecs")
 
+target("sakuin-index-local")
+  set_kind("static")
+  add_files("src/index_local/**.cppm", {public = true})
+  add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs", "sakuin-index")
+
 target("sakuin-search")
   set_kind("static")
   add_files("src/search/**.cppm", {public = true})
   add_deps("sakuin-core", "sakuin-model")
+
+target("sakuin-search-local")
+  set_kind("static")
+  add_files("src/search_local/**.cppm", {public = true})
+  add_deps("sakuin-core", "sakuin-model", "sakuin-model-codecs",
+           "sakuin-search")
 
 target("sakuin-search-pipeline")
   set_kind("static")
@@ -161,7 +176,8 @@ target("sakuin-api-auth-tests")
 target("sakuin-api-search-tests")
   set_kind("binary")
   add_files("tests/api/search_http.cpp")
-  add_deps("sakuin-core", "sakuin-model", "sakuin-search", "sakuin-api")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-search", "sakuin-index",
+           "sakuin-api")
   add_tests("api-search")
 
 target("sakuin-api-rate-limit-tests")
@@ -314,12 +330,36 @@ target("sakuin-storage-service-tests")
            "sakuin-service")
   add_tests("storage-service")
 
+target("sakuin-maintenance-service-tests")
+  set_kind("binary")
+  add_files("tests/service/maintenance.cpp")
+  add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs", "sakuin-dht", "sakuin-integrations",
+           "sakuin-service")
+  add_tests("maintenance-service")
+
+target("sakuin-materialization-service-tests")
+  set_kind("binary")
+  add_files("tests/service/materialization.cpp")
+  add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs", "sakuin-index", "sakuin-dht",
+           "sakuin-integrations", "sakuin-service")
+  add_tests("materialization-service")
+
+target("sakuin-duplicate-index-service-tests")
+  set_kind("binary")
+  add_files("tests/service/duplicates.cpp")
+  add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs", "sakuin-index", "sakuin-index-local",
+           "sakuin-service")
+  add_tests("duplicate-index-service")
+
 target("sakuin-api-service-tests")
   set_kind("binary")
   add_files("tests/service/api.cpp")
   add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
-           "sakuin-model-codecs", "sakuin-api", "sakuin-api-credentials",
-           "sakuin-service")
+           "sakuin-model-codecs", "sakuin-index", "sakuin-api",
+           "sakuin-api-credentials", "sakuin-service")
   add_packages("asio")
   add_tests("api-service")
 
@@ -366,12 +406,34 @@ target("sakuin-materialization-tests")
            "sakuin-model-codecs", "sakuin-index")
   add_tests("observation-materialization")
 
+target("sakuin-duplicate-index-tests")
+  set_kind("binary")
+  add_files("tests/index/duplicates.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs", "sakuin-index")
+  add_tests("duplicate-index")
+
+target("sakuin-local-duplicate-index-tests")
+  set_kind("binary")
+  add_files("tests/index/local_duplicates.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs", "sakuin-index", "sakuin-index-local")
+  add_tests("local-duplicate-index")
+
 target("sakuin-search-tests")
   set_kind("binary")
   add_files("tests/search/search.cpp")
   add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
            "sakuin-model-codecs", "sakuin-search", "sakuin-search-pipeline")
   add_tests("search")
+
+target("sakuin-local-search-tests")
+  set_kind("binary")
+  add_files("tests/search/local.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs", "sakuin-search", "sakuin-search-local",
+           "sakuin-search-pipeline")
+  add_tests("local-search")
 
 target("sakuin-asio-datagram-tests")
   set_kind("binary")
@@ -408,6 +470,12 @@ target("sakuin-traffic-budget-tests")
   add_files("tests/scheduler/traffic.cpp")
   add_deps("sakuin-core", "sakuin-runtime", "sakuin-scheduler")
   add_tests("traffic-budget")
+
+target("sakuin-work-coordinator-tests")
+  set_kind("binary")
+  add_files("tests/scheduler/work.cpp")
+  add_deps("sakuin-core", "sakuin-runtime", "sakuin-scheduler")
+  add_tests("work-coordinator")
 
 -- target("dht")
 --   set_kind("static")

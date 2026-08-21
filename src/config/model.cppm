@@ -70,6 +70,17 @@ struct NetworkConfig {
 };
 
 struct StorageConfig {
+  struct MaintenanceConfig {
+    bool enabled{true};
+    core::Duration interval{std::chrono::minutes{15}};
+    core::Duration verification_interval{std::chrono::hours{24}};
+  };
+
+  struct MaterializationConfig {
+    bool enabled{true};
+    core::Duration interval{std::chrono::minutes{1}};
+  };
+
   StorageBackend backend{StorageBackend::Local};
   std::filesystem::path local_root{"./data"};
   std::uint64_t block_target_bytes{2U * 1024U * 1024U};
@@ -77,6 +88,8 @@ struct StorageConfig {
   CompressionCodec compression{CompressionCodec::Zstd};
   int compression_level{3};
   std::size_t compaction_minimum_segments{4};
+  MaintenanceConfig maintenance;
+  MaterializationConfig materialization;
 };
 
 struct ApiRateLimitConfig {
@@ -102,10 +115,29 @@ struct ApiConfig {
   ApiRateLimitConfig rate_limit;
 };
 
+struct DuplicateIndexConfig {
+  bool enabled{true};
+  core::Duration interval{std::chrono::minutes{5}};
+};
+
+struct IndexingConfig {
+  DuplicateIndexConfig duplicates;
+};
+
+struct DistributedConfig {
+  std::size_t maximum_work_items{65'536};
+  std::size_t maximum_payload_bytes{1U * 1024U * 1024U};
+  core::Duration worker_timeout{std::chrono::seconds{30}};
+  core::Duration lease_duration{std::chrono::minutes{2}};
+  core::Duration heartbeat_interval{std::chrono::seconds{10}};
+};
+
 struct AppConfig {
   NetworkConfig network;
   StorageConfig storage;
+  IndexingConfig indexing;
   ApiConfig api;
+  DistributedConfig distributed;
 };
 
 struct ConfigOverlay {
@@ -383,6 +415,41 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.storage.compaction_minimum_segments = *value;
+    } else if (name == "storage.maintenance.enabled") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.maintenance.enabled = *value;
+    } else if (name == "storage.maintenance.interval_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.maintenance.interval = *value;
+    } else if (name == "storage.maintenance.verification_interval_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.maintenance.verification_interval = *value;
+    } else if (name == "storage.materialization.enabled") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.materialization.enabled = *value;
+    } else if (name == "storage.materialization.interval_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.materialization.interval = *value;
+    } else if (name == "indexing.duplicates.enabled") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.indexing.duplicates.enabled = *value;
+    } else if (name == "indexing.duplicates.interval_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.indexing.duplicates.interval = *value;
     } else if (name == "api.enabled") {
       auto value = boolean_value(text, name);
       if (!value)
@@ -451,6 +518,31 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.api.rate_limit.window = *value;
+    } else if (name == "distributed.maximum_work_items") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.maximum_work_items = *value;
+    } else if (name == "distributed.maximum_payload_bytes") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.maximum_payload_bytes = *value;
+    } else if (name == "distributed.worker_timeout_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.worker_timeout = *value;
+    } else if (name == "distributed.lease_duration_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.lease_duration = *value;
+    } else if (name == "distributed.heartbeat_interval_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.heartbeat_interval = *value;
     } else {
       return std::unexpected(invalid("Unknown configuration key: " + name));
     }
@@ -537,6 +629,21 @@ core::Result<void> validate(const AppConfig &config) {
   if (config.storage.compaction_minimum_segments < 2)
     return std::unexpected(
         invalid("Compaction requires at least two input segments"));
+  if (config.storage.compression_level < -131'072 ||
+      config.storage.compression_level > 22)
+    return std::unexpected(
+        invalid("storage.compression.level is outside the Zstandard range"));
+  if (config.storage.maintenance.interval <= core::Duration::zero() ||
+      config.storage.maintenance.verification_interval <=
+          core::Duration::zero())
+    return std::unexpected(
+        invalid("Storage maintenance intervals must be positive"));
+  if (config.storage.materialization.interval <= core::Duration::zero())
+    return std::unexpected(
+        invalid("Storage materialization interval must be positive"));
+  if (config.indexing.duplicates.interval <= core::Duration::zero())
+    return std::unexpected(
+        invalid("Duplicate-index interval must be positive"));
   if (config.api.enabled &&
       (config.api.credential_store_directory.empty() ||
        config.api.listen_address.empty() || config.api.listen_port == 0 ||
@@ -562,6 +669,17 @@ core::Result<void> validate(const AppConfig &config) {
       (config.api.rate_limit.requests_per_window == 0 ||
        config.api.rate_limit.window <= core::Duration::zero()))
     return std::unexpected(invalid("Enabled API rate limit is invalid"));
+  if (config.distributed.maximum_work_items == 0 ||
+      config.distributed.maximum_work_items > 10'000'000 ||
+      config.distributed.maximum_payload_bytes == 0 ||
+      config.distributed.maximum_payload_bytes > 64U * 1024U * 1024U ||
+      config.distributed.worker_timeout <= core::Duration::zero() ||
+      config.distributed.lease_duration <= core::Duration::zero() ||
+      config.distributed.heartbeat_interval <= core::Duration::zero() ||
+      config.distributed.heartbeat_interval >=
+          config.distributed.worker_timeout)
+    return std::unexpected(
+        invalid("Distributed work and heartbeat limits are invalid"));
   for (const auto &endpoint : config.network.dht.bootstrap) {
     if (endpoint.empty())
       return std::unexpected(

@@ -3,6 +3,7 @@ import std;
 import sakuin.core;
 import sakuin.index;
 import sakuin.model.observation;
+import sakuin.model.torrent;
 import sakuin.storage;
 import sakuin.storage.dataset.observations;
 import sakuin.storage.dataset.torrents;
@@ -22,8 +23,8 @@ sakuin::model::ObservationRecord observation(std::uint8_t hash,
   sakuin::core::InfoHash info_hash;
   info_hash.bytes.fill(hash);
   return {.info_hash = info_hash,
-          .observed_at = sakuin::core::Timestamp{
-              sakuin::core::Timestamp::duration{time}}};
+          .observed_at =
+              sakuin::core::Timestamp{sakuin::core::Timestamp::duration{time}}};
 }
 
 } // namespace
@@ -62,8 +63,9 @@ int main() {
     core::InfoHash hash;
     hash.bytes.fill(hash_value);
     auto torrent = (*snapshot)->get(hash);
-    if (!torrent || !*torrent || (*torrent)->first_seen != core::Timestamp{
-                                                 core::Timestamp::duration{first}} ||
+    if (!torrent || !*torrent ||
+        (*torrent)->first_seen !=
+            core::Timestamp{core::Timestamp::duration{first}} ||
         (*torrent)->last_seen !=
             core::Timestamp{core::Timestamp::duration{last}} ||
         (*torrent)->name || (*torrent)->total_size != 0 ||
@@ -74,5 +76,54 @@ int main() {
   auto rejected = index::ObservationMaterializer::rebuild(**source, torrents);
   if (rejected || rejected.error().code != core::ErrorCode::Conflict)
     return 5;
+
+  auto advanced = index::ObservationMaterializer::advance(**source, torrents);
+  if (!advanced || advanced->observations_read != 4 ||
+      advanced->observations_skipped != 0 || advanced->torrents_updated != 0 ||
+      advanced->checkpoint.observations_processed != 4 ||
+      advanced->checkpoint.source_generation != source.value()->id().generation)
+    return 6;
+
+  core::InfoHash enriched_hash;
+  enriched_hash.bytes.fill(1);
+  model::TorrentRecord metadata{
+      .info_hash = enriched_hash,
+      .first_seen = core::Timestamp{core::Timestamp::duration{25}},
+      .last_seen = core::Timestamp{core::Timestamp::duration{35}},
+      .name = "preserved metadata",
+      .total_size = 42,
+      .files = {{.path = "payload.bin", .size = 42}}};
+  if (!torrents.enrich(std::move(metadata)))
+    return 7;
+
+  write = observations.begin_write();
+  const std::array additional{observation(1, 50), observation(3, 60)};
+  if (!write || !(*write)->append(additional) || !(*write)->commit())
+    return 8;
+  source = observations.snapshot();
+  const auto old_checkpoint = advanced->checkpoint;
+  advanced = index::ObservationMaterializer::advance(**source, torrents,
+                                                     old_checkpoint);
+  if (!advanced || advanced->observations_skipped != 4 ||
+      advanced->observations_read != 2 || advanced->torrents_updated != 2 ||
+      advanced->checkpoint.observations_processed != 6)
+    return 9;
+
+  snapshot = torrents.keyed_snapshot();
+  auto preserved = (*snapshot)->get(enriched_hash);
+  if (!preserved || !*preserved || (*preserved)->name != "preserved metadata" ||
+      (*preserved)->files.size() != 1 ||
+      (*preserved)->first_seen !=
+          core::Timestamp{core::Timestamp::duration{20}} ||
+      (*preserved)->last_seen != core::Timestamp{core::Timestamp::duration{50}})
+    return 10;
+
+  const auto generation = advanced->checkpoint.destination_generation;
+  auto replayed = index::ObservationMaterializer::advance(**source, torrents,
+                                                          old_checkpoint);
+  if (!replayed || replayed->torrents_updated != 0 ||
+      replayed->checkpoint.observations_processed != 6 ||
+      replayed->checkpoint.destination_generation != generation)
+    return 11;
   return 0;
 }

@@ -81,18 +81,29 @@ int main() {
   if (!count || *count != ThreadCount * RecordsPerThread)
     return 3;
 
+  auto locked = service::LocalCanonicalStorage::open(configuration);
+  if (locked || locked.error().code != core::ErrorCode::Conflict)
+    return 4;
+  auto compacted = (*local)->compact(service::LocalDataset::Observations);
+  auto verified = (*local)->verify(service::LocalDataset::Observations);
+  auto collected =
+      (*local)->garbage_collect(service::LocalDataset::Observations);
+  if (!compacted || compacted->segments_removed < 2 || !verified ||
+      verified->records_checked != ThreadCount * RecordsPerThread || !collected)
+    return 5;
+
   (*local).reset();
   auto reopened = service::LocalCanonicalStorage::open(configuration);
   if (!reopened)
-    return 4;
+    return 6;
   count = observation_count((*reopened)->observation_dataset());
   if (!count || *count != ThreadCount * RecordsPerThread)
-    return 5;
+    return 7;
 
   configuration.block_target_bytes =
       static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1;
   auto invalid = service::LocalCanonicalStorage::open(configuration);
   if (invalid || invalid.error().code != core::ErrorCode::InvalidArgument)
-    return 6;
+    return 8;
   return 0;
 }

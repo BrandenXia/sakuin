@@ -49,9 +49,9 @@ open_checked(BlobStore &blobs, const SegmentDescriptor &descriptor) {
       header.tier != descriptor.tier ||
       header.compression != descriptor.compression ||
       (*reader)->record_count() != descriptor.record_count)
-    return std::unexpected(core::Error{
-        core::ErrorCode::CorruptSegment,
-        "Manifest metadata does not match its RowV1 segment"});
+    return std::unexpected(
+        core::Error{core::ErrorCode::CorruptSegment,
+                    "Manifest metadata does not match its RowV1 segment"});
   return reader;
 }
 
@@ -92,7 +92,7 @@ RowV1DatasetMaintenance::compact(BlobStore &blobs, ManifestCatalog &catalog,
     return std::unexpected(pin.error());
   const auto &manifest = (*pin)->manifest();
   if (manifest.segments.size() < policy.minimum_segment_count)
-    return CompactionResult{};
+    return CompactionResult{.source_generation = manifest.id.generation};
 
   const auto &first = manifest.segments.front();
   for (const auto &segment : manifest.segments) {
@@ -110,7 +110,9 @@ RowV1DatasetMaintenance::compact(BlobStore &blobs, ManifestCatalog &catalog,
                               .tier = SegmentTier::Hot,
                               .compression = policy.compression,
                               .target_block_size = policy.target_block_size};
-  auto writer = RowV1SegmentWriter::create(blobs, output_header);
+  auto writer = RowV1SegmentWriter::create(
+      blobs, output_header,
+      RowV1WriterOptions{.compression_level = policy.compression_level});
   if (!writer)
     return std::unexpected(writer.error());
 
@@ -152,13 +154,13 @@ RowV1DatasetMaintenance::compact(BlobStore &blobs, ManifestCatalog &catalog,
 
   const auto bytes_before = std::transform_reduce(
       manifest.segments.begin(), manifest.segments.end(), std::uint64_t{},
-      std::plus{}, [](const SegmentDescriptor &segment) {
-        return segment.physical_size;
-      });
+      std::plus{},
+      [](const SegmentDescriptor &segment) { return segment.physical_size; });
   auto published = catalog.publish(manifest.id, {*replacement});
   if (!published)
     return std::unexpected(published.error());
   return CompactionResult{
+      .source_generation = published->generation,
       .segments_created = 1,
       .segments_removed = manifest.segments.size(),
       .bytes_before = bytes_before,

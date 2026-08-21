@@ -146,5 +146,56 @@ int main() {
       (*restarted_value)->name != "latest-a")
     return 19;
 
+  auto compacted =
+      restarted.compact({.minimum_segment_count = 2,
+                         .target_block_size = 96,
+                         .compression = storage::CompressionCodec::Zstd,
+                         .compression_level = 5});
+  if (!compacted || compacted->segments_created != 1 ||
+      compacted->segments_removed < 2 || compacted->bytes_after == 0)
+    return 20;
+  auto compacted_manifest = (*reopened)->pin_current();
+  if (!compacted_manifest ||
+      (*compacted_manifest)->manifest().segments.size() != 1 ||
+      (*compacted_manifest)->manifest().segments[0].tier !=
+          storage::SegmentTier::Warm ||
+      (*compacted_manifest)->manifest().segments[0].format_version !=
+          storage::StorageFormatVersion{1, 2})
+    return 21;
+  auto compacted_snapshot = restarted.keyed_snapshot();
+  auto compacted_latest = (*compacted_snapshot)->get(hash(1));
+  auto compacted_unchanged = (*compacted_snapshot)->get(hash(2));
+  auto compacted_enriched = (*compacted_snapshot)->get(hash(5));
+  if (!compacted_latest || !*compacted_latest ||
+      (*compacted_latest)->name != "latest-a" || !compacted_unchanged ||
+      !*compacted_unchanged || (*compacted_unchanged)->name != "first-b" ||
+      !compacted_enriched || !*compacted_enriched ||
+      (*compacted_enriched)->name != "metadata")
+    return 22;
+  auto historical = (*first_snapshot)->get(hash(1));
+  if (!historical || !*historical || (*historical)->name != "first-a")
+    return 23;
+
+  auto post_compaction_write = restarted.begin_write();
+  if (!post_compaction_write ||
+      !(*post_compaction_write)->append(torrent(1, "post-warm", 90)) ||
+      !(*post_compaction_write)->commit())
+    return 24;
+  auto mixed_snapshot = restarted.keyed_snapshot();
+  auto mixed_latest = (*mixed_snapshot)->get(hash(1));
+  auto mixed_warm = (*mixed_snapshot)->get(hash(2));
+  if (!mixed_latest || !*mixed_latest || (*mixed_latest)->name != "post-warm" ||
+      !mixed_warm || !*mixed_warm || (*mixed_warm)->name != "first-b")
+    return 25;
+  auto recompacted =
+      restarted.compact({.minimum_segment_count = 2, .target_block_size = 96});
+  if (!recompacted || recompacted->segments_created != 1 ||
+      recompacted->segments_removed != 2)
+    return 26;
+  auto final_snapshot = restarted.keyed_snapshot();
+  auto final_latest = (*final_snapshot)->get(hash(1));
+  if (!final_latest || !*final_latest || (*final_latest)->name != "post-warm")
+    return 27;
+
   return 0;
 }

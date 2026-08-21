@@ -6,6 +6,7 @@ import sakuin.api;
 import sakuin.api.credentials;
 import sakuin.config;
 import sakuin.core;
+import sakuin.index.duplicates;
 import sakuin.model.torrent;
 import sakuin.search.rebuild;
 import sakuin.service.api;
@@ -44,6 +45,7 @@ public:
     {
       std::lock_guard lock{mutex};
       generation = std::max(generation, result.source_generation);
+      records_indexed = result.records_indexed;
     }
     changed.notify_all();
   }
@@ -57,7 +59,15 @@ public:
   std::mutex mutex;
   std::condition_variable changed;
   std::uint64_t generation{};
+  std::uint64_t records_indexed{};
   std::size_t errors{};
+};
+
+class Duplicates final : public sakuin::index::DuplicateIndexView {
+public:
+  sakuin::index::DuplicateIndexState snapshot() const override { return state; }
+
+  sakuin::index::DuplicateIndexState state;
 };
 
 std::uint16_t available_port() {
@@ -119,8 +129,21 @@ int main() {
   api_configuration.rate_limit.enabled = false;
 
   Observer observer;
+  Duplicates duplicates;
+  index::DuplicateGroup duplicate_group{
+      .fingerprint =
+          {.algorithm =
+               index::DuplicateFingerprintAlgorithm::ExactFileLayoutV1},
+      .torrents = {core::InfoHash{}, core::InfoHash{}}};
+  duplicate_group.fingerprint.digest.bytes.fill(0xab);
+  duplicate_group.torrents[0].bytes.fill(0x42);
+  duplicate_group.torrents[1].bytes.fill(0x43);
+  duplicates.state.stats.source_generation = 1;
+  duplicates.state.entries.push_back(std::move(duplicate_group));
+  const auto search_state = temporary.path / "search";
   auto api_service = service::LocalApiService::create(
-      api_configuration, (*canonical)->torrents(), observer);
+      api_configuration, (*canonical)->torrents(), observer, search_state,
+      &duplicates);
   if (!api_service ||
       (*api_service)->local_endpoint().port != api_configuration.listen_port ||
       !(*api_service)->start() || !(*api_service)->running() ||
@@ -166,6 +189,11 @@ int main() {
   (*api_service)->request_search_refresh(committed->generation);
   if (!observer.wait_for_generation(committed->generation))
     return 8;
+  {
+    std::lock_guard lock{observer.mutex};
+    if (observer.records_indexed != 1)
+      return 8;
+  }
 
   const auto token = bearer("reader", secret);
   const auto search = request(
@@ -178,21 +206,54 @@ int main() {
     std::cerr << search << '\n';
     return 9;
   }
+  std::string duplicate_info_hash;
+  for (std::size_t index = 0; index < core::InfoHash{}.bytes.size(); ++index)
+    duplicate_info_hash += "42";
+  const auto duplicate_match =
+      request(api_configuration.listen_port,
+              "GET /v1/duplicates/" + duplicate_info_hash +
+                  " HTTP/1.1\r\nHost: localhost\r\nAuthorization: " + token +
+                  "\r\nConnection: close\r\n\r\n");
+  if (!duplicate_match.starts_with("HTTP/1.1 200 OK\r\n") ||
+      !duplicate_match.contains("exact_file_layout_v1") ||
+      !duplicate_match.contains("4343434343434343"))
+    return 16;
 
   (*api_service)->stop();
   if ((*api_service)->running() || observer.errors != 0)
     return 10;
+  (*api_service).reset();
+
+  api_configuration.listen_port = available_port();
+  api_service = service::LocalApiService::create(
+      api_configuration, (*canonical)->torrents(), observer, search_state,
+      &duplicates);
+  if (!api_service || !(*api_service)->start())
+    return 11;
+  {
+    std::lock_guard lock{observer.mutex};
+    if (observer.records_indexed != 0 || observer.generation != 1)
+      return 12;
+  }
+  const auto restored = request(
+      api_configuration.listen_port,
+      "GET /v1/search?q=linux HTTP/1.1\r\nHost: localhost\r\nAuthorization: " +
+          token + "\r\nConnection: close\r\n\r\n");
+  if (!restored.contains("Sakuin Linux Image") ||
+      !restored.contains("\"source_generation\":1"))
+    return 13;
+  (*api_service)->stop();
 
   auto invalid_tls = api_configuration;
   invalid_tls.tls_certificate_chain_file = "chain.pem";
   if (service::LocalApiService::create(invalid_tls, (*canonical)->torrents(),
                                        observer))
-    return 11;
+    return 14;
   auto invalid_address = api_configuration;
   invalid_address.listen_address = "not a valid listen address !!!";
   invalid_address.listen_port = available_port();
   if (service::LocalApiService::create(invalid_address,
                                        (*canonical)->torrents(), observer))
-    return 12;
+    return 15;
   return 0;
 }

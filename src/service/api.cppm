@@ -10,10 +10,14 @@ import sakuin.config.model;
 import sakuin.core.bytes;
 import sakuin.core.result;
 import sakuin.http.llhttp;
+import sakuin.index.duplicates;
 import sakuin.runtime.asio_http;
 import sakuin.runtime.asio_resolver;
 import sakuin.runtime.datagram;
 import sakuin.runtime.http;
+import sakuin.search.checkpoint;
+import sakuin.search.index;
+import sakuin.search.local;
 import sakuin.search.memory;
 import sakuin.search.rebuild;
 import sakuin.storage.dataset.torrents;
@@ -37,7 +41,9 @@ class LocalApiService final {
 public:
   static core::Result<std::unique_ptr<LocalApiService>>
   create(const config::ApiConfig &configuration,
-         storage::TorrentDataset &torrents, ApiServiceObserver &observer);
+         storage::TorrentDataset &torrents, ApiServiceObserver &observer,
+         std::optional<std::filesystem::path> search_state_directory = {},
+         index::DuplicateIndexView *duplicates = nullptr);
 
   ~LocalApiService();
 
@@ -139,7 +145,8 @@ struct LocalApiService::Impl final : runtime::HttpServerEvents {
   ApiServiceObserver *observer{};
   std::unique_ptr<api::LocalApiCredentialStore> credential_store;
   std::unique_ptr<ReloadableAuthenticator> authenticator;
-  std::unique_ptr<search::InMemorySearchIndex> index;
+  std::unique_ptr<search::SearchIndex> index;
+  std::unique_ptr<search::LocalSearchCursorStore> cursor_store;
   std::unique_ptr<api::FixedWindowRequestGovernor> governor;
   std::unique_ptr<api::SearchHttpHandler> handler;
   std::unique_ptr<runtime::AsioHttpServer> server;
@@ -149,6 +156,7 @@ struct LocalApiService::Impl final : runtime::HttpServerEvents {
   std::condition_variable_any requests_changed;
   std::uint64_t requested_generation{};
   std::atomic<std::uint64_t> indexed_generation{};
+  storage::TorrentChangeCursor search_cursor;
   std::jthread refresh_worker;
   std::atomic<bool> active{};
 
@@ -177,13 +185,17 @@ struct LocalApiService::Impl final : runtime::HttpServerEvents {
     search::SearchRebuildResult result;
     {
       std::lock_guard lock{refresh_mutex};
-      auto snapshot = torrents->snapshot();
-      if (!snapshot)
-        return std::unexpected(snapshot.error());
-      auto rebuilt = search::rebuild(**snapshot, *index);
-      if (!rebuilt)
-        return std::unexpected(rebuilt.error());
-      result = *rebuilt;
+      auto synchronized = search::synchronize(*torrents, *index, search_cursor);
+      if (!synchronized)
+        return std::unexpected(synchronized.error());
+      if (cursor_store) {
+        auto saved = cursor_store->save(synchronized->cursor);
+        if (!saved)
+          return std::unexpected(saved.error());
+      }
+      search_cursor = synchronized->cursor;
+      result = {.source_generation = synchronized->source_generation,
+                .records_indexed = synchronized->records_indexed};
       indexed_generation.store(result.source_generation,
                                std::memory_order_release);
     }
@@ -226,10 +238,11 @@ struct LocalApiService::Impl final : runtime::HttpServerEvents {
 LocalApiService::LocalApiService(std::unique_ptr<Impl> impl)
     : impl_(std::move(impl)) {}
 
-core::Result<std::unique_ptr<LocalApiService>>
-LocalApiService::create(const config::ApiConfig &configuration,
-                        storage::TorrentDataset &torrents,
-                        ApiServiceObserver &observer) {
+core::Result<std::unique_ptr<LocalApiService>> LocalApiService::create(
+    const config::ApiConfig &configuration, storage::TorrentDataset &torrents,
+    ApiServiceObserver &observer,
+    std::optional<std::filesystem::path> search_state_directory,
+    index::DuplicateIndexView *duplicates) {
   if (!configuration.enabled)
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
@@ -257,7 +270,32 @@ LocalApiService::create(const config::ApiConfig &configuration,
   result->credential_store = std::move(*store);
   result->authenticator =
       std::make_unique<ReloadableAuthenticator>(std::move(*loaded));
-  result->index = std::make_unique<search::InMemorySearchIndex>();
+  if (search_state_directory) {
+    const auto index_path = *search_state_directory / "index.v1";
+    auto local_index = search::LocalSearchIndex::open(index_path);
+    if (!local_index) {
+      switch (local_index.error().code) {
+      case core::ErrorCode::CorruptSegment:
+      case core::ErrorCode::ChecksumMismatch:
+      case core::ErrorCode::UnsupportedFormat:
+      case core::ErrorCode::InvalidManifest:
+        result->index = search::LocalSearchIndex::create_empty(index_path);
+        break;
+      default:
+        return std::unexpected(local_index.error());
+      }
+    } else {
+      result->index = std::move(*local_index);
+    }
+    result->cursor_store = std::make_unique<search::LocalSearchCursorStore>(
+        *search_state_directory / "cursor.v1");
+    auto cursor = result->cursor_store->load();
+    if (cursor && cursor->initialized &&
+        cursor->source_generation == result->index->source_generation())
+      result->search_cursor = *cursor;
+  } else {
+    result->index = std::make_unique<search::InMemorySearchIndex>();
+  }
   if (configuration.rate_limit.enabled) {
     auto governor = api::FixedWindowRequestGovernor::create(
         {.maximum_requests = configuration.rate_limit.requests_per_window,
@@ -267,7 +305,8 @@ LocalApiService::create(const config::ApiConfig &configuration,
     result->governor = std::move(*governor);
   }
   result->handler = std::make_unique<api::SearchHttpHandler>(
-      *result->authenticator, *result->index, result->governor.get());
+      *result->authenticator, *result->index, result->governor.get(),
+      duplicates);
   auto server =
       runtime::AsioHttpServer::create(server_options(configuration, *endpoint));
   if (!server)

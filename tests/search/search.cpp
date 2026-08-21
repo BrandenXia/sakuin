@@ -5,6 +5,7 @@ import sakuin.model.torrent;
 import sakuin.search;
 import sakuin.search.rebuild;
 import sakuin.storage;
+import sakuin.storage.admin.row_v1;
 import sakuin.storage.dataset.torrents;
 
 namespace {
@@ -18,22 +19,23 @@ struct TemporaryDirectory {
 };
 
 sakuin::model::TorrentRecord torrent(std::uint8_t id, std::string name,
-                                      std::uint64_t size,
-                                      std::vector<std::string> paths,
-                                      std::int64_t seen) {
+                                     std::uint64_t size,
+                                     std::vector<std::string> paths,
+                                     std::int64_t seen) {
   sakuin::core::InfoHash hash;
   hash.bytes.fill(id);
   std::vector<sakuin::model::FileRecord> files;
   for (auto &path : paths)
     files.push_back({.path = std::move(path), .size = size / paths.size()});
-  return {.info_hash = hash,
-          .first_seen = sakuin::core::Timestamp{
-              sakuin::core::Timestamp::duration{seen}},
-          .last_seen = sakuin::core::Timestamp{
-              sakuin::core::Timestamp::duration{seen + 10}},
-          .name = std::move(name),
-          .total_size = size,
-          .files = std::move(files)};
+  return {
+      .info_hash = hash,
+      .first_seen =
+          sakuin::core::Timestamp{sakuin::core::Timestamp::duration{seen}},
+      .last_seen =
+          sakuin::core::Timestamp{sakuin::core::Timestamp::duration{seen + 10}},
+      .name = std::move(name),
+      .total_size = size,
+      .files = std::move(files)};
 }
 
 } // namespace
@@ -53,10 +55,9 @@ int main() {
   auto write = torrents.begin_write();
   const std::array records{
       torrent(1, "Linux Distribution", 4'000, {"linux.iso"}, 10),
-      torrent(2, "Nature Collection", 8'000,
-              {"forest.mp4", "ocean.mp4"}, 20),
-      torrent(3, "Linux Documentation", 500,
-              {"manual.pdf", "examples.txt"}, 30)};
+      torrent(2, "Nature Collection", 8'000, {"forest.mp4", "ocean.mp4"}, 20),
+      torrent(3, "Linux Documentation", 500, {"manual.pdf", "examples.txt"},
+              30)};
   if (!write || !(*write)->append(records) || !(*write)->commit())
     return 2;
   auto snapshot = torrents.snapshot();
@@ -82,16 +83,66 @@ int main() {
     std::cerr << '\n';
     return 4;
   }
-  auto filtered = index.search(
-      {.text = "mp4", .minimum_size = 7'000, .maximum_size = 9'000, .limit = 10});
+  auto filtered = index.search({.text = "mp4",
+                                .minimum_size = 7'000,
+                                .maximum_size = 9'000,
+                                .limit = 10});
   if (!filtered || filtered->hits.size() != 1 ||
       filtered->hits.front().file_count != 2)
     return 5;
   auto paged = index.search({.text = "", .offset = 1, .limit = 1});
   if (!paged || paged->total_matches != 3 || paged->hits.size() != 1)
     return 6;
+  auto time_filtered = index.search(
+      {.first_seen_at_or_after = core::Timestamp{core::Timestamp::duration{20}},
+       .last_seen_at_or_before = core::Timestamp{core::Timestamp::duration{30}},
+       .limit = 10});
+  if (!time_filtered || time_filtered->total_matches != 1 ||
+      time_filtered->hits.front().name != "Nature Collection")
+    return 14;
   if (index.search({.limit = 0}) ||
-      index.search({.minimum_size = 10, .maximum_size = 1}))
+      index.search({.minimum_size = 10, .maximum_size = 1}) ||
+      index.search({.first_seen_at_or_after =
+                        core::Timestamp{core::Timestamp::duration{30}},
+                    .last_seen_at_or_before =
+                        core::Timestamp{core::Timestamp::duration{20}}}))
     return 7;
+
+  search::InMemorySearchIndex incremental_index;
+  auto synchronized = search::synchronize(torrents, incremental_index);
+  if (!synchronized || !synchronized->full_rebuild ||
+      synchronized->records_indexed != 3)
+    return 8;
+  const auto cursor = synchronized->cursor;
+  auto update = torrents.begin_write();
+  const auto replacement =
+      torrent(1, "Linux Kernel Distribution", 4'500,
+              {"linux-kernel.iso", "release-notes.txt"}, 10);
+  if (!update || !(*update)->append(replacement) || !(*update)->commit())
+    return 9;
+  synchronized = search::synchronize(torrents, incremental_index, cursor);
+  if (!synchronized || synchronized->full_rebuild ||
+      synchronized->records_indexed != 1 ||
+      synchronized->source_generation != 2)
+    return 10;
+  auto kernel = incremental_index.search({.text = "kernel", .limit = 10});
+  if (!kernel || kernel->total_matches != 1 ||
+      kernel->hits.front().name != "Linux Kernel Distribution" ||
+      kernel->hits.front().total_size != 4'500)
+    return 11;
+
+  const auto pre_compaction_cursor = synchronized->cursor;
+  auto compacted = storage::RowV1DatasetMaintenance::compact(
+      blobs, **catalog,
+      {.minimum_segment_count = 2,
+       .target_block_size = storage::DefaultTargetBlockSize,
+       .compression = storage::CompressionCodec::None});
+  if (!compacted || compacted->segments_removed != 2)
+    return 12;
+  synchronized =
+      search::synchronize(torrents, incremental_index, pre_compaction_cursor);
+  if (!synchronized || !synchronized->full_rebuild ||
+      synchronized->records_indexed != 3)
+    return 13;
   return 0;
 }

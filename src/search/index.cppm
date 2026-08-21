@@ -43,6 +43,14 @@ public:
   virtual void abort() noexcept = 0;
 };
 
+class SearchUpdateSession {
+public:
+  virtual ~SearchUpdateSession() = default;
+  virtual core::Result<void> upsert(const model::TorrentRecord &record) = 0;
+  virtual core::Result<void> commit() = 0;
+  virtual void abort() noexcept = 0;
+};
+
 class SearchIndex {
 public:
   virtual ~SearchIndex() = default;
@@ -55,7 +63,12 @@ public:
   // which the view can be reproduced.
   virtual core::Result<std::unique_ptr<SearchRebuildSession>>
   begin_rebuild(std::uint64_t source_generation) = 0;
+  // Update sessions atomically advance a derived view using the latest values
+  // from an append-only canonical change stream.
+  virtual core::Result<std::unique_ptr<SearchUpdateSession>>
+  begin_update(std::uint64_t source_generation) = 0;
   virtual core::Result<SearchResult> search(const SearchQuery &query) const = 0;
+  virtual std::uint64_t source_generation() const noexcept = 0;
 
 protected:
   SearchIndex() = default;
