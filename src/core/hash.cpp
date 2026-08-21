@@ -60,6 +60,22 @@ Hash256 sha256(ByteView data) {
   return hasher.finalize();
 }
 
+Hash160 sha1(ByteView data) {
+  Hash160 result;
+  unsigned int hash_len{};
+  auto *context = EVP_MD_CTX_new();
+  if (context == nullptr)
+    throw std::runtime_error("Failed to create SHA-1 digest context");
+  const auto cleanup = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>{
+      context, &EVP_MD_CTX_free};
+  if (EVP_DigestInit_ex(context, EVP_sha1(), nullptr) != 1 ||
+      EVP_DigestUpdate(context, data.data(), data.size()) != 1 ||
+      EVP_DigestFinal_ex(context, result.bytes.data(), &hash_len) != 1 ||
+      hash_len != result.bytes.size())
+    throw std::runtime_error("Failed to compute SHA-1 digest");
+  return result;
+}
+
 Hash256 hmac_sha256(ByteView key, ByteView data) {
   if (key.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
     throw std::invalid_argument("HMAC key is too large");

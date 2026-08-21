@@ -31,12 +31,17 @@ public:
       std::shared_ptr<const Snapshot<model::TorrentRecord, AllTorrents>>>
   snapshot() const override;
 
-  core::Result<std::shared_ptr<const KeyedSnapshot<
-      model::TorrentRecord, core::InfoHash, AllTorrents>>>
+  core::Result<std::shared_ptr<
+      const KeyedSnapshot<model::TorrentRecord, core::InfoHash, AllTorrents>>>
   keyed_snapshot() const override;
 
   core::Result<std::unique_ptr<WriteSession<model::TorrentRecord>>>
   begin_write() override;
+
+  // Atomically merges observation history from the current keyed value with
+  // validated metadata. A concurrent catalog publish returns Conflict without
+  // overwriting the winner, so an orchestrator may safely retry.
+  core::Result<CommitResult> enrich(model::TorrentRecord metadata);
 
 private:
   BlobStore *blobs_;
@@ -67,9 +72,9 @@ open_torrent_segment(BlobStore &blobs, const SegmentDescriptor &descriptor,
   if (descriptor.encoding != SegmentEncoding::RowV1 ||
       descriptor.schema_id != TorrentRecordSchema ||
       descriptor.schema_version.value != codec.version().value)
-    return std::unexpected(core::Error{
-        core::ErrorCode::UnsupportedFormat,
-        "Torrent segment uses an unsupported encoding or schema"});
+    return std::unexpected(
+        core::Error{core::ErrorCode::UnsupportedFormat,
+                    "Torrent segment uses an unsupported encoding or schema"});
 
   auto opened = RowV1SegmentReader::open(blobs, descriptor.object);
   if (!opened)
@@ -82,9 +87,9 @@ open_torrent_segment(BlobStore &blobs, const SegmentDescriptor &descriptor,
       header.compression != descriptor.compression ||
       header.tier != descriptor.tier ||
       (*opened)->record_count() != descriptor.record_count)
-    return std::unexpected(core::Error{
-        core::ErrorCode::CorruptSegment,
-        "Torrent manifest metadata does not match its segment"});
+    return std::unexpected(
+        core::Error{core::ErrorCode::CorruptSegment,
+                    "Torrent manifest metadata does not match its segment"});
   return opened;
 }
 
@@ -153,7 +158,8 @@ public:
   core::Result<std::optional<model::TorrentRecord>>
   get(const core::InfoHash &key) const override {
     const auto &segments = manifest().segments;
-    for (auto segment = segments.rbegin(); segment != segments.rend(); ++segment) {
+    for (auto segment = segments.rbegin(); segment != segments.rend();
+         ++segment) {
       auto reader = open_torrent_segment(*blobs_, *segment, codec_);
       if (!reader)
         return std::unexpected(reader.error());
@@ -202,10 +208,10 @@ public:
       return result;
     if (auto result = writer_->append(encoded); !result)
       return result;
-    minimum_ = minimum_ ? std::min(*minimum_, record.first_seen)
-                        : record.first_seen;
-    maximum_ = maximum_ ? std::max(*maximum_, record.last_seen)
-                        : record.last_seen;
+    minimum_ =
+        minimum_ ? std::min(*minimum_, record.first_seen) : record.first_seen;
+    maximum_ =
+        maximum_ ? std::max(*maximum_, record.last_seen) : record.last_seen;
     ++count_;
     return {};
   }
@@ -249,7 +255,8 @@ public:
 
     auto segments = base_->manifest().segments;
     segments.push_back(*descriptor);
-    auto published = catalog_->publish(base_->manifest().id, std::move(segments));
+    auto published =
+        catalog_->publish(base_->manifest().id, std::move(segments));
     if (!published)
       return std::unexpected(published.error());
     return CommitResult{.generation = published->generation};
@@ -293,8 +300,7 @@ TorrentDataset::TorrentDataset(BlobStore &blobs, ManifestCatalog &catalog,
   segment_header_.schema_version.value = codec_.version().value;
 }
 
-core::Result<
-    std::shared_ptr<const Snapshot<model::TorrentRecord, AllTorrents>>>
+core::Result<std::shared_ptr<const Snapshot<model::TorrentRecord, AllTorrents>>>
 TorrentDataset::snapshot() const {
   auto snapshot = make_torrent_snapshot(*catalog_, *blobs_, codec_);
   if (!snapshot)
@@ -303,14 +309,14 @@ TorrentDataset::snapshot() const {
       std::move(*snapshot)};
 }
 
-core::Result<std::shared_ptr<const KeyedSnapshot<
-    model::TorrentRecord, core::InfoHash, AllTorrents>>>
+core::Result<std::shared_ptr<
+    const KeyedSnapshot<model::TorrentRecord, core::InfoHash, AllTorrents>>>
 TorrentDataset::keyed_snapshot() const {
   auto snapshot = make_torrent_snapshot(*catalog_, *blobs_, codec_);
   if (!snapshot)
     return std::unexpected(snapshot.error());
-  return std::shared_ptr<const KeyedSnapshot<model::TorrentRecord,
-                                             core::InfoHash, AllTorrents>>{
+  return std::shared_ptr<
+      const KeyedSnapshot<model::TorrentRecord, core::InfoHash, AllTorrents>>{
       std::move(*snapshot)};
 }
 
@@ -325,6 +331,50 @@ TorrentDataset::begin_write() {
   return std::unique_ptr<WriteSession<model::TorrentRecord>>{
       std::make_unique<TorrentWriteSession>(
           *blobs_, *catalog_, codec_, std::move(*base), std::move(*writer))};
+}
+
+core::Result<CommitResult>
+TorrentDataset::enrich(model::TorrentRecord metadata) {
+  if (!metadata.name || metadata.name->empty() || metadata.files.empty() ||
+      metadata.first_seen > metadata.last_seen)
+    return std::unexpected(core::Error{core::ErrorCode::InvalidArgument,
+                                       "Torrent enrichment requires validated "
+                                       "metadata and a valid seen range"});
+  std::uint64_t total{};
+  for (const auto &file : metadata.files) {
+    if (file.path.empty() ||
+        file.size > std::numeric_limits<std::uint64_t>::max() - total)
+      return std::unexpected(
+          core::Error{core::ErrorCode::InvalidArgument,
+                      "Torrent enrichment contains an invalid file list"});
+    total += file.size;
+  }
+  if (total != metadata.total_size)
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidArgument,
+                    "Torrent enrichment total size does not match its files"});
+
+  auto base = catalog_->pin_current();
+  if (!base)
+    return std::unexpected(base.error());
+  TorrentSnapshot snapshot{*base, *blobs_, codec_};
+  auto existing = snapshot.get(metadata.info_hash);
+  if (!existing)
+    return std::unexpected(existing.error());
+  if (*existing) {
+    metadata.first_seen =
+        std::min(metadata.first_seen, (*existing)->first_seen);
+    metadata.last_seen = std::max(metadata.last_seen, (*existing)->last_seen);
+  }
+
+  auto writer = RowV1SegmentWriter::create(*blobs_, segment_header_);
+  if (!writer)
+    return std::unexpected(writer.error());
+  TorrentWriteSession write{*blobs_, *catalog_, codec_, std::move(*base),
+                            std::move(*writer)};
+  if (auto appended = write.append(metadata); !appended)
+    return std::unexpected(appended.error());
+  return write.commit();
 }
 
 } // namespace sakuin::storage

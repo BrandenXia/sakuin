@@ -9,10 +9,12 @@ import sakuin.core.time;
 import sakuin.dht.bencode;
 import sakuin.dht.identity;
 import sakuin.dht.krpc;
+import sakuin.dht.metadata_candidate;
 import sakuin.dht.routing;
 import sakuin.dht.token;
 import sakuin.model.observation;
 import sakuin.runtime.datagram;
+import sakuin.runtime.stream;
 import sakuin.runtime.traffic;
 
 export namespace sakuin::dht {
@@ -52,6 +54,7 @@ struct DhtNodeOptions {
 struct DhtActions {
   std::vector<DatagramSend> sends;
   std::optional<model::ObservationRecord> observation;
+  std::optional<PeerMetadataCandidate> metadata_candidate;
   std::vector<NodeContact> probes_required;
   std::optional<QueryCompletion> query_completion;
   std::optional<ObservedAddressReport> observed_address;
@@ -94,13 +97,12 @@ private:
   std::vector<NodeContact> closest_for(const krpc::NodeId &target,
                                        runtime::AddressFamily family) const;
   core::Result<DatagramSend>
-  response(runtime::DatagramEndpoint destination,
-           core::ByteBuffer transaction,
+  response(runtime::DatagramEndpoint destination, core::ByteBuffer transaction,
            bencode::Value::Dictionary values = {}) const;
   core::Result<DatagramSend> error(runtime::DatagramEndpoint destination,
-                                  core::ByteBuffer transaction,
-                                  std::int64_t code,
-                                  std::string message) const;
+                                   core::ByteBuffer transaction,
+                                   std::int64_t code,
+                                   std::string message) const;
   core::Result<DatagramSend> begin_query(runtime::DatagramEndpoint remote,
                                          krpc::Query query,
                                          core::Timestamp sent_at);
@@ -157,7 +159,8 @@ DhtNode::begin_query(runtime::DatagramEndpoint remote, krpc::Query query,
       next_transaction_.fetch_add(1, std::memory_order_relaxed);
   query.transaction.resize(sizeof(sequence));
   for (std::size_t index = 0; index < sizeof(sequence); ++index) {
-    const auto shift = static_cast<unsigned>((sizeof(sequence) - index - 1) * 8);
+    const auto shift =
+        static_cast<unsigned>((sizeof(sequence) - index - 1) * 8);
     query.transaction[index] =
         static_cast<std::byte>((sequence >> shift) & 0xff);
   }
@@ -166,17 +169,17 @@ DhtNode::begin_query(runtime::DatagramEndpoint remote, krpc::Query query,
   if (!packet)
     return std::unexpected(packet.error());
 
-  PendingQuery pending{.transaction = query.transaction,
-                       .kind = query.kind,
-                       .remote = remote,
-                       .deadline = sent_at +
-                                   std::chrono::duration_cast<
-                                       core::Timestamp::duration>(
-                                       options_.query_timeout)};
+  PendingQuery pending{
+      .transaction = query.transaction,
+      .kind = query.kind,
+      .remote = remote,
+      .deadline =
+          sent_at + std::chrono::duration_cast<core::Timestamp::duration>(
+                        options_.query_timeout)};
   {
     std::scoped_lock lock{pending_mutex_};
-    const auto [_, inserted] =
-        pending_.emplace(transaction_key(query.transaction), std::move(pending));
+    const auto [_, inserted] = pending_.emplace(
+        transaction_key(query.transaction), std::move(pending));
     if (!inserted)
       return std::unexpected(core::Error{
           core::ErrorCode::Conflict, "DHT transaction id is already in use"});
@@ -190,17 +193,16 @@ DhtNode::begin_query(runtime::DatagramEndpoint remote, krpc::Query query,
                       .query_transaction = query.transaction};
 }
 
-core::Result<DatagramSend>
-DhtNode::ping(runtime::DatagramEndpoint remote, core::Timestamp sent_at) {
-  return begin_query(remote,
-                     krpc::Query{.kind = krpc::QueryKind::Ping,
-                                 .method = "ping"},
-                     sent_at);
+core::Result<DatagramSend> DhtNode::ping(runtime::DatagramEndpoint remote,
+                                         core::Timestamp sent_at) {
+  return begin_query(
+      remote, krpc::Query{.kind = krpc::QueryKind::Ping, .method = "ping"},
+      sent_at);
 }
 
-core::Result<DatagramSend>
-DhtNode::find_node(runtime::DatagramEndpoint remote, krpc::NodeId target,
-                   core::Timestamp sent_at) {
+core::Result<DatagramSend> DhtNode::find_node(runtime::DatagramEndpoint remote,
+                                              krpc::NodeId target,
+                                              core::Timestamp sent_at) {
   return begin_query(remote,
                      krpc::Query{.kind = krpc::QueryKind::FindNode,
                                  .method = "find_node",
@@ -208,9 +210,9 @@ DhtNode::find_node(runtime::DatagramEndpoint remote, krpc::NodeId target,
                      sent_at);
 }
 
-core::Result<DatagramSend>
-DhtNode::get_peers(runtime::DatagramEndpoint remote, core::InfoHash info_hash,
-                   core::Timestamp sent_at) {
+core::Result<DatagramSend> DhtNode::get_peers(runtime::DatagramEndpoint remote,
+                                              core::InfoHash info_hash,
+                                              core::Timestamp sent_at) {
   return begin_query(remote,
                      krpc::Query{.kind = krpc::QueryKind::GetPeers,
                                  .method = "get_peers",
@@ -272,35 +274,38 @@ core::Result<DatagramSend>
 DhtNode::response(runtime::DatagramEndpoint destination,
                   core::ByteBuffer transaction,
                   bencode::Value::Dictionary values) const {
-  auto packet = krpc::encode(krpc::Response{.transaction = std::move(transaction),
-                                            .sender = routing_.local_id(),
-                                            .values = std::move(values),
-                                            .observed_endpoint = destination});
+  auto packet =
+      krpc::encode(krpc::Response{.transaction = std::move(transaction),
+                                  .sender = routing_.local_id(),
+                                  .values = std::move(values),
+                                  .observed_endpoint = destination});
   if (!packet)
     return std::unexpected(packet.error());
-  return DatagramSend{.destination = destination, .payload = std::move(*packet)};
+  return DatagramSend{.destination = destination,
+                      .payload = std::move(*packet)};
 }
 
-core::Result<DatagramSend>
-DhtNode::error(runtime::DatagramEndpoint destination,
-               core::ByteBuffer transaction, std::int64_t code,
-               std::string message) const {
+core::Result<DatagramSend> DhtNode::error(runtime::DatagramEndpoint destination,
+                                          core::ByteBuffer transaction,
+                                          std::int64_t code,
+                                          std::string message) const {
   auto packet = krpc::encode(krpc::Error{.transaction = std::move(transaction),
                                          .code = code,
                                          .message = std::move(message),
                                          .observed_endpoint = destination});
   if (!packet)
     return std::unexpected(packet.error());
-  return DatagramSend{.destination = destination, .payload = std::move(*packet)};
+  return DatagramSend{.destination = destination,
+                      .payload = std::move(*packet)};
 }
 
 core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
                                          core::Timestamp received_at) {
   if (options_.address_family &&
       datagram.source.address.family != *options_.address_family)
-    return std::unexpected(core::Error{
-        core::ErrorCode::InvalidArgument,
-        "DHT datagram does not match this node's address family"});
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidArgument,
+                    "DHT datagram does not match this node's address family"});
   auto decoded = krpc::decode(datagram.payload);
   if (!decoded)
     return std::unexpected(decoded.error());
@@ -323,7 +328,8 @@ core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
 
     for (const auto [name, family] :
          {std::pair{std::string_view{"nodes"}, runtime::AddressFamily::IPv4},
-          std::pair{std::string_view{"nodes6"}, runtime::AddressFamily::IPv6}}) {
+          std::pair{std::string_view{"nodes6"},
+                    runtime::AddressFamily::IPv6}}) {
       const auto found = response_message->values.find(name);
       if (found == response_message->values.end())
         continue;
@@ -353,20 +359,21 @@ core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
     if (!pending)
       return actions;
     if (error_message->observed_endpoint)
-      actions.observed_address = ObservedAddressReport{
-          .reporter = datagram.source,
-          .observed = *error_message->observed_endpoint};
-    actions.query_completion = QueryCompletion{
-        .transaction = std::move(pending->transaction),
-        .kind = pending->kind,
-        .remote = pending->remote,
-        .protocol_error = *error_message};
+      actions.observed_address =
+          ObservedAddressReport{.reporter = datagram.source,
+                                .observed = *error_message->observed_endpoint};
+    actions.query_completion =
+        QueryCompletion{.transaction = std::move(pending->transaction),
+                        .kind = pending->kind,
+                        .remote = pending->remote,
+                        .protocol_error = *error_message};
     return actions;
   }
 
-  auto routing_update = routing_.observe(NodeContact{.id = query->sender,
-                                                      .endpoint = datagram.source,
-                                                      .last_seen = received_at});
+  auto routing_update =
+      routing_.observe(NodeContact{.id = query->sender,
+                                   .endpoint = datagram.source,
+                                   .last_seen = received_at});
   if (routing_update.least_recently_seen)
     actions.probes_required.push_back(*routing_update.least_recently_seen);
   if (query->info_hash)
@@ -383,17 +390,17 @@ core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
 
   if (query->kind == krpc::QueryKind::FindNode ||
       query->kind == krpc::QueryKind::GetPeers) {
-    const auto target = query->target ? *query->target
-                                      : node_id(*query->info_hash);
+    const auto target =
+        query->target ? *query->target : node_id(*query->info_hash);
     auto contacts = closest_for(target, datagram.source.address.family);
     auto compact =
         encode_compact_nodes(contacts, datagram.source.address.family);
     if (!compact)
       return std::unexpected(compact.error());
-    const auto nodes_key = datagram.source.address.family ==
-                                   runtime::AddressFamily::IPv4
-                               ? "nodes"
-                               : "nodes6";
+    const auto nodes_key =
+        datagram.source.address.family == runtime::AddressFamily::IPv4
+            ? "nodes"
+            : "nodes6";
     bencode::Value::Dictionary values{
         {nodes_key, bencode::Value{std::move(*compact)}}};
     if (query->kind == krpc::QueryKind::GetPeers) {
@@ -402,7 +409,8 @@ core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
         return std::unexpected(token.error());
       values.emplace("token", bencode::Value{std::move(*token)});
     }
-    auto send = response(datagram.source, query->transaction, std::move(values));
+    auto send =
+        response(datagram.source, query->transaction, std::move(values));
     if (!send)
       return std::unexpected(send.error());
     actions.sends.push_back(std::move(*send));
@@ -410,16 +418,22 @@ core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
   }
 
   if (query->kind == krpc::QueryKind::AnnouncePeer) {
-    auto valid = tokens_->validate(query->token, datagram.source.address,
-                                   received_at);
+    auto valid =
+        tokens_->validate(query->token, datagram.source.address, received_at);
     if (!valid)
       return std::unexpected(valid.error());
-    auto send = *valid
-                    ? response(datagram.source, query->transaction)
-                    : error(datagram.source, query->transaction, 203,
-                            "Invalid announce token");
+    auto send = *valid ? response(datagram.source, query->transaction)
+                       : error(datagram.source, query->transaction, 203,
+                               "Invalid announce token");
     if (!send)
       return std::unexpected(send.error());
+    if (*valid)
+      actions.metadata_candidate = PeerMetadataCandidate{
+          .info_hash = *query->info_hash,
+          .peer = {.address = datagram.source.address,
+                   .port = query->implied_port ? datagram.source.port
+                                               : *query->port},
+          .observed_at = received_at};
     actions.sends.push_back(std::move(*send));
     return actions;
   }

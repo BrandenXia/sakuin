@@ -19,6 +19,21 @@ struct DhtIdentityConfig {
   std::optional<std::string> fixed_ipv6_node_id;
 };
 
+struct MetadataAcquisitionConfig {
+  bool enabled{true};
+  std::size_t maximum_in_flight{64};
+  std::size_t maximum_queued{4'096};
+  std::size_t maximum_attempts_per_peer{3};
+  core::Duration initial_retry_delay{std::chrono::seconds{30}};
+  core::Duration maximum_retry_delay{std::chrono::minutes{30}};
+  core::Duration connect_timeout{std::chrono::seconds{10}};
+  core::Duration idle_timeout{std::chrono::seconds{30}};
+  std::size_t maximum_metadata_bytes{4U * 1024U * 1024U};
+  std::size_t maximum_outstanding_requests{4};
+  std::size_t maximum_queued_write_bytes{1024U * 1024U};
+  std::size_t storage_conflict_attempts{3};
+};
+
 struct DhtConfig {
   bool private_network{};
   std::size_t maximum_in_flight{128};
@@ -28,6 +43,7 @@ struct DhtConfig {
   core::Duration bootstrap_retry_delay{std::chrono::seconds{5}};
   std::vector<std::string> bootstrap;
   DhtIdentityConfig identity;
+  MetadataAcquisitionConfig metadata;
 };
 
 struct PeriodicTrafficConfig {
@@ -223,6 +239,66 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       config.network.dht.identity.fixed_ipv4_node_id = text;
     } else if (name == "network.dht.identity.fixed_ipv6_node_id") {
       config.network.dht.identity.fixed_ipv6_node_id = text;
+    } else if (name == "network.dht.metadata.enabled") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.enabled = *value;
+    } else if (name == "network.dht.metadata.maximum_in_flight") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.maximum_in_flight = *value;
+    } else if (name == "network.dht.metadata.maximum_queued") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.maximum_queued = *value;
+    } else if (name == "network.dht.metadata.maximum_attempts_per_peer") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.maximum_attempts_per_peer = *value;
+    } else if (name == "network.dht.metadata.initial_retry_delay_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.initial_retry_delay = *value;
+    } else if (name == "network.dht.metadata.maximum_retry_delay_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.maximum_retry_delay = *value;
+    } else if (name == "network.dht.metadata.connect_timeout_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.connect_timeout = *value;
+    } else if (name == "network.dht.metadata.idle_timeout_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.idle_timeout = *value;
+    } else if (name == "network.dht.metadata.maximum_metadata_bytes") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.maximum_metadata_bytes = *value;
+    } else if (name == "network.dht.metadata.maximum_outstanding_requests") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.maximum_outstanding_requests = *value;
+    } else if (name == "network.dht.metadata.maximum_queued_write_bytes") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.maximum_queued_write_bytes = *value;
+    } else if (name == "network.dht.metadata.storage_conflict_attempts") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.storage_conflict_attempts = *value;
     } else if (name == "network.traffic.window_ms") {
       auto value = duration_ms(text, name);
       if (!value)
@@ -385,6 +461,25 @@ core::Result<void> validate(const AppConfig &config) {
       return std::unexpected(invalid(
           "Fixed IPv6 identity requires a 40-digit hexadecimal node ID"));
   }
+  const auto &metadata = config.network.dht.metadata;
+  if (metadata.maximum_in_flight == 0 || metadata.maximum_in_flight > 4'096 ||
+      metadata.maximum_queued == 0 || metadata.maximum_queued > 1'000'000 ||
+      metadata.maximum_attempts_per_peer == 0 ||
+      metadata.maximum_attempts_per_peer > 32 ||
+      metadata.initial_retry_delay <= core::Duration::zero() ||
+      metadata.maximum_retry_delay < metadata.initial_retry_delay ||
+      metadata.connect_timeout <= core::Duration::zero() ||
+      metadata.idle_timeout <= core::Duration::zero() ||
+      metadata.maximum_metadata_bytes == 0 ||
+      metadata.maximum_metadata_bytes > 64U * 1024U * 1024U ||
+      metadata.maximum_outstanding_requests == 0 ||
+      metadata.maximum_outstanding_requests > 256 ||
+      metadata.maximum_queued_write_bytes < 68 ||
+      metadata.maximum_queued_write_bytes > 64U * 1024U * 1024U ||
+      metadata.storage_conflict_attempts == 0 ||
+      metadata.storage_conflict_attempts > 32)
+    return std::unexpected(
+        invalid("DHT metadata acquisition limits are invalid"));
   if (config.network.traffic.window <= core::Duration::zero() ||
       (config.network.traffic.inbound_bytes == 0) ||
       (config.network.traffic.outbound_bytes == 0))

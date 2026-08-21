@@ -103,12 +103,61 @@ core::Result<void> parse_identity(const toml::table &table,
   return {};
 }
 
+core::Result<void> parse_metadata(const toml::table &table,
+                                  ConfigOverlay &overlay) {
+  if (auto checked = check_keys(
+          table,
+          {"enabled", "maximum_in_flight", "maximum_queued",
+           "maximum_attempts_per_peer", "initial_retry_delay_ms",
+           "maximum_retry_delay_ms", "connect_timeout_ms", "idle_timeout_ms",
+           "maximum_metadata_bytes", "maximum_outstanding_requests",
+           "maximum_queued_write_bytes", "storage_conflict_attempts"},
+          "network.dht.metadata.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<bool>(table, "enabled", "network.dht.metadata.enabled", overlay),
+        scalar<std::int64_t>(table, "maximum_in_flight",
+                             "network.dht.metadata.maximum_in_flight", overlay),
+        scalar<std::int64_t>(table, "maximum_queued",
+                             "network.dht.metadata.maximum_queued", overlay),
+        scalar<std::int64_t>(table, "maximum_attempts_per_peer",
+                             "network.dht.metadata.maximum_attempts_per_peer",
+                             overlay),
+        scalar<std::int64_t>(table, "initial_retry_delay_ms",
+                             "network.dht.metadata.initial_retry_delay_ms",
+                             overlay),
+        scalar<std::int64_t>(table, "maximum_retry_delay_ms",
+                             "network.dht.metadata.maximum_retry_delay_ms",
+                             overlay),
+        scalar<std::int64_t>(table, "connect_timeout_ms",
+                             "network.dht.metadata.connect_timeout_ms",
+                             overlay),
+        scalar<std::int64_t>(table, "idle_timeout_ms",
+                             "network.dht.metadata.idle_timeout_ms", overlay),
+        scalar<std::int64_t>(table, "maximum_metadata_bytes",
+                             "network.dht.metadata.maximum_metadata_bytes",
+                             overlay),
+        scalar<std::int64_t>(
+            table, "maximum_outstanding_requests",
+            "network.dht.metadata.maximum_outstanding_requests", overlay),
+        scalar<std::int64_t>(table, "maximum_queued_write_bytes",
+                             "network.dht.metadata.maximum_queued_write_bytes",
+                             overlay),
+        scalar<std::int64_t>(table, "storage_conflict_attempts",
+                             "network.dht.metadata.storage_conflict_attempts",
+                             overlay)})
+    if (!result)
+      return result;
+  return {};
+}
+
 core::Result<void> parse_dht(const toml::table &table, ConfigOverlay &overlay) {
   if (auto checked = check_keys(
           table,
           {"private_network", "maximum_in_flight", "query_timeout_ms",
            "bootstrap_maximum_in_flight", "bootstrap_maximum_attempts",
-           "bootstrap_retry_delay_ms", "bootstrap", "identity"},
+           "bootstrap_retry_delay_ms", "bootstrap", "identity", "metadata"},
           "network.dht.");
       !checked)
     return checked;
@@ -148,7 +197,13 @@ core::Result<void> parse_dht(const toml::table &table, ConfigOverlay &overlay) {
   auto identity = optional_table(table, "identity", "network.dht.identity");
   if (!identity)
     return std::unexpected(identity.error());
-  return *identity ? parse_identity(**identity, overlay) : core::Result<void>{};
+  if (*identity)
+    if (auto result = parse_identity(**identity, overlay); !result)
+      return result;
+  auto metadata = optional_table(table, "metadata", "network.dht.metadata");
+  if (!metadata)
+    return std::unexpected(metadata.error());
+  return *metadata ? parse_metadata(**metadata, overlay) : core::Result<void>{};
 }
 
 core::Result<void> parse_traffic(const toml::table &table,
@@ -367,6 +422,29 @@ core::Result<ConfigOverlay> environment_overlay(
       {"SAKUIN_DHT_IDENTITY_QUORUM", "network.dht.identity.observation_quorum"},
       {"SAKUIN_DHT_IDENTITY_VOTE_WINDOW_MS",
        "network.dht.identity.vote_window_ms"},
+      {"SAKUIN_DHT_METADATA_ENABLED", "network.dht.metadata.enabled"},
+      {"SAKUIN_DHT_METADATA_MAXIMUM_IN_FLIGHT",
+       "network.dht.metadata.maximum_in_flight"},
+      {"SAKUIN_DHT_METADATA_MAXIMUM_QUEUED",
+       "network.dht.metadata.maximum_queued"},
+      {"SAKUIN_DHT_METADATA_MAXIMUM_ATTEMPTS_PER_PEER",
+       "network.dht.metadata.maximum_attempts_per_peer"},
+      {"SAKUIN_DHT_METADATA_INITIAL_RETRY_DELAY_MS",
+       "network.dht.metadata.initial_retry_delay_ms"},
+      {"SAKUIN_DHT_METADATA_MAXIMUM_RETRY_DELAY_MS",
+       "network.dht.metadata.maximum_retry_delay_ms"},
+      {"SAKUIN_DHT_METADATA_CONNECT_TIMEOUT_MS",
+       "network.dht.metadata.connect_timeout_ms"},
+      {"SAKUIN_DHT_METADATA_IDLE_TIMEOUT_MS",
+       "network.dht.metadata.idle_timeout_ms"},
+      {"SAKUIN_DHT_METADATA_MAXIMUM_METADATA_BYTES",
+       "network.dht.metadata.maximum_metadata_bytes"},
+      {"SAKUIN_DHT_METADATA_MAXIMUM_OUTSTANDING_REQUESTS",
+       "network.dht.metadata.maximum_outstanding_requests"},
+      {"SAKUIN_DHT_METADATA_MAXIMUM_QUEUED_WRITE_BYTES",
+       "network.dht.metadata.maximum_queued_write_bytes"},
+      {"SAKUIN_DHT_METADATA_STORAGE_CONFLICT_ATTEMPTS",
+       "network.dht.metadata.storage_conflict_attempts"},
       {"SAKUIN_TRAFFIC_WINDOW_MS", "network.traffic.window_ms"},
       {"SAKUIN_TRAFFIC_INBOUND_BYTES", "network.traffic.inbound_bytes"},
       {"SAKUIN_TRAFFIC_OUTBOUND_BYTES", "network.traffic.outbound_bytes"},
