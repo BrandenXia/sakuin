@@ -144,11 +144,15 @@ int main() {
   dht_config.routing.maximum_in_flight = 4;
   dht_config.routing.maximum_attempts = 6;
   dht_config.routing.retry_delay = std::chrono::seconds{8};
+  dht_config.identity.observation_quorum = 5;
+  dht_config.identity.vote_window = std::chrono::seconds{45};
   const auto node_options =
       integration::dht_node_options(dht_config, runtime::AddressFamily::IPv6);
   const auto configured_bootstrap = integration::bootstrap_options(dht_config);
   const auto configured_routing =
       integration::routing_maintenance_options(dht_config.routing);
+  const auto configured_identity =
+      integration::bep42_identity_policy_options(dht_config.identity);
   if (node_options.query_timeout != std::chrono::seconds{9} ||
       node_options.address_family != runtime::AddressFamily::IPv6 ||
       configured_bootstrap.maximum_in_flight != 3 ||
@@ -157,8 +161,45 @@ int main() {
       configured_routing.maximum_queued != 222 ||
       configured_routing.maximum_in_flight != 4 ||
       configured_routing.maximum_attempts != 6 ||
-      configured_routing.retry_delay != std::chrono::seconds{8})
+      configured_routing.retry_delay != std::chrono::seconds{8} ||
+      !configured_identity || configured_identity->observation_quorum != 5 ||
+      configured_identity->vote_window != std::chrono::seconds{45})
     return 32;
+  dht_config.identity.mode = config::DhtIdentityMode::Fixed;
+  if (integration::bep42_identity_policy_options(dht_config.identity))
+    return 36;
+  dht::krpc::NodeId identity_entropy;
+  std::ranges::iota(identity_entropy.bytes, std::uint8_t{1});
+  auto unbound_id = integration::dht_node_id(
+      config::defaults().network.dht.identity, runtime::AddressFamily::IPv4,
+      std::nullopt, identity_entropy);
+  runtime::IpAddress public_address = runtime::IpAddress::loopback_v4();
+  public_address.bytes = {203, 0, 113, 9};
+  auto bound_id = integration::dht_node_id(
+      config::defaults().network.dht.identity, runtime::AddressFamily::IPv4,
+      public_address, identity_entropy);
+  auto wrong_family = public_address;
+  wrong_family.family = runtime::AddressFamily::IPv6;
+  auto invalid_family = integration::dht_node_id(
+      config::defaults().network.dht.identity, runtime::AddressFamily::IPv4,
+      wrong_family, identity_entropy);
+  if (!unbound_id || *unbound_id != identity_entropy || !bound_id ||
+      !dht::bep42_compliant(*bound_id, public_address) ||
+      bound_id->bytes.back() != identity_entropy.bytes.back() ||
+      invalid_family ||
+      invalid_family.error().code != core::ErrorCode::InvalidArgument)
+    return 42;
+  config::DhtIdentityConfig fixed_identity{
+      .mode = config::DhtIdentityMode::Fixed,
+      .fixed_ipv4_node_id = "000102030405060708090a0B0c0D0e0F10111213"};
+  auto fixed_id = integration::secure_dht_node_id(fixed_identity,
+                                                  runtime::AddressFamily::IPv4);
+  auto missing_fixed_id = integration::secure_dht_node_id(
+      fixed_identity, runtime::AddressFamily::IPv6);
+  if (!fixed_id || fixed_id->bytes.front() != 0 ||
+      fixed_id->bytes.back() != 0x13 || missing_fixed_id ||
+      missing_fixed_id.error().code != core::ErrorCode::InvalidArgument)
+    return 43;
 
   TransportFactory factory;
   MetadataSink metadata_sink;
@@ -368,6 +409,47 @@ int main() {
       observations.records.front().info_hash != wanted ||
       (*pump)->pending() != 0)
     return 8;
+
+  auto identity = dht::Bep42IdentityPolicy::create(
+      runtime::AddressFamily::IPv4, std::nullopt,
+      {.observation_quorum = 2, .vote_window = std::chrono::seconds{30}});
+  if (!identity)
+    return 37;
+  auto identity_pump = integration::DhtRuntimeActionPump::create(
+      observations, {.identity = identity->get()});
+  if (!identity_pump)
+    return 37;
+  runtime::IpAddress external = runtime::IpAddress::loopback_v4();
+  external.bytes = {203, 0, 113, 21};
+  const auto identity_report = [&](std::uint8_t reporter) {
+    runtime::IpAddress address = runtime::IpAddress::loopback_v4();
+    address.bytes = {198, 51, 100, reporter};
+    (*identity_pump)
+        ->on_actions(dht::DhtActions{
+            .observed_address = dht::ObservedAddressReport{
+                .reporter = {.address = address, .port = 6'881},
+                .observed = {.address = external, .port = 50'000}}});
+  };
+  identity_report(1);
+  auto first_identity = (*identity_pump)->poll(now);
+  if (!first_identity.actions.empty() ||
+      first_identity.identity_reconfiguration ||
+      (*identity_pump)->pending() != 0)
+    return 38;
+  identity_report(2);
+  auto proposed_identity = (*identity_pump)->poll(now);
+  if (!proposed_identity.actions.empty() ||
+      !proposed_identity.identity_reconfiguration ||
+      proposed_identity.identity_reconfiguration->external_address !=
+          external ||
+      (*identity_pump)->pending() != 0)
+    return 39;
+  auto repeated_identity = (*identity_pump)->poll(now);
+  if (!repeated_identity.identity_reconfiguration ||
+      !(*identity)->commit(external))
+    return 40;
+  if ((*identity_pump)->poll(now).identity_reconfiguration)
+    return 41;
 
   controller->get()->stop();
   if (!factory.last->stopped)

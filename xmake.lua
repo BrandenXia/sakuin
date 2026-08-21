@@ -101,6 +101,13 @@ target("sakuin-integrations")
   add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
            "sakuin-model-codecs", "sakuin-dht")
 
+target("sakuin-service")
+  set_kind("static")
+  add_files("src/service/**.cppm", {public = true})
+  add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs", "sakuin-runtime", "sakuin-dht",
+           "sakuin-integrations", "sakuin-runtime-asio", "sakuin-scheduler")
+
 target("sakuin-index")
   set_kind("static")
   add_files("src/index/**.cppm", {public = true})
@@ -282,6 +289,21 @@ target("sakuin-dht-runtime-worker-tests")
   add_deps("sakuin-core", "sakuin-model", "sakuin-runtime", "sakuin-dht",
            "sakuin-integrations")
   add_tests("dht-runtime-worker")
+
+target("sakuin-dht-service-tests")
+  set_kind("binary")
+  add_files("tests/service/dht.cpp")
+  add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-runtime",
+           "sakuin-dht", "sakuin-integrations", "sakuin-service")
+  add_tests("dht-service")
+
+target("sakuin-storage-service-tests")
+  set_kind("binary")
+  add_files("tests/service/storage.cpp")
+  add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs", "sakuin-dht", "sakuin-integrations",
+           "sakuin-service")
+  add_tests("storage-service")
 
 target("sakuin-routing-tests")
   set_kind("binary")

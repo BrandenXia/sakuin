@@ -77,4 +77,13 @@ protected:
   DatagramTransport() = default;
 };
 
+class DatagramEndpointResolver {
+public:
+  virtual ~DatagramEndpointResolver() = default;
+
+  virtual core::Result<std::vector<DatagramEndpoint>>
+  resolve(std::string_view host, std::uint16_t port,
+          AddressFamily address_family) = 0;
+};
+
 } // namespace sakuin::runtime

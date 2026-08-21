@@ -38,7 +38,9 @@ public:
   virtual ~DhtRuntimeWorkerObserver() = default;
 
   // Runs on the owner thread after planner datagrams have been dispatched.
-  // Remaining actions include policy-facing values such as identity reports.
+  // A BEP 42 reconfiguration is an explicit request to replace this family's
+  // complete node/runtime. The observer must commit the identity policy only
+  // after that replacement succeeds; live node IDs are never mutated here.
   virtual void on_cycle(DhtRuntimeCycle cycle) = 0;
   virtual void on_worker_error(core::Error error) = 0;
 };

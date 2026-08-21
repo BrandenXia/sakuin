@@ -5,6 +5,7 @@ import std;
 import sakuin.core.result;
 import sakuin.core.time;
 import sakuin.dht.bootstrap;
+import sakuin.dht.identity;
 import sakuin.dht.metadata_controller;
 import sakuin.dht.node;
 import sakuin.dht.observation;
@@ -15,13 +16,16 @@ import sakuin.dht.runtime;
 export namespace sakuin::integration {
 
 struct DhtRuntimePoll {
-  // Actions not consumed by storage or metadata acquisition. Routing probes,
-  // query completions, and identity reports stay explicit so a later stdexec
-  // owner can schedule them without changing the runtime callback boundary.
+  // Actions not consumed by configured owner-thread services. Routing probes
+  // and query completions stay explicit so a later stdexec owner can schedule
+  // them without changing the runtime callback boundary.
   std::vector<dht::DhtActions> actions;
   std::vector<core::Error> errors;
   std::optional<dht::RoutingMaintenanceStep> routing;
   std::optional<dht::BootstrapStep> bootstrap;
+  // Remains set until the service owner successfully replaces this family's
+  // node/runtime and commits the address on the identity policy.
+  std::optional<dht::IdentityReconfiguration> identity_reconfiguration;
   std::vector<dht::QueryTimeout> unhandled_timeouts;
   std::size_t queries_expired{};
   std::size_t observations_stored{};
@@ -37,6 +41,7 @@ struct DhtRuntimeActionPumpServices {
   dht::DhtNode *node{};
   dht::BootstrapPlanner *bootstrap{};
   dht::RoutingMaintenancePlanner *routing{};
+  dht::Bep42IdentityPolicy *identity{};
 };
 
 struct DhtRuntimeActionPumpOptions {
@@ -76,7 +81,8 @@ private:
                        DhtRuntimeActionPumpOptions options)
       : observations_(&observations), metadata_(services.metadata),
         node_(services.node), bootstrap_(services.bootstrap),
-        routing_(services.routing), options_(options) {}
+        routing_(services.routing), identity_(services.identity),
+        options_(options) {}
 
   static bool has_forward_actions(const dht::DhtActions &actions) noexcept;
 
@@ -85,6 +91,7 @@ private:
   dht::DhtNode *node_;
   dht::BootstrapPlanner *bootstrap_;
   dht::RoutingMaintenancePlanner *routing_;
+  dht::Bep42IdentityPolicy *identity_;
   DhtRuntimeActionPumpOptions options_;
   mutable std::mutex incoming_mutex_;
   std::vector<dht::DhtActions> incoming_actions_;
@@ -277,6 +284,18 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
       actions.probes_required = std::move(retry);
     }
 
+    if (actions.observed_address && identity_) {
+      try {
+        identity_->observe(*actions.observed_address, now);
+        actions.observed_address.reset();
+      } catch (const std::exception &exception) {
+        result.errors.push_back(
+            callback_error("BEP 42 identity observation", exception));
+      } catch (...) {
+        result.errors.push_back(callback_error("BEP 42 identity observation"));
+      }
+    }
+
     bool completion_consumed = false;
     if (bootstrap_) {
       try {
@@ -309,15 +328,18 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
         .probes_required = routing_ ? std::vector<dht::RoutingProbe>{}
                                     : std::move(actions.probes_required),
         .query_completion = std::move(actions.query_completion),
-        .observed_address = std::move(actions.observed_address)};
+        .observed_address =
+            identity_ ? std::nullopt : std::move(actions.observed_address)};
     if (has_forward_actions(forward))
       result.actions.push_back(std::move(forward));
 
     actions.sends.clear();
     actions.query_completion.reset();
-    actions.observed_address.reset();
+    if (!identity_)
+      actions.observed_address.reset();
     if (actions.observation || (actions.metadata_candidate && metadata_) ||
-        (!actions.probes_required.empty() && routing_)) {
+        (!actions.probes_required.empty() && routing_) ||
+        (actions.observed_address && identity_)) {
       deferred_.push_back(std::move(actions));
     } else {
       pending_count_.fetch_sub(1, std::memory_order_release);
@@ -400,6 +422,12 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
           callback_error("Routing-maintenance poll", exception));
     } catch (...) {
       result.errors.push_back(callback_error("Routing-maintenance poll"));
+    }
+  }
+  if (identity_) {
+    if (auto proposed = identity_->proposed_external()) {
+      result.identity_reconfiguration =
+          dht::IdentityReconfiguration{.external_address = *proposed};
     }
   }
   const auto include_wakeup = [&](std::optional<core::Timestamp> wakeup) {
