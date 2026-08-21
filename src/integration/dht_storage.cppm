@@ -18,11 +18,14 @@ public:
   observe(const model::ObservationRecord &observation) override;
 
   core::Result<void> flush();
-  std::size_t pending() const noexcept { return pending_.size(); }
+  std::size_t pending() const noexcept;
 
 private:
+  core::Result<void> flush_locked();
+
   storage::ObservationDataset *dataset_;
   std::size_t batch_size_;
+  mutable std::mutex mutex_;
   std::vector<model::ObservationRecord> pending_;
 };
 
@@ -37,18 +40,30 @@ BufferedObservationSink::BufferedObservationSink(
     pending_.reserve(batch_size_);
 }
 
-core::Result<void> BufferedObservationSink::observe(
-    const model::ObservationRecord &observation) {
+core::Result<void>
+BufferedObservationSink::observe(const model::ObservationRecord &observation) {
+  std::lock_guard lock{mutex_};
   if (batch_size_ == 0)
-    return std::unexpected(core::Error{core::ErrorCode::InvalidArgument,
-                                       "Observation batch size must be nonzero"});
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidArgument,
+                    "Observation batch size must be nonzero"});
   pending_.push_back(observation);
   if (pending_.size() >= batch_size_)
-    return flush();
+    return flush_locked();
   return {};
 }
 
 core::Result<void> BufferedObservationSink::flush() {
+  std::lock_guard lock{mutex_};
+  return flush_locked();
+}
+
+std::size_t BufferedObservationSink::pending() const noexcept {
+  std::lock_guard lock{mutex_};
+  return pending_.size();
+}
+
+core::Result<void> BufferedObservationSink::flush_locked() {
   if (pending_.empty())
     return {};
   auto write = dataset_->begin_write();

@@ -39,12 +39,10 @@ namespace sakuin::runtime {
 namespace {
 
 core::Error network_error(std::string action, const asio::error_code &error) {
-  return {core::ErrorCode::IoError,
-          std::move(action) + ": " + error.message()};
+  return {core::ErrorCode::IoError, std::move(action) + ": " + error.message()};
 }
 
-core::Result<asio::ip::udp::endpoint>
-to_asio(DatagramEndpoint endpoint) {
+core::Result<asio::ip::udp::endpoint> to_asio(DatagramEndpoint endpoint) {
   if (endpoint.address.family == AddressFamily::IPv4) {
     asio::ip::address_v4::bytes_type bytes{};
     std::copy_n(endpoint.address.bytes.begin(), bytes.size(), bytes.begin());
@@ -102,9 +100,10 @@ struct AsioDatagramTransport::Impl {
         asio::buffer(receive_buffer), sender,
         [this](const asio::error_code &error, std::size_t transferred) {
           if (!error) {
-            Datagram datagram{.source = from_asio(sender),
-                              .payload = {receive_buffer.begin(),
-                                          receive_buffer.begin() + transferred}};
+            Datagram datagram{
+                .source = from_asio(sender),
+                .payload = {receive_buffer.begin(),
+                            receive_buffer.begin() + transferred}};
             try {
               receiver->on_datagram(std::move(datagram));
             } catch (const std::exception &exception) {
@@ -145,6 +144,12 @@ AsioDatagramTransport::create(const DatagramTransportOptions &options) {
   impl->socket.open(endpoint->protocol(), error);
   if (error)
     return std::unexpected(network_error("Could not open UDP socket", error));
+  if (endpoint->protocol() == asio::ip::udp::v6()) {
+    impl->socket.set_option(asio::ip::v6_only{true}, error);
+    if (error)
+      return std::unexpected(
+          network_error("Could not configure IPv6-only UDP socket", error));
+  }
   impl->socket.bind(*endpoint, error);
   if (error)
     return std::unexpected(network_error("Could not bind UDP socket", error));
@@ -170,9 +175,8 @@ core::Result<void> AsioDatagramTransport::start(DatagramReceiver &receiver) {
   return {};
 }
 
-core::Result<void>
-AsioDatagramTransport::send(DatagramEndpoint destination,
-                            core::ByteBuffer payload) {
+core::Result<void> AsioDatagramTransport::send(DatagramEndpoint destination,
+                                               core::ByteBuffer payload) {
   if (!impl_->active.load(std::memory_order_acquire))
     return std::unexpected(core::Error{core::ErrorCode::Conflict,
                                        "Datagram transport is not running"});
@@ -183,17 +187,16 @@ AsioDatagramTransport::send(DatagramEndpoint destination,
   if (!endpoint)
     return std::unexpected(endpoint.error());
   auto owned = std::make_shared<core::ByteBuffer>(std::move(payload));
-  asio::post(impl_->context,
-             [impl = impl_.get(), endpoint = *endpoint, owned] {
-               if (!impl->active.load(std::memory_order_acquire))
-                 return;
-               impl->socket.async_send_to(
-                   asio::buffer(*owned), endpoint,
-                   [impl, owned](const asio::error_code &error, std::size_t) {
-                     if (error && error != asio::error::operation_aborted)
-                       impl->report(network_error("UDP send failed", error));
-                   });
-             });
+  asio::post(impl_->context, [impl = impl_.get(), endpoint = *endpoint, owned] {
+    if (!impl->active.load(std::memory_order_acquire))
+      return;
+    impl->socket.async_send_to(
+        asio::buffer(*owned), endpoint,
+        [impl, owned](const asio::error_code &error, std::size_t) {
+          if (error && error != asio::error::operation_aborted)
+            impl->report(network_error("UDP send failed", error));
+        });
+  });
   return {};
 }
 
