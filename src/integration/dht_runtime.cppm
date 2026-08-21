@@ -27,6 +27,9 @@ struct DhtRuntimePoll {
   std::size_t observations_stored{};
   std::size_t metadata_candidates_accepted{};
   std::size_t routing_probes_accepted{};
+  // Earliest owner-thread deadline after this poll. An empty value means the
+  // owner may sleep until a callback explicitly wakes it.
+  std::optional<core::Timestamp> next_wakeup;
 };
 
 struct DhtRuntimeActionPumpServices {
@@ -39,6 +42,8 @@ struct DhtRuntimeActionPumpServices {
 struct DhtRuntimeActionPumpOptions {
   std::size_t maximum_pending_actions{8'192};
   std::size_t maximum_pending_errors{1'024};
+  core::Duration deferred_retry_delay{std::chrono::seconds{1}};
+  std::function<void()> wake_owner;
 };
 
 struct DhtRuntimeDispatch {
@@ -90,6 +95,7 @@ private:
   // Owner-thread only. Partially consumed actions remain here until their
   // storage/queue operation succeeds.
   std::deque<dht::DhtActions> deferred_;
+  std::optional<core::Timestamp> next_deferred_attempt_;
 };
 
 // Drains all owner-produced datagrams in a poll result. Immediate driver
@@ -123,7 +129,8 @@ DhtRuntimeActionPump::create(dht::ObservationSink &observations,
                              DhtRuntimeActionPumpServices services,
                              DhtRuntimeActionPumpOptions options) {
   if (options.maximum_pending_actions == 0 ||
-      options.maximum_pending_errors == 0)
+      options.maximum_pending_errors == 0 ||
+      options.deferred_retry_delay <= core::Duration::zero())
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
                     "DHT runtime action-pump pending limits must be nonzero"});
@@ -136,23 +143,39 @@ DhtRuntimeActionPump::create(dht::ObservationSink &observations,
 }
 
 void DhtRuntimeActionPump::on_actions(dht::DhtActions actions) {
-  std::lock_guard lock{incoming_mutex_};
-  if (pending_count_.load(std::memory_order_relaxed) >=
-      options_.maximum_pending_actions) {
-    ++dropped_actions_;
-    return;
+  {
+    std::lock_guard lock{incoming_mutex_};
+    if (pending_count_.load(std::memory_order_relaxed) >=
+        options_.maximum_pending_actions) {
+      ++dropped_actions_;
+    } else {
+      incoming_actions_.push_back(std::move(actions));
+      pending_count_.fetch_add(1, std::memory_order_release);
+    }
   }
-  incoming_actions_.push_back(std::move(actions));
-  pending_count_.fetch_add(1, std::memory_order_release);
+  try {
+    if (options_.wake_owner)
+      options_.wake_owner();
+  } catch (...) {
+    // Wake callbacks are advisory and must not unwind through runtime threads.
+  }
 }
 
 void DhtRuntimeActionPump::on_error(core::Error error) {
-  std::lock_guard lock{incoming_mutex_};
-  if (incoming_errors_.size() >= options_.maximum_pending_errors) {
-    ++dropped_errors_;
-    return;
+  {
+    std::lock_guard lock{incoming_mutex_};
+    if (incoming_errors_.size() >= options_.maximum_pending_errors) {
+      ++dropped_errors_;
+    } else {
+      incoming_errors_.push_back(std::move(error));
+    }
   }
-  incoming_errors_.push_back(std::move(error));
+  try {
+    if (options_.wake_owner)
+      options_.wake_owner();
+  } catch (...) {
+    // Wake callbacks are advisory and must not unwind through runtime threads.
+  }
 }
 
 bool DhtRuntimeActionPump::has_forward_actions(
@@ -188,7 +211,9 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
   for (auto &actions : incoming)
     deferred_.push_back(std::move(actions));
 
-  const auto count = deferred_.size();
+  const bool deferred_ready =
+      !next_deferred_attempt_ || *next_deferred_attempt_ <= now;
+  const auto count = deferred_ready ? deferred_.size() : 0;
   for (std::size_t index = 0; index < count; ++index) {
     auto actions = std::move(deferred_.front());
     deferred_.pop_front();
@@ -298,6 +323,13 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
       pending_count_.fetch_sub(1, std::memory_order_release);
     }
   }
+  if (deferred_.empty()) {
+    next_deferred_attempt_.reset();
+  } else if (deferred_ready) {
+    next_deferred_attempt_ =
+        now + std::chrono::duration_cast<core::Timestamp::duration>(
+                  options_.deferred_retry_delay);
+  }
 
   if (metadata_) {
     try {
@@ -370,6 +402,19 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
       result.errors.push_back(callback_error("Routing-maintenance poll"));
     }
   }
+  const auto include_wakeup = [&](std::optional<core::Timestamp> wakeup) {
+    if (wakeup && (!result.next_wakeup || *wakeup < *result.next_wakeup))
+      result.next_wakeup = wakeup;
+  };
+  if (metadata_)
+    include_wakeup(metadata_->next_wakeup());
+  include_wakeup(next_deferred_attempt_);
+  if (node_)
+    include_wakeup(node_->next_query_deadline());
+  if (result.bootstrap)
+    include_wakeup(result.bootstrap->next_wakeup);
+  if (result.routing)
+    include_wakeup(result.routing->next_wakeup);
   return result;
 }
 

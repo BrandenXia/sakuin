@@ -120,6 +120,7 @@ int main() {
   configured.maximum_outstanding_requests = 6;
   configured.maximum_queued_write_bytes = 12'345;
   configured.storage_conflict_attempts = 4;
+  configured.storage_retry_delay = std::chrono::milliseconds{750};
   const auto mapped = integration::metadata_runtime_config(configured);
   if (mapped.enabled || mapped.controller.queue.maximum_in_flight != 7 ||
       mapped.controller.queue.maximum_queued != 99 ||
@@ -130,7 +131,8 @@ int main() {
           2U * 1024U * 1024U ||
       mapped.controller.fetch.exchange.maximum_outstanding_requests != 6 ||
       mapped.controller.transport.maximum_queued_write_bytes != 12'345 ||
-      mapped.storage_conflict_attempts != 4)
+      mapped.storage_conflict_attempts != 4 ||
+      mapped.controller.storage_retry_delay != std::chrono::milliseconds{750})
     return 1;
 
   auto dht_config = config::defaults().network.dht;
@@ -209,9 +211,12 @@ int main() {
       missing_owner ||
       missing_owner.error().code != core::ErrorCode::InvalidArgument)
     return 3;
+  std::size_t owner_wakeups{};
   auto bounded_pump = integration::DhtRuntimeActionPump::create(
       observations, {},
-      {.maximum_pending_actions = 1, .maximum_pending_errors = 1});
+      {.maximum_pending_actions = 1,
+       .maximum_pending_errors = 1,
+       .wake_owner = [&] { ++owner_wakeups; }});
   if (!bounded_pump)
     return 4;
   (*bounded_pump)->on_actions({});
@@ -219,7 +224,8 @@ int main() {
   (*bounded_pump)->on_error({core::ErrorCode::IoError, "First bounded error"});
   (*bounded_pump)->on_error({core::ErrorCode::IoError, "Second bounded error"});
   auto bounded = (*bounded_pump)->poll({});
-  if (bounded.errors.size() != 3 || (*bounded_pump)->pending() != 0)
+  if (bounded.errors.size() != 3 || (*bounded_pump)->pending() != 0 ||
+      owner_wakeups != 4)
     return 5;
 
   (*pump)->on_actions(
@@ -227,7 +233,9 @@ int main() {
   const auto routing_now = core::Timestamp{std::chrono::seconds{10}};
   auto probe_started = (*pump)->poll(routing_now);
   if (probe_started.routing_probes_accepted != 1 || !probe_started.routing ||
-      probe_started.routing->sends.size() != 1 || (*routing)->in_flight() != 1)
+      probe_started.routing->sends.size() != 1 ||
+      (*routing)->in_flight() != 1 || probe_started.routing->next_wakeup ||
+      probe_started.next_wakeup != routing_now + std::chrono::seconds{2})
     return 21;
   auto probe_query =
       dht::krpc::decode(probe_started.routing->sends.front().payload);
@@ -281,7 +289,9 @@ int main() {
   const auto bootstrap_now = core::Timestamp{std::chrono::seconds{200}};
   auto bootstrap_started = (*bootstrap_pump)->poll(bootstrap_now);
   if (!bootstrap_started.bootstrap ||
-      bootstrap_started.bootstrap->sends.size() != 1)
+      bootstrap_started.bootstrap->sends.size() != 1 ||
+      bootstrap_started.bootstrap->next_wakeup ||
+      bootstrap_started.next_wakeup != bootstrap_now + std::chrono::seconds{2})
     return 29;
   auto bootstrap_timed_out =
       (*bootstrap_pump)->poll(bootstrap_now + std::chrono::seconds{2});
@@ -347,10 +357,11 @@ int main() {
       first.metadata_candidates_accepted != 1 || first.actions.size() != 1 ||
       !first.actions.front().observed_address || first.errors.size() != 2 ||
       controller->get()->in_flight() != 1 || !factory.last ||
-      !factory.last->started || (*pump)->pending() != 1)
+      !factory.last->started || (*pump)->pending() != 1 ||
+      first.next_wakeup != now + std::chrono::seconds{1})
     return 7;
 
-  auto second = (*pump)->poll(now);
+  auto second = (*pump)->poll(now + std::chrono::seconds{1});
   if (second.observations_stored != 1 ||
       second.metadata_candidates_accepted != 0 || !second.actions.empty() ||
       !second.errors.empty() || observations.records.size() != 1 ||

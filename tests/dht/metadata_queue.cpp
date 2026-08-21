@@ -43,18 +43,20 @@ int main() {
   const auto now = core::Timestamp{std::chrono::seconds{100}};
   auto work = (*queue)->ready(now);
   if (work.size() != 1 || work[0].candidate.peer != first.peer ||
-      (*queue)->in_flight() != 1)
+      (*queue)->in_flight() != 1 || (*queue)->next_ready_at())
     return 3;
   if (!(*queue)->complete(work[0].id,
                           dht::MetadataFetchOutcome::RetryableFailure, now))
     return 4;
 
   work = (*queue)->ready(now);
-  if (work.size() != 1 || work[0].candidate.peer != alternate.peer)
+  if (work.size() != 1 || work[0].candidate.peer != alternate.peer ||
+      (*queue)->next_ready_at())
     return 5;
   if (!(*queue)->complete(work[0].id,
                           dht::MetadataFetchOutcome::PermanentFailure, now) ||
-      !(*queue)->ready(now).empty())
+      !(*queue)->ready(now).empty() ||
+      (*queue)->next_ready_at() != now + std::chrono::seconds{10})
     return 6;
   work = (*queue)->ready(now + std::chrono::seconds{10});
   if (work.size() != 1 || work[0].candidate.peer != first.peer)

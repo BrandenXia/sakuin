@@ -86,6 +86,7 @@ public:
                                        core::Timestamp sent_at);
 
   std::vector<QueryTimeout> expire_queries(core::Timestamp now);
+  std::optional<core::Timestamp> next_query_deadline() const noexcept;
   bool cancel_query(core::ByteView transaction,
                     const runtime::DatagramEndpoint &remote);
   std::size_t outstanding_queries() const noexcept;
@@ -245,6 +246,15 @@ std::vector<QueryTimeout> DhtNode::expire_queries(core::Timestamp now) {
                                   .remote = current->second.remote});
     current = pending_.erase(current);
   }
+  return result;
+}
+
+std::optional<core::Timestamp> DhtNode::next_query_deadline() const noexcept {
+  std::scoped_lock lock{pending_mutex_};
+  std::optional<core::Timestamp> result;
+  for (const auto &[_, query] : pending_)
+    if (!result || query.deadline < *result)
+      result = query.deadline;
   return result;
 }
 

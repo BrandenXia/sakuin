@@ -180,12 +180,13 @@ RoutingMaintenancePlanner::poll(core::Timestamp now) {
 
   step.queued = queued();
   step.in_flight = in_flight();
-  for (const auto &entry : entries_) {
-    if (entry.outstanding)
-      continue;
-    if (!step.next_wakeup || entry.next_attempt < *step.next_wakeup)
-      step.next_wakeup = entry.next_attempt;
-  }
+  if (capacity != 0)
+    for (const auto &entry : entries_) {
+      if (entry.outstanding)
+        continue;
+      if (!step.next_wakeup || entry.next_attempt < *step.next_wakeup)
+        step.next_wakeup = entry.next_attempt;
+    }
   return step;
 }
 

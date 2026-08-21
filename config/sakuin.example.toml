@@ -36,6 +36,7 @@ maximum_metadata_bytes = 4194304
 maximum_outstanding_requests = 4
 maximum_queued_write_bytes = 1048576
 storage_conflict_attempts = 3
+storage_retry_delay_ms = 1000
 
 [network.traffic]
 window_ms = 3600000

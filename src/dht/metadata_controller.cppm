@@ -17,6 +17,11 @@ struct MetadataControllerOptions {
   MetadataQueueOptions queue;
   runtime::StreamTransportOptions transport;
   MetadataFetchOptions fetch;
+  core::Duration storage_retry_delay{std::chrono::seconds{1}};
+  // Called from transport callback threads after terminal work is queued.
+  // This remains scheduler-neutral: a condition variable today or a stdexec
+  // scheduler later can provide the wakeup behavior.
+  std::function<void()> wake_owner;
 };
 
 // Owner-thread orchestration for callback transports. Runtime callbacks only
@@ -33,6 +38,7 @@ public:
 
   core::Result<bool> offer(PeerMetadataCandidate candidate);
   core::Result<void> poll(core::Timestamp now);
+  std::optional<core::Timestamp> next_wakeup() const noexcept;
   void stop() noexcept;
 
   std::size_t queued() const noexcept;
@@ -78,6 +84,7 @@ private:
   std::unique_ptr<MetadataCandidateQueue> queue_;
   std::unordered_map<std::uint64_t, ActiveFetch> active_;
   std::deque<model::TorrentRecord> pending_storage_;
+  std::optional<core::Timestamp> next_storage_attempt_;
   mutable std::mutex completion_mutex_;
   std::vector<Completion> completions_;
   bool stopped_{};
@@ -123,7 +130,8 @@ MetadataAcquisitionController::create(PeerId peer_id,
   if (options.transport.connect_timeout <= core::Duration::zero() ||
       options.transport.idle_timeout <= core::Duration::zero() ||
       options.transport.read_buffer_bytes == 0 ||
-      options.transport.maximum_queued_write_bytes == 0)
+      options.transport.maximum_queued_write_bytes == 0 ||
+      options.storage_retry_delay <= core::Duration::zero())
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
                     "Invalid metadata controller transport limits"});
@@ -142,8 +150,12 @@ MetadataAcquisitionController::offer(PeerMetadataCandidate candidate) {
 
 void MetadataAcquisitionController::enqueue(Completion completion) noexcept {
   try {
-    std::lock_guard lock{completion_mutex_};
-    completions_.push_back(std::move(completion));
+    {
+      std::lock_guard lock{completion_mutex_};
+      completions_.push_back(std::move(completion));
+    }
+    if (options_.wake_owner)
+      options_.wake_owner();
   } catch (...) {
     // An allocation failure is terminal for this individual callback. The
     // transport/session will still be stopped by controller destruction.
@@ -208,7 +220,10 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
     report_failure(std::move(error));
   }
 
-  const auto storage_count = pending_storage_.size();
+  const auto storage_ready =
+      !next_storage_attempt_ || *next_storage_attempt_ <= now;
+  const auto storage_count = storage_ready ? pending_storage_.size() : 0;
+  bool storage_failed = false;
   for (std::size_t index = 0; index < storage_count; ++index) {
     auto record = std::move(pending_storage_.front());
     pending_storage_.pop_front();
@@ -218,6 +233,7 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
         if (!first_error)
           first_error = stored.error();
         pending_storage_.push_back(std::move(record));
+        storage_failed = true;
         report_failure(stored.error());
       }
     } catch (const std::exception &exception) {
@@ -227,6 +243,7 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
       if (!first_error)
         first_error = error;
       pending_storage_.push_back(std::move(record));
+      storage_failed = true;
       report_failure(std::move(error));
     } catch (...) {
       core::Error error{core::ErrorCode::Internal,
@@ -234,8 +251,16 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
       if (!first_error)
         first_error = error;
       pending_storage_.push_back(std::move(record));
+      storage_failed = true;
       report_failure(std::move(error));
     }
+  }
+  if (pending_storage_.empty()) {
+    next_storage_attempt_.reset();
+  } else if (storage_failed) {
+    next_storage_attempt_ =
+        now + std::chrono::duration_cast<core::Timestamp::duration>(
+                  options_.storage_retry_delay);
   }
 
   for (auto &ticket : queue_->ready(now)) {
@@ -277,6 +302,14 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
   if (first_error)
     return std::unexpected(std::move(*first_error));
   return {};
+}
+
+std::optional<core::Timestamp>
+MetadataAcquisitionController::next_wakeup() const noexcept {
+  auto result = queue_->next_ready_at();
+  if (next_storage_attempt_ && (!result || *next_storage_attempt_ < *result))
+    result = next_storage_attempt_;
+  return result;
 }
 
 void MetadataAcquisitionController::stop() noexcept {

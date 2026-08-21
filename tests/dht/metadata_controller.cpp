@@ -180,10 +180,13 @@ int main() {
   auto [hash, info] = metadata();
   Factory factory{hash, info};
   Sink sink;
+  std::size_t wakeups{};
   dht::PeerId peer_id{};
   std::ranges::iota(peer_id, std::uint8_t{1});
-  auto controller =
-      dht::MetadataAcquisitionController::create(peer_id, factory, sink);
+  auto controller = dht::MetadataAcquisitionController::create(
+      peer_id, factory, sink,
+      {.storage_retry_delay = std::chrono::seconds{2},
+       .wake_owner = [&] { ++wakeups; }});
   if (!controller)
     return 1;
   auto address = runtime::IpAddress::loopback_v4();
@@ -196,16 +199,19 @@ int main() {
     return 2;
   const auto now = core::Timestamp{std::chrono::seconds{100}};
   if (!(*controller)->poll(now) || (*controller)->in_flight() != 1 ||
-      factory.last_remote != candidate.peer)
+      factory.last_remote != candidate.peer || wakeups == 0)
     return 3;
 
   auto storage_failure = (*controller)->poll(now);
   if (storage_failure ||
       storage_failure.error().code != core::ErrorCode::StorageUnavailable ||
       (*controller)->in_flight() != 0 ||
-      (*controller)->pending_storage() != 1 || sink.errors.size() != 1)
+      (*controller)->pending_storage() != 1 || sink.errors.size() != 1 ||
+      (*controller)->next_wakeup() != now + std::chrono::seconds{2})
     return 4;
-  if (!(*controller)->poll(now) || (*controller)->pending_storage() != 0 ||
+  if (!(*controller)->poll(now) || (*controller)->pending_storage() != 1 ||
+      !(*controller)->poll(now + std::chrono::seconds{2}) ||
+      (*controller)->pending_storage() != 0 || (*controller)->next_wakeup() ||
       !sink.record || sink.record->info_hash != hash ||
       sink.record->name != "run")
     return 5;

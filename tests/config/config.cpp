@@ -39,6 +39,7 @@ maximum_metadata_bytes = 2097152
 maximum_outstanding_requests = 8
 maximum_queued_write_bytes = 524288
 storage_conflict_attempts = 5
+storage_retry_delay_ms = 250
 
 [network.traffic]
 window_ms = 3600000
@@ -111,6 +112,8 @@ window_ms = 10000
           2U * 1024U * 1024U ||
       loaded.network.dht.metadata.maximum_outstanding_requests != 8 ||
       loaded.network.dht.metadata.storage_conflict_attempts != 5 ||
+      loaded.network.dht.metadata.storage_retry_delay !=
+          std::chrono::milliseconds{250} ||
       loaded.network.dht.identity.observation_quorum != 4 ||
       loaded.network.dht.routing.maximum_queued != 768 ||
       loaded.network.dht.routing.maximum_in_flight != 6 ||
