@@ -98,7 +98,7 @@ target("sakuin-scheduler")
 target("sakuin-integrations")
   set_kind("static")
   add_files("src/integration/**.cppm", {public = true})
-  add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
+  add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
            "sakuin-model-codecs", "sakuin-dht")
 
 target("sakuin-index")
@@ -253,7 +253,7 @@ target("sakuin-metadata-fetch-tests")
 target("sakuin-metadata-storage-tests")
   set_kind("binary")
   add_files("tests/dht/metadata_storage.cpp")
-  add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
+  add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
            "sakuin-model-codecs", "sakuin-dht", "sakuin-integrations")
   add_tests("metadata-storage")
 
@@ -268,6 +268,13 @@ target("sakuin-metadata-controller-tests")
   add_files("tests/dht/metadata_controller.cpp")
   add_deps("sakuin-core", "sakuin-model", "sakuin-runtime", "sakuin-dht")
   add_tests("metadata-controller")
+
+target("sakuin-dht-runtime-integration-tests")
+  set_kind("binary")
+  add_files("tests/dht/runtime_integration.cpp")
+  add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-runtime",
+           "sakuin-dht", "sakuin-integrations")
+  add_tests("dht-runtime-integration")
 
 target("sakuin-routing-tests")
   set_kind("binary")

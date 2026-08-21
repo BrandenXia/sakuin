@@ -112,7 +112,8 @@ void DhtRuntimeDriver::report(core::Error error) noexcept {
 
 void DhtRuntimeDriver::publish(DhtActions actions) noexcept {
   if (!actions.observation && actions.probes_required.empty() &&
-      !actions.query_completion)
+      !actions.metadata_candidate && !actions.query_completion &&
+      !actions.observed_address)
     return;
   try {
     events_->on_actions(std::move(actions));
