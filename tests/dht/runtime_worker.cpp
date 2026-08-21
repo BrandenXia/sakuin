@@ -6,6 +6,7 @@ import sakuin.integration.dht_runtime;
 import sakuin.integration.dht_worker;
 import sakuin.model.observation;
 import sakuin.runtime;
+import sakuin.scheduler;
 
 namespace {
 
@@ -88,19 +89,31 @@ int main() {
   DatagramTransport transport;
   dht::DhtRuntimeDriver driver{node, transport, **pump};
   Observer observer;
-  integration::DhtRuntimeWorker worker{driver, **pump, wakeup, observer};
+  auto coordinator = scheduler::LocalWorkCoordinator::create();
+  if (!coordinator)
+    return 2;
+  integration::DhtRuntimeWorker worker{
+      driver,
+      **pump,
+      wakeup,
+      observer,
+      {.coordinator = coordinator->get(),
+       .worker = {.id = "dht-test-worker",
+                  .capabilities = {scheduler::WorkClass::DhtCrawl}},
+       .heartbeat_interval = std::chrono::milliseconds{20}}};
 
   if (!worker.start() || !observer.wait_for(1, 0) || !worker.running() ||
-      !transport.running)
-    return 2;
+      !transport.running ||
+      (*coordinator)->snapshot(std::chrono::system_clock::now()).workers != 1)
+    return 3;
   auto duplicate = worker.start();
   if (duplicate || duplicate.error().code != core::ErrorCode::Conflict)
-    return 3;
+    return 4;
 
   (*pump)->on_error(
       core::Error{core::ErrorCode::IoError, "Synthetic callback error"});
   if (!observer.wait_for(2, 1))
-    return 4;
+    return 5;
 
   auto remote_address = runtime::IpAddress::loopback_v4();
   remote_address.bytes[3] = 2;
@@ -108,13 +121,14 @@ int main() {
                                          .port = 6'881};
   auto query = node.ping(remote, std::chrono::system_clock::now());
   if (!query)
-    return 6;
+    return 7;
   wakeup.notify();
   if (!observer.wait_for(4, 1, 1))
-    return 7;
+    return 8;
 
   worker.stop();
-  if (worker.running() || transport.running || driver.running())
-    return 5;
+  if (worker.running() || transport.running || driver.running() ||
+      (*coordinator)->snapshot(std::chrono::system_clock::now()).workers != 0)
+    return 6;
   return 0;
 }

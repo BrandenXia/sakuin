@@ -58,6 +58,19 @@ level = 5
 [storage.compaction]
 minimum_segments = 6
 
+[storage.maintenance]
+enabled = true
+interval_ms = 600000
+verification_interval_ms = 43200000
+
+[storage.materialization]
+enabled = true
+interval_ms = 30000
+
+[indexing.duplicates]
+enabled = true
+interval_ms = 120000
+
 [api]
 credential_store_directory = "/srv/sakuin/api-credentials"
 listen_address = "::1"
@@ -68,6 +81,13 @@ request_timeout_ms = 5000
 [api.rate_limit]
 requests_per_window = 30
 window_ms = 10000
+
+[distributed]
+maximum_work_items = 8192
+maximum_payload_bytes = 524288
+worker_timeout_ms = 20000
+lease_duration_ms = 60000
+heartbeat_interval_ms = 5000
 )toml";
 
   auto file = config::parse_toml(source, "test.toml");
@@ -94,6 +114,14 @@ window_ms = 10000
                 std::string(40, 'b')},
       std::pair{std::string{"SAKUIN_STORAGE_COMPACTION_MINIMUM_SEGMENTS"},
                 std::string{"8"}},
+      std::pair{std::string{"SAKUIN_STORAGE_MAINTENANCE_INTERVAL_MS"},
+                std::string{"300000"}},
+      std::pair{std::string{"SAKUIN_STORAGE_MATERIALIZATION_INTERVAL_MS"},
+                std::string{"15000"}},
+      std::pair{std::string{"SAKUIN_DUPLICATE_INDEX_INTERVAL_MS"},
+                std::string{"60000"}},
+      std::pair{std::string{"SAKUIN_DISTRIBUTED_MAXIMUM_WORK_ITEMS"},
+                std::string{"16384"}},
       std::pair{std::string{"UNRELATED"}, std::string{"ignored"}}};
   auto env = config::environment_overlay(environment);
   if (!env)
@@ -141,12 +169,25 @@ window_ms = 10000
       loaded.storage.local_root != "/srv/sakuin" ||
       loaded.storage.compression_level != 5 ||
       loaded.storage.compaction_minimum_segments != 8 ||
+      !loaded.storage.maintenance.enabled ||
+      loaded.storage.maintenance.interval != std::chrono::minutes{5} ||
+      loaded.storage.maintenance.verification_interval !=
+          std::chrono::hours{12} ||
+      !loaded.storage.materialization.enabled ||
+      loaded.storage.materialization.interval != std::chrono::seconds{15} ||
+      !loaded.indexing.duplicates.enabled ||
+      loaded.indexing.duplicates.interval != std::chrono::minutes{1} ||
       loaded.api.credential_store_directory !=
           "/var/lib/sakuin/api-credentials" ||
       loaded.api.listen_address != "::1" || loaded.api.listen_port != 9001 ||
       loaded.api.maximum_connections != 64 ||
       loaded.api.rate_limit.requests_per_window != 30 ||
-      loaded.api.rate_limit.window != std::chrono::seconds{10})
+      loaded.api.rate_limit.window != std::chrono::seconds{10} ||
+      loaded.distributed.maximum_work_items != 16'384 ||
+      loaded.distributed.maximum_payload_bytes != 512U * 1024U ||
+      loaded.distributed.worker_timeout != std::chrono::seconds{20} ||
+      loaded.distributed.lease_duration != std::chrono::minutes{1} ||
+      loaded.distributed.heartbeat_interval != std::chrono::seconds{5})
     return 6;
 
   if (config::parse_toml("[network]\nlistne_port = 1") ||
@@ -166,5 +207,14 @@ window_ms = 10000
   if (!config::apply(tls_config, incomplete_tls) ||
       config::validate(tls_config))
     return 9;
+  auto invalid_distributed = config::defaults();
+  invalid_distributed.distributed.heartbeat_interval =
+      invalid_distributed.distributed.worker_timeout;
+  if (config::validate(invalid_distributed))
+    return 10;
+  auto invalid_compression = config::defaults();
+  invalid_compression.storage.compression_level = 23;
+  if (config::validate(invalid_compression))
+    return 11;
   return 0;
 }

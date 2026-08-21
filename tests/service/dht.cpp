@@ -238,6 +238,7 @@ int main() {
     return 16;
   if (!(*local)->stop() || (*local)->running())
     return 17;
+  (*local).reset();
 
   app_configuration.api.credential_store_directory =
       temporary.path / "operational" / "api";

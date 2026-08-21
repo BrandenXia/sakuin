@@ -26,8 +26,7 @@ public:
   open(std::filesystem::path root, BlobStore &blobs);
 
   ~LocalManifestCatalog() override;
-  core::Result<std::shared_ptr<const ManifestPin>>
-  pin_current() const override;
+  core::Result<std::shared_ptr<const ManifestPin>> pin_current() const override;
   SnapshotId current_id() const noexcept override;
   bool is_pinned(SnapshotId id) const noexcept override;
   core::Result<GcResult> garbage_collect() override;
@@ -83,8 +82,9 @@ void append_integer(core::ByteBuffer &output, Integer value) {
 }
 
 template <std::unsigned_integral Integer>
-core::Result<Integer> read_integer(core::ByteView input, std::size_t &position) {
-  if (input.size() - position < sizeof(Integer))
+core::Result<Integer> read_integer(core::ByteView input,
+                                   std::size_t &position) {
+  if (position > input.size() || input.size() - position < sizeof(Integer))
     return std::unexpected(invalid_manifest("Manifest is truncated"));
   Integer value{};
   for (std::size_t index = 0; index < sizeof(Integer); ++index)
@@ -120,15 +120,16 @@ core::Result<std::optional<core::Timestamp>>
 read_timestamp(core::ByteView input, std::size_t &position) {
   auto present = read_integer<std::uint8_t>(input, position);
   if (!present || *present > 1)
-    return std::unexpected(invalid_manifest("Invalid manifest timestamp marker"));
+    return std::unexpected(
+        invalid_manifest("Invalid manifest timestamp marker"));
   if (*present == 0)
     return std::optional<core::Timestamp>{};
   auto encoded = read_integer<std::uint64_t>(input, position);
   if (!encoded)
     return std::unexpected(encoded.error());
   const auto ticks = std::bit_cast<std::int64_t>(*encoded);
-  return std::optional<core::Timestamp>{core::Timestamp{
-      std::chrono::duration_cast<core::Timestamp::duration>(
+  return std::optional<core::Timestamp>{
+      core::Timestamp{std::chrono::duration_cast<core::Timestamp::duration>(
           std::chrono::nanoseconds{ticks})}};
 }
 
@@ -161,9 +162,9 @@ core::ByteBuffer encode_manifest(const Manifest &manifest) {
 }
 
 template <std::size_t Size>
-core::Result<std::array<std::uint8_t, Size>>
-read_array(core::ByteView input, std::size_t &position) {
-  if (input.size() - position < Size)
+core::Result<std::array<std::uint8_t, Size>> read_array(core::ByteView input,
+                                                        std::size_t &position) {
+  if (position > input.size() || input.size() - position < Size)
     return std::unexpected(invalid_manifest("Manifest ID is truncated"));
   std::array<std::uint8_t, Size> result{};
   for (std::size_t index = 0; index < Size; ++index)
@@ -179,7 +180,8 @@ core::Result<Manifest> decode_manifest(core::ByteView input) {
   const auto stored_checksum_offset = input.size() - sizeof(std::uint32_t);
   std::size_t checksum_position = stored_checksum_offset;
   auto stored_checksum = read_integer<std::uint32_t>(input, checksum_position);
-  if (!stored_checksum || crc32c(input.first(stored_checksum_offset)) != *stored_checksum)
+  if (!stored_checksum ||
+      crc32c(input.first(stored_checksum_offset)) != *stored_checksum)
     return std::unexpected(core::Error{core::ErrorCode::ChecksumMismatch,
                                        "Manifest checksum mismatch"});
 
@@ -192,6 +194,13 @@ core::Result<Manifest> decode_manifest(core::ByteView input) {
   if (*format != 1 && *format != 2)
     return std::unexpected(core::Error{core::ErrorCode::UnsupportedFormat,
                                        "Unsupported manifest format"});
+  constexpr std::size_t LegacyMinimumDescriptorSize = 86;
+  constexpr std::size_t CurrentMinimumDescriptorSize = 90;
+  const auto minimum_descriptor_size =
+      *format == 1 ? LegacyMinimumDescriptorSize : CurrentMinimumDescriptorSize;
+  if (*count > (stored_checksum_offset - position) / minimum_descriptor_size)
+    return std::unexpected(
+        invalid_manifest("Manifest segment count exceeds its encoded size"));
 
   Manifest manifest{.format_version = *format, .id = {*generation}};
   manifest.segments.reserve(*count);
@@ -206,7 +215,7 @@ core::Result<Manifest> decode_manifest(core::ByteView input) {
     auto logical = read_integer<std::uint64_t>(input, position);
     auto physical = read_integer<std::uint64_t>(input, position);
     if (!segment_id || !object_id || !tier || !encoding || !compression ||
-        !reserved || !records || !logical || !physical ||
+        !reserved || !records || !logical || !physical || *reserved != 0 ||
         *tier > static_cast<std::uint8_t>(SegmentTier::Cold) ||
         *encoding > static_cast<std::uint8_t>(SegmentEncoding::RowV1) ||
         *compression > static_cast<std::uint8_t>(CompressionCodec::Zstd))
@@ -221,6 +230,9 @@ core::Result<Manifest> decode_manifest(core::ByteView input) {
     auto schema = read_integer<std::uint32_t>(input, position);
     if (!minimum || !maximum || !major || !minor || !schema_id || !schema)
       return std::unexpected(invalid_manifest("Truncated segment descriptor"));
+    if (*minimum && *maximum && **minimum > **maximum)
+      return std::unexpected(
+          invalid_manifest("Segment timestamp range is inverted"));
     manifest.segments.push_back(
         {.id = {.bytes = *segment_id},
          .object = {.bytes = *object_id},
@@ -241,11 +253,13 @@ core::Result<Manifest> decode_manifest(core::ByteView input) {
   return manifest;
 }
 
-core::Result<void> sync_path(const std::filesystem::path &path, bool directory) {
+core::Result<void> sync_path(const std::filesystem::path &path,
+                             bool directory) {
   const int flags = O_RDONLY | (directory ? O_DIRECTORY : 0);
   const int descriptor = ::open(path.c_str(), flags);
   if (descriptor < 0)
-    return std::unexpected(io_error("Could not open", path, std::strerror(errno)));
+    return std::unexpected(
+        io_error("Could not open", path, std::strerror(errno)));
   if (::fsync(descriptor) != 0) {
     auto detail = std::string{std::strerror(errno)};
     ::close(descriptor);
@@ -271,7 +285,8 @@ core::Result<void> write_atomic(const std::filesystem::path &path,
   std::error_code error;
   std::filesystem::rename(temporary, path, error);
   if (error)
-    return std::unexpected(io_error("Could not publish", path, error.message()));
+    return std::unexpected(
+        io_error("Could not publish", path, error.message()));
   return sync_path(path.parent_path(), true);
 }
 
@@ -319,8 +334,8 @@ LocalManifestCatalog::open(std::filesystem::path root, BlobStore &blobs) {
   std::error_code error;
   std::filesystem::create_directories(root / "manifests", error);
   if (error)
-    return std::unexpected(io_error("Could not create catalog", root,
-                                    error.message()));
+    return std::unexpected(
+        io_error("Could not create catalog", root, error.message()));
   auto current = std::make_shared<Manifest>(Manifest{.id = {0}});
   const auto pointer = root / "CURRENT";
   if (std::filesystem::exists(pointer, error)) {
@@ -333,20 +348,23 @@ LocalManifestCatalog::open(std::filesystem::path root, BlobStore &blobs) {
     auto [end, conversion_error] = std::from_chars(
         generation_text.data(), generation_text.data() + generation_text.size(),
         generation);
-    if (conversion_error != std::errc{} || end != generation_text.data() + generation_text.size())
-      return std::unexpected(invalid_manifest("CURRENT contains invalid generation"));
+    if (conversion_error != std::errc{} ||
+        end != generation_text.data() + generation_text.size())
+      return std::unexpected(
+          invalid_manifest("CURRENT contains invalid generation"));
     auto manifest_bytes = read_file(root / "manifests" /
                                     (std::to_string(generation) + ".manifest"));
     if (!manifest_bytes)
       return std::unexpected(manifest_bytes.error());
     auto decoded = decode_manifest(*manifest_bytes);
     if (!decoded || decoded->id.generation != generation)
-      return std::unexpected(decoded ? invalid_manifest("CURRENT generation mismatch")
-                                     : decoded.error());
+      return std::unexpected(
+          decoded ? invalid_manifest("CURRENT generation mismatch")
+                  : decoded.error());
     current = std::make_shared<Manifest>(std::move(*decoded));
   } else if (error) {
-    return std::unexpected(io_error("Could not inspect catalog", pointer,
-                                    error.message()));
+    return std::unexpected(
+        io_error("Could not inspect catalog", pointer, error.message()));
   }
   auto impl = std::make_unique<Impl>();
   impl->root = std::move(root);
@@ -408,10 +426,11 @@ core::Result<GcResult> LocalManifestCatalog::garbage_collect() {
   const auto manifests_directory = impl_->root / "manifests";
   std::vector<std::pair<std::filesystem::path, Manifest>> retired;
   std::error_code iteration_error;
-  for (std::filesystem::directory_iterator iterator{manifests_directory,
-                                                     iteration_error},
+  for (std::filesystem::directory_iterator
+           iterator{manifests_directory, iteration_error},
        end;
-       !iteration_error && iterator != end; iterator.increment(iteration_error)) {
+       !iteration_error && iterator != end;
+       iterator.increment(iteration_error)) {
     if (!iterator->is_regular_file() ||
         iterator->path().extension() != ".manifest")
       continue;
@@ -468,19 +487,21 @@ core::Result<GcResult> LocalManifestCatalog::garbage_collect() {
   return result;
 }
 
-core::Result<SnapshotId> LocalManifestCatalog::publish(
-    SnapshotId expected_current, std::vector<SegmentDescriptor> segments) {
+core::Result<SnapshotId>
+LocalManifestCatalog::publish(SnapshotId expected_current,
+                              std::vector<SegmentDescriptor> segments) {
   std::lock_guard lock{impl_->mutex};
   if (expected_current != impl_->current->id)
-    return std::unexpected(core::Error{core::ErrorCode::Conflict,
-                                       "Manifest generation changed"});
+    return std::unexpected(
+        core::Error{core::ErrorCode::Conflict, "Manifest generation changed"});
   for (const auto &segment : segments) {
     auto exists = impl_->blobs->exists(segment.object);
     if (!exists)
       return std::unexpected(exists.error());
     if (!*exists)
-      return std::unexpected(core::Error{core::ErrorCode::InvalidManifest,
-                                         "Manifest references a missing segment"});
+      return std::unexpected(
+          core::Error{core::ErrorCode::InvalidManifest,
+                      "Manifest references a missing segment"});
   }
   if (segments.size() > std::numeric_limits<std::uint32_t>::max())
     return std::unexpected(core::Error{core::ErrorCode::InvalidArgument,
@@ -488,8 +509,9 @@ core::Result<SnapshotId> LocalManifestCatalog::publish(
   Manifest manifest{.id = {impl_->current->id.generation + 1},
                     .segments = std::move(segments)};
   auto encoded = encode_manifest(manifest);
-  const auto manifest_path = impl_->root / "manifests" /
-                             (std::to_string(manifest.id.generation) + ".manifest");
+  const auto manifest_path =
+      impl_->root / "manifests" /
+      (std::to_string(manifest.id.generation) + ".manifest");
   if (auto written = write_atomic(manifest_path, encoded); !written)
     return std::unexpected(written.error());
   const auto generation = std::to_string(manifest.id.generation);

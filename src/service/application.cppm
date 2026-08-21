@@ -6,9 +6,12 @@ import sakuin.core.result;
 
 export namespace sakuin::service {
 
+enum class AdminCommand { Compact, Verify, GarbageCollect };
+
 struct DaemonArguments {
   std::optional<std::filesystem::path> configuration_file;
   std::vector<std::string> configuration_overrides;
+  std::optional<AdminCommand> admin_command;
   bool help{};
 };
 
@@ -27,6 +30,24 @@ parse_daemon_arguments(std::span<const std::string_view> arguments) {
   DaemonArguments result;
   for (std::size_t index = 0; index < arguments.size(); ++index) {
     const auto argument = arguments[index];
+    if (argument == "admin") {
+      if (result.admin_command || ++index == arguments.size())
+        return std::unexpected(core::Error{
+            core::ErrorCode::InvalidArgument,
+            "admin requires exactly one of: compact, verify, gc"});
+      const auto command = arguments[index];
+      if (command == "compact")
+        result.admin_command = AdminCommand::Compact;
+      else if (command == "verify")
+        result.admin_command = AdminCommand::Verify;
+      else if (command == "gc")
+        result.admin_command = AdminCommand::GarbageCollect;
+      else
+        return std::unexpected(core::Error{
+            core::ErrorCode::InvalidArgument,
+            "Unknown admin command; expected compact, verify, or gc"});
+      continue;
+    }
     if (argument == "--help" || argument == "-h") {
       result.help = true;
       continue;

@@ -7,9 +7,11 @@ import sakuin.api.http;
 import sakuin.api.json;
 import sakuin.api.rate_limit;
 import sakuin.core.bytes;
+import sakuin.core.ids;
 import sakuin.core.random;
 import sakuin.core.result;
 import sakuin.core.time;
+import sakuin.index.duplicates;
 import sakuin.search.index;
 
 export namespace sakuin::api {
@@ -18,8 +20,10 @@ class SearchHttpHandler final : public HttpHandler {
 public:
   SearchHttpHandler(ApiKeyAuthenticator &authenticator,
                     search::SearchIndex &index,
-                    ApiRequestGovernor *governor = nullptr)
-      : authenticator_(&authenticator), index_(&index), governor_(governor) {}
+                    ApiRequestGovernor *governor = nullptr,
+                    index::DuplicateIndexView *duplicates = nullptr)
+      : authenticator_(&authenticator), index_(&index), governor_(governor),
+        duplicates_(duplicates) {}
 
   core::Result<HttpResponse> handle(HttpRequest request) override;
 
@@ -27,6 +31,7 @@ private:
   ApiKeyAuthenticator *authenticator_;
   search::SearchIndex *index_;
   ApiRequestGovernor *governor_;
+  index::DuplicateIndexView *duplicates_;
 };
 
 } // namespace sakuin::api
@@ -203,32 +208,150 @@ core::Result<std::optional<T>> optional_number(
   return std::optional<T>{value};
 }
 
+core::Result<std::optional<std::int64_t>> optional_integer(
+    const std::map<std::string, std::string, std::less<>> &parameters,
+    std::string_view name) {
+  const auto found = parameters.find(name);
+  if (found == parameters.end())
+    return std::optional<std::int64_t>{};
+  std::int64_t value{};
+  const auto [end, error] = std::from_chars(
+      found->second.data(), found->second.data() + found->second.size(), value);
+  if (error != std::errc{} ||
+      end != found->second.data() + found->second.size())
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidQuery,
+                    std::string{name} + " must be an integer"});
+  return std::optional<std::int64_t>{value};
+}
+
+core::Result<std::optional<core::Timestamp>> optional_timestamp(
+    const std::map<std::string, std::string, std::less<>> &parameters,
+    std::string_view name) {
+  auto value = optional_integer(parameters, name);
+  if (!value)
+    return std::unexpected(value.error());
+  if (!*value)
+    return std::optional<core::Timestamp>{};
+  const auto minimum = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           core::Timestamp::duration::min())
+                           .count();
+  const auto maximum = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           core::Timestamp::duration::max())
+                           .count();
+  if (**value < minimum || **value > maximum)
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidQuery,
+                    std::string{name} + " is outside the timestamp range"});
+  return std::optional<core::Timestamp>{
+      core::Timestamp{std::chrono::duration_cast<core::Timestamp::duration>(
+          std::chrono::milliseconds{**value})}};
+}
+
 core::Result<search::SearchQuery> search_query(std::string_view encoded) {
   auto parameters = query_parameters(encoded);
   if (!parameters)
     return std::unexpected(parameters.error());
   for (const auto &[name, _] : *parameters) {
     if (name != "q" && name != "min_size" && name != "max_size" &&
-        name != "offset" && name != "limit")
+        name != "first_seen_at_or_after_ms" &&
+        name != "last_seen_at_or_before_ms" && name != "offset" &&
+        name != "limit")
       return std::unexpected(core::Error{core::ErrorCode::InvalidQuery,
                                          "Unknown query parameter: " + name});
   }
   auto minimum = optional_number<std::uint64_t>(*parameters, "min_size");
   auto maximum = optional_number<std::uint64_t>(*parameters, "max_size");
+  auto first_seen =
+      optional_timestamp(*parameters, "first_seen_at_or_after_ms");
+  auto last_seen = optional_timestamp(*parameters, "last_seen_at_or_before_ms");
   auto offset = optional_number<std::size_t>(*parameters, "offset");
   auto limit = optional_number<std::size_t>(*parameters, "limit");
-  if (!minimum || !maximum || !offset || !limit)
-    return std::unexpected(!minimum   ? minimum.error()
-                           : !maximum ? maximum.error()
-                           : !offset  ? offset.error()
-                                      : limit.error());
+  if (!minimum || !maximum || !first_seen || !last_seen || !offset || !limit)
+    return std::unexpected(!minimum      ? minimum.error()
+                           : !maximum    ? maximum.error()
+                           : !first_seen ? first_seen.error()
+                           : !last_seen  ? last_seen.error()
+                           : !offset     ? offset.error()
+                                         : limit.error());
   const auto text = parameters->find("q");
   return search::SearchQuery{.text = text == parameters->end() ? std::string{}
                                                                : text->second,
                              .minimum_size = *minimum,
                              .maximum_size = *maximum,
+                             .first_seen_at_or_after = *first_seen,
+                             .last_seen_at_or_before = *last_seen,
                              .offset = offset->value_or(0),
                              .limit = limit->value_or(50)};
+}
+
+struct DuplicateGroupsQuery {
+  index::DuplicateFingerprintAlgorithm algorithm;
+  std::size_t minimum_members{2};
+  std::size_t offset{};
+  std::size_t limit{50};
+};
+
+core::Result<DuplicateGroupsQuery>
+duplicate_groups_query(std::string_view encoded) {
+  auto parameters = query_parameters(encoded);
+  if (!parameters)
+    return std::unexpected(parameters.error());
+  for (const auto &[name, _] : *parameters) {
+    if (name != "algorithm" && name != "min_members" && name != "offset" &&
+        name != "limit")
+      return std::unexpected(core::Error{core::ErrorCode::InvalidQuery,
+                                         "Unknown query parameter: " + name});
+  }
+  const auto algorithm = parameters->find("algorithm");
+  if (algorithm == parameters->end())
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidQuery, "algorithm is required"});
+  DuplicateGroupsQuery result;
+  if (algorithm->second == "exact_file_layout_v1")
+    result.algorithm = index::DuplicateFingerprintAlgorithm::ExactFileLayoutV1;
+  else if (algorithm->second == "normalized_metadata_v1")
+    result.algorithm =
+        index::DuplicateFingerprintAlgorithm::NormalizedMetadataV1;
+  else
+    return std::unexpected(core::Error{
+        core::ErrorCode::InvalidQuery,
+        "algorithm must be exact_file_layout_v1 or normalized_metadata_v1"});
+
+  auto minimum = optional_number<std::size_t>(*parameters, "min_members");
+  auto offset = optional_number<std::size_t>(*parameters, "offset");
+  auto limit = optional_number<std::size_t>(*parameters, "limit");
+  if (!minimum || !offset || !limit)
+    return std::unexpected(!minimum  ? minimum.error()
+                           : !offset ? offset.error()
+                                     : limit.error());
+  result.minimum_members = minimum->value_or(2);
+  result.offset = offset->value_or(0);
+  result.limit = limit->value_or(50);
+  if (result.minimum_members < 2)
+    return std::unexpected(core::Error{core::ErrorCode::InvalidQuery,
+                                       "min_members must be at least 2"});
+  if (result.limit == 0 || result.limit > 200)
+    return std::unexpected(core::Error{core::ErrorCode::InvalidQuery,
+                                       "limit must be between 1 and 200"});
+  return result;
+}
+
+core::Result<core::InfoHash> info_hash(std::string_view encoded) {
+  if (encoded.size() != core::InfoHash{}.bytes.size() * 2)
+    return std::unexpected(core::Error{core::ErrorCode::InvalidQuery,
+                                       "infohash must contain 40 hex digits"});
+  core::InfoHash result;
+  for (std::size_t index = 0; index < result.bytes.size(); ++index) {
+    const auto high = hex_digit(encoded[index * 2]);
+    const auto low = hex_digit(encoded[index * 2 + 1]);
+    if (!high || !low)
+      return std::unexpected(
+          core::Error{core::ErrorCode::InvalidQuery,
+                      "infohash must contain 40 hex digits"});
+    result.bytes[index] = static_cast<std::uint8_t>((*high << 4) | *low);
+  }
+  return result;
 }
 
 } // namespace
@@ -251,8 +374,13 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
       return std::unexpected(body.error());
     return json_response(200, std::move(*body));
   }
-  if (path != "/v1/search")
+  constexpr std::string_view duplicates_path{"/v1/duplicates"};
+  const bool duplicate_route =
+      path == duplicates_path || path.starts_with("/v1/duplicates/");
+  if (path != "/v1/search" && !duplicate_route)
     return error_response(404, "not_found", "Route not found");
+  if (duplicate_route && !duplicates_)
+    return error_response(404, "not_found", "Duplicate index is disabled");
 
   const auto authorization = request.headers.find("authorization");
   auto parsed = authorization == request.headers.end()
@@ -279,16 +407,61 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
           admission->retry_after.value_or(core::Duration::zero()));
   }
 
-  auto parsed_query = search_query(query);
-  if (!parsed_query)
-    return error_response(400, "invalid_query", parsed_query.error().message);
-  auto result = index_->search(*parsed_query);
-  if (!result) {
-    if (result.error().code == core::ErrorCode::InvalidQuery)
-      return error_response(400, "invalid_query", result.error().message);
-    return std::unexpected(result.error());
+  if (path == "/v1/search") {
+    auto parsed_query = search_query(query);
+    if (!parsed_query)
+      return error_response(400, "invalid_query", parsed_query.error().message);
+    auto result = index_->search(*parsed_query);
+    if (!result) {
+      if (result.error().code == core::ErrorCode::InvalidQuery)
+        return error_response(400, "invalid_query", result.error().message);
+      return std::unexpected(result.error());
+    }
+    auto body = json_search_result(*result);
+    if (!body)
+      return std::unexpected(body.error());
+    return json_response(200, std::move(*body));
   }
-  auto body = json_search_result(*result);
+
+  auto snapshot = duplicates_->snapshot();
+  if (path == duplicates_path) {
+    auto parsed_query = duplicate_groups_query(query);
+    if (!parsed_query)
+      return error_response(400, "invalid_query", parsed_query.error().message);
+    std::vector<index::DuplicateGroup> matching;
+    for (const auto &group : snapshot.entries) {
+      if (group.fingerprint.algorithm == parsed_query->algorithm &&
+          group.torrents.size() >= parsed_query->minimum_members)
+        matching.push_back(group);
+    }
+    const auto total = matching.size();
+    const auto start = std::min(parsed_query->offset, matching.size());
+    const auto count = std::min(parsed_query->limit, matching.size() - start);
+    auto body = json_duplicate_groups(
+        snapshot.stats.source_generation, total,
+        std::span<const index::DuplicateGroup>{matching}.subspan(start, count));
+    if (!body)
+      return std::unexpected(body.error());
+    return json_response(200, std::move(*body));
+  }
+
+  if (!query.empty())
+    return error_response(400, "invalid_query",
+                          "Duplicate match lookup has no query parameters");
+  const auto encoded_hash = path.substr(duplicates_path.size() + 1);
+  if (encoded_hash.empty() || encoded_hash.contains('/'))
+    return error_response(404, "not_found", "Route not found");
+  auto torrent = info_hash(encoded_hash);
+  if (!torrent)
+    return error_response(400, "invalid_query", torrent.error().message);
+  std::vector<index::DuplicateGroup> matching;
+  for (const auto &group : snapshot.entries) {
+    if (std::ranges::binary_search(group.torrents, torrent->bytes, {},
+                                   &core::InfoHash::bytes))
+      matching.push_back(group);
+  }
+  auto body = json_duplicate_matches(snapshot.stats.source_generation, *torrent,
+                                     matching);
   if (!body)
     return std::unexpected(body.error());
   return json_response(200, std::move(*body));

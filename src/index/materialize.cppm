@@ -19,6 +19,21 @@ struct MaterializationResult {
   std::uint64_t generation{};
 };
 
+struct MaterializationCheckpoint {
+  std::uint64_t observations_processed{};
+  std::uint64_t source_generation{};
+  std::uint64_t destination_generation{};
+  friend bool operator==(const MaterializationCheckpoint &,
+                         const MaterializationCheckpoint &) = default;
+};
+
+struct IncrementalMaterializationResult {
+  std::uint64_t observations_read{};
+  std::uint64_t observations_skipped{};
+  std::uint64_t torrents_updated{};
+  MaterializationCheckpoint checkpoint;
+};
+
 class ObservationMaterializer {
 public:
   // Rebuilds a derived torrent dataset from canonical observations. Requiring
@@ -28,6 +43,16 @@ public:
   rebuild(const storage::Snapshot<model::ObservationRecord,
                                   storage::AllObservations> &observations,
           storage::TorrentDataset &destination);
+
+  // Advances from a logical observation ordinal. RowV1 compaction preserves
+  // record order, so the ordinal remains stable when physical segments are
+  // replaced. The returned checkpoint must be durably published only after
+  // this call succeeds; replaying an older checkpoint is idempotent.
+  static core::Result<IncrementalMaterializationResult>
+  advance(const storage::Snapshot<model::ObservationRecord,
+                                  storage::AllObservations> &observations,
+          storage::TorrentDataset &destination,
+          MaterializationCheckpoint checkpoint = {});
 };
 
 } // namespace sakuin::index
@@ -54,8 +79,8 @@ struct SeenRange {
 } // namespace
 
 core::Result<MaterializationResult> ObservationMaterializer::rebuild(
-    const storage::Snapshot<model::ObservationRecord,
-                            storage::AllObservations> &observations,
+    const storage::Snapshot<model::ObservationRecord, storage::AllObservations>
+        &observations,
     storage::TorrentDataset &destination) {
   auto destination_snapshot = destination.keyed_snapshot();
   if (!destination_snapshot)
@@ -79,21 +104,17 @@ core::Result<MaterializationResult> ObservationMaterializer::rebuild(
     ++result.observations_read;
     const auto [entry, inserted] = ranges.try_emplace(
         (*next)->info_hash,
-        SeenRange{.first = (*next)->observed_at,
-                  .last = (*next)->observed_at});
+        SeenRange{.first = (*next)->observed_at, .last = (*next)->observed_at});
     if (!inserted) {
-      entry->second.first =
-          std::min(entry->second.first, (*next)->observed_at);
-      entry->second.last =
-          std::max(entry->second.last, (*next)->observed_at);
+      entry->second.first = std::min(entry->second.first, (*next)->observed_at);
+      entry->second.last = std::max(entry->second.last, (*next)->observed_at);
     }
   }
 
   std::vector<std::pair<core::InfoHash, SeenRange>> ordered{ranges.begin(),
                                                             ranges.end()};
-  std::ranges::sort(ordered, {}, [](const auto &entry) {
-    return entry.first.bytes;
-  });
+  std::ranges::sort(ordered, {},
+                    [](const auto &entry) { return entry.first.bytes; });
 
   auto write = destination.begin_write();
   if (!write)
@@ -113,6 +134,64 @@ core::Result<MaterializationResult> ObservationMaterializer::rebuild(
     return std::unexpected(committed.error());
   result.torrents_written = ordered.size();
   result.generation = committed->generation;
+  return result;
+}
+
+core::Result<IncrementalMaterializationResult> ObservationMaterializer::advance(
+    const storage::Snapshot<model::ObservationRecord, storage::AllObservations>
+        &observations,
+    storage::TorrentDataset &destination,
+    MaterializationCheckpoint checkpoint) {
+  if (observations.id().generation < checkpoint.source_generation)
+    return std::unexpected(core::Error{
+        core::ErrorCode::Conflict,
+        "Observation materialization checkpoint is ahead of its source"});
+  auto stream = observations.scan({});
+  if (!stream)
+    return std::unexpected(stream.error());
+
+  IncrementalMaterializationResult result{.checkpoint = checkpoint};
+  std::unordered_map<core::InfoHash, SeenRange, InfoHashHasher> ranges;
+  std::uint64_t ordinal{};
+  while (true) {
+    auto next = (*stream)->next();
+    if (!next)
+      return std::unexpected(next.error());
+    if (!*next)
+      break;
+    if (ordinal++ < checkpoint.observations_processed) {
+      ++result.observations_skipped;
+      continue;
+    }
+    ++result.observations_read;
+    const auto [entry, inserted] = ranges.try_emplace(
+        (*next)->info_hash,
+        SeenRange{.first = (*next)->observed_at, .last = (*next)->observed_at});
+    if (!inserted) {
+      entry->second.first = std::min(entry->second.first, (*next)->observed_at);
+      entry->second.last = std::max(entry->second.last, (*next)->observed_at);
+    }
+  }
+  if (ordinal < checkpoint.observations_processed)
+    return std::unexpected(core::Error{
+        core::ErrorCode::CorruptSegment,
+        "Observation history is shorter than its materialization checkpoint"});
+
+  std::vector<storage::TorrentObservationRange> updates;
+  updates.reserve(ranges.size());
+  for (const auto &[hash, range] : ranges)
+    updates.push_back({.info_hash = hash,
+                       .first_seen = range.first,
+                       .last_seen = range.last});
+  std::ranges::sort(updates, {},
+                    [](const auto &entry) { return entry.info_hash.bytes; });
+  auto committed = destination.merge_observations(updates);
+  if (!committed)
+    return std::unexpected(committed.error());
+  result.torrents_updated = committed->records_written;
+  result.checkpoint = {.observations_processed = ordinal,
+                       .source_generation = observations.id().generation,
+                       .destination_generation = committed->commit.generation};
   return result;
 }
 

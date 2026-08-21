@@ -3,10 +3,16 @@ export module sakuin.service.local;
 import std;
 
 import sakuin.config.model;
+import sakuin.core.ids;
 import sakuin.core.result;
+import sakuin.index.duplicates;
 import sakuin.runtime.datagram;
+import sakuin.scheduler.work;
 import sakuin.search.rebuild;
 import sakuin.service.api;
+import sakuin.service.duplicates;
+import sakuin.service.maintenance;
+import sakuin.service.materialization;
 import sakuin.service.runtime;
 import sakuin.service.storage;
 
@@ -39,10 +45,13 @@ public:
 
 private:
   LocalAsioDhtService(std::unique_ptr<LocalCanonicalStorage> storage,
+                      std::unique_ptr<scheduler::LocalWorkCoordinator> work,
                       std::unique_ptr<AsioDhtRuntime> runtime)
-      : storage_(std::move(storage)), runtime_(std::move(runtime)) {}
+      : storage_(std::move(storage)), work_(std::move(work)),
+        runtime_(std::move(runtime)) {}
 
   std::unique_ptr<LocalCanonicalStorage> storage_;
+  std::unique_ptr<scheduler::LocalWorkCoordinator> work_;
   std::unique_ptr<AsioDhtRuntime> runtime_;
 };
 
@@ -54,7 +63,10 @@ public:
   static core::Result<std::unique_ptr<LocalSakuinService>>
   create(const config::AppConfig &configuration,
          DhtRuntimeObserver &dht_observer, ApiServiceObserver &api_observer,
-         DhtRuntimeExternalAddresses external_addresses = {});
+         DhtRuntimeExternalAddresses external_addresses = {},
+         StorageMaintenanceObserver *maintenance_observer = nullptr,
+         MaterializationObserver *materialization_observer = nullptr,
+         DuplicateIndexObserver *duplicate_index_observer = nullptr);
 
   ~LocalSakuinService();
 
@@ -76,22 +88,52 @@ public:
   }
   core::Result<void> reload_api_credentials();
   core::Result<search::SearchRebuildResult> refresh_search();
+  core::Result<index::DuplicateSynchronizationResult> refresh_duplicates();
+  core::Result<std::vector<index::DuplicateGroup>>
+  duplicate_groups(index::DuplicateFingerprintAlgorithm algorithm,
+                   std::size_t minimum_members = 2) const;
+  std::vector<index::DuplicateGroup>
+  duplicate_matches(const core::InfoHash &torrent) const;
 
 private:
-  LocalSakuinService(std::unique_ptr<LocalCanonicalStorage> storage,
-                     std::unique_ptr<LocalApiService> api,
-                     std::unique_ptr<AsioDhtRuntime> runtime)
+  LocalSakuinService(
+      std::unique_ptr<LocalCanonicalStorage> storage,
+      std::unique_ptr<LocalApiService> api,
+      std::unique_ptr<TorrentMaterializationCoordinator> materialization,
+      std::unique_ptr<DuplicateIndexCoordinator> duplicates,
+      std::unique_ptr<StorageMaintenanceCoordinator> maintenance,
+      std::unique_ptr<scheduler::LocalWorkCoordinator> work,
+      std::unique_ptr<AsioDhtRuntime> runtime)
       : storage_(std::move(storage)), api_(std::move(api)),
+        materialization_(std::move(materialization)),
+        duplicates_(std::move(duplicates)),
+        maintenance_(std::move(maintenance)), work_(std::move(work)),
         runtime_(std::move(runtime)) {}
 
   std::unique_ptr<LocalCanonicalStorage> storage_;
   std::unique_ptr<LocalApiService> api_;
+  std::unique_ptr<TorrentMaterializationCoordinator> materialization_;
+  std::unique_ptr<DuplicateIndexCoordinator> duplicates_;
+  std::unique_ptr<StorageMaintenanceCoordinator> maintenance_;
+  std::unique_ptr<scheduler::LocalWorkCoordinator> work_;
   std::unique_ptr<AsioDhtRuntime> runtime_;
 };
 
 } // namespace sakuin::service
 
 namespace sakuin::service {
+namespace {
+
+core::Result<std::unique_ptr<scheduler::LocalWorkCoordinator>>
+create_local_work_coordinator(const config::DistributedConfig &configuration) {
+  return scheduler::LocalWorkCoordinator::create(
+      {.maximum_work_items = configuration.maximum_work_items,
+       .maximum_payload_bytes = configuration.maximum_payload_bytes,
+       .worker_timeout = configuration.worker_timeout,
+       .lease_duration = configuration.lease_duration});
+}
+
+} // namespace
 
 core::Result<std::unique_ptr<LocalAsioDhtService>>
 LocalAsioDhtService::create(const config::AppConfig &configuration,
@@ -102,16 +144,22 @@ LocalAsioDhtService::create(const config::AppConfig &configuration,
   auto storage = LocalCanonicalStorage::open(configuration.storage);
   if (!storage)
     return std::unexpected(storage.error());
+  auto work = create_local_work_coordinator(configuration.distributed);
+  if (!work)
+    return std::unexpected(work.error());
   auto runtime =
       AsioDhtRuntime::create(configuration.network,
                              {.observations = &(*storage)->observations(),
                               .torrents = &(*storage)->torrents(),
-                              .observer = &observer},
+                              .observer = &observer,
+                              .work = work->get(),
+                              .worker_heartbeat_interval =
+                                  configuration.distributed.heartbeat_interval},
                              std::move(external_addresses));
   if (!runtime)
     return std::unexpected(runtime.error());
-  return std::unique_ptr<LocalAsioDhtService>{
-      new LocalAsioDhtService{std::move(*storage), std::move(*runtime)}};
+  return std::unique_ptr<LocalAsioDhtService>{new LocalAsioDhtService{
+      std::move(*storage), std::move(*work), std::move(*runtime)}};
 }
 
 LocalAsioDhtService::~LocalAsioDhtService() {
@@ -132,27 +180,69 @@ core::Result<std::unique_ptr<LocalSakuinService>>
 LocalSakuinService::create(const config::AppConfig &configuration,
                            DhtRuntimeObserver &dht_observer,
                            ApiServiceObserver &api_observer,
-                           DhtRuntimeExternalAddresses external_addresses) {
+                           DhtRuntimeExternalAddresses external_addresses,
+                           StorageMaintenanceObserver *maintenance_observer,
+                           MaterializationObserver *materialization_observer,
+                           DuplicateIndexObserver *duplicate_index_observer) {
   if (auto valid = config::validate(configuration); !valid)
     return std::unexpected(valid.error());
   auto storage = LocalCanonicalStorage::open(configuration.storage);
   if (!storage)
     return std::unexpected(storage.error());
+  auto work = create_local_work_coordinator(configuration.distributed);
+  if (!work)
+    return std::unexpected(work.error());
 
+  std::unique_ptr<DuplicateIndexCoordinator> duplicates;
+  if (configuration.indexing.duplicates.enabled) {
+    auto created = DuplicateIndexCoordinator::create(
+        **storage, configuration.indexing.duplicates, duplicate_index_observer);
+    if (!created)
+      return std::unexpected(created.error());
+    duplicates = std::move(*created);
+  }
   std::unique_ptr<LocalApiService> api;
   if (configuration.api.enabled) {
     auto created = LocalApiService::create(
-        configuration.api, (*storage)->torrents(), api_observer);
+        configuration.api, (*storage)->torrents(), api_observer,
+        (*storage)->root() / "derived" / "search", duplicates.get());
     if (!created)
       return std::unexpected(created.error());
     api = std::move(*created);
   }
   auto *api_refresh = api.get();
+  std::unique_ptr<StorageMaintenanceCoordinator> maintenance;
+  if (configuration.storage.maintenance.enabled)
+    maintenance = std::make_unique<StorageMaintenanceCoordinator>(
+        **storage, configuration.storage.maintenance, maintenance_observer,
+        api_refresh
+            ? std::function<void(LocalDataset,
+                                 std::uint64_t)>{[api_refresh](
+                                                     LocalDataset dataset,
+                                                     std::uint64_t generation) {
+                if (dataset == LocalDataset::Torrents)
+                  api_refresh->request_search_refresh(generation);
+              }}
+            : std::function<void(LocalDataset, std::uint64_t)>{});
+  std::unique_ptr<TorrentMaterializationCoordinator> materialization;
+  if (configuration.storage.materialization.enabled)
+    materialization = std::make_unique<TorrentMaterializationCoordinator>(
+        **storage, configuration.storage.materialization,
+        materialization_observer,
+        api_refresh
+            ? std::function<void(std::uint64_t)>{[api_refresh](
+                                                     std::uint64_t generation) {
+                api_refresh->request_search_refresh(generation);
+              }}
+            : std::function<void(std::uint64_t)>{});
   auto runtime = AsioDhtRuntime::create(
       configuration.network,
       {.observations = &(*storage)->observations(),
        .torrents = &(*storage)->torrents(),
        .observer = &dht_observer,
+       .work = work->get(),
+       .worker_heartbeat_interval =
+           configuration.distributed.heartbeat_interval,
        .on_torrent_committed =
            api_refresh
                ? std::function<void(
@@ -164,17 +254,12 @@ LocalSakuinService::create(const config::AppConfig &configuration,
   if (!runtime)
     return std::unexpected(runtime.error());
   return std::unique_ptr<LocalSakuinService>{new LocalSakuinService{
-      std::move(*storage), std::move(api), std::move(*runtime)}};
+      std::move(*storage), std::move(api), std::move(materialization),
+      std::move(duplicates), std::move(maintenance), std::move(*work),
+      std::move(*runtime)}};
 }
 
-LocalSakuinService::~LocalSakuinService() {
-  if (runtime_)
-    runtime_->stop();
-  if (api_)
-    api_->stop();
-  if (storage_)
-    static_cast<void>(storage_->flush());
-}
+LocalSakuinService::~LocalSakuinService() { static_cast<void>(stop()); }
 
 core::Result<void> LocalSakuinService::start() {
   if (api_) {
@@ -182,8 +267,44 @@ core::Result<void> LocalSakuinService::start() {
     if (!started)
       return std::unexpected(started.error());
   }
+  if (materialization_) {
+    auto started = materialization_->start();
+    if (!started) {
+      if (api_)
+        api_->stop();
+      return std::unexpected(started.error());
+    }
+  }
+  if (duplicates_) {
+    auto started = duplicates_->start();
+    if (!started) {
+      if (materialization_)
+        materialization_->stop();
+      if (api_)
+        api_->stop();
+      return std::unexpected(started.error());
+    }
+  }
+  if (maintenance_) {
+    auto started = maintenance_->start();
+    if (!started) {
+      if (materialization_)
+        materialization_->stop();
+      if (duplicates_)
+        duplicates_->stop();
+      if (api_)
+        api_->stop();
+      return std::unexpected(started.error());
+    }
+  }
   auto started = runtime_->start();
   if (!started) {
+    if (maintenance_)
+      maintenance_->stop();
+    if (materialization_)
+      materialization_->stop();
+    if (duplicates_)
+      duplicates_->stop();
     if (api_)
       api_->stop();
     return std::unexpected(started.error());
@@ -193,13 +314,35 @@ core::Result<void> LocalSakuinService::start() {
 
 core::Result<void> LocalSakuinService::stop() {
   runtime_->stop();
+  std::optional<core::Error> materialization_error;
+  if (materialization_) {
+    materialization_->stop();
+    if (auto materialized = materialization_->run_once(); !materialized)
+      materialization_error = materialized.error();
+  }
+  if (maintenance_)
+    maintenance_->stop();
+  std::optional<core::Error> duplicate_error;
+  if (duplicates_) {
+    duplicates_->stop();
+    if (auto synchronized = duplicates_->run_once(); !synchronized)
+      duplicate_error = synchronized.error();
+  }
   if (api_)
     api_->stop();
-  return storage_->flush();
+  auto flushed = storage_->flush();
+  if (materialization_error)
+    return std::unexpected(std::move(*materialization_error));
+  if (duplicate_error)
+    return std::unexpected(std::move(*duplicate_error));
+  return flushed;
 }
 
 bool LocalSakuinService::running() const noexcept {
-  return runtime_->running() && (!api_ || api_->running());
+  return runtime_->running() && (!api_ || api_->running()) &&
+         (!maintenance_ || maintenance_->running()) &&
+         (!materialization_ || materialization_->running()) &&
+         (!duplicates_ || duplicates_->running());
 }
 
 core::Result<void> LocalSakuinService::reload_api_credentials() {
@@ -214,6 +357,30 @@ core::Result<search::SearchRebuildResult> LocalSakuinService::refresh_search() {
     return std::unexpected(
         core::Error{core::ErrorCode::NotFound, "API service is disabled"});
   return api_->refresh_search();
+}
+
+core::Result<index::DuplicateSynchronizationResult>
+LocalSakuinService::refresh_duplicates() {
+  if (!duplicates_)
+    return std::unexpected(
+        core::Error{core::ErrorCode::NotFound, "Duplicate index is disabled"});
+  return duplicates_->run_once();
+}
+
+core::Result<std::vector<index::DuplicateGroup>>
+LocalSakuinService::duplicate_groups(
+    index::DuplicateFingerprintAlgorithm algorithm,
+    std::size_t minimum_members) const {
+  if (!duplicates_)
+    return std::unexpected(
+        core::Error{core::ErrorCode::NotFound, "Duplicate index is disabled"});
+  return duplicates_->groups(algorithm, minimum_members);
+}
+
+std::vector<index::DuplicateGroup>
+LocalSakuinService::duplicate_matches(const core::InfoHash &torrent) const {
+  return duplicates_ ? duplicates_->matches(torrent)
+                     : std::vector<index::DuplicateGroup>{};
 }
 
 } // namespace sakuin::service

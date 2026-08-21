@@ -3,11 +3,13 @@ export module sakuin.storage.dataset.torrents;
 import std;
 
 import sakuin.core.bytes;
+import sakuin.core.hash;
 import sakuin.core.ids;
 import sakuin.core.result;
 import sakuin.core.time;
 import sakuin.model.torrent;
 import sakuin.storage.blob.store;
+import sakuin.storage.admin.compaction;
 import sakuin.storage.catalog.manifest;
 import sakuin.storage.codec.model_records;
 import sakuin.storage.dataset.dataset;
@@ -20,6 +22,36 @@ import sakuin.storage.format.segment;
 export namespace sakuin::storage {
 
 struct AllTorrents {};
+
+struct TorrentObservationRange {
+  core::InfoHash info_hash;
+  core::Timestamp first_seen;
+  core::Timestamp last_seen;
+};
+
+struct TorrentObservationMergeResult {
+  CommitResult commit;
+  std::uint64_t records_written{};
+};
+
+// Opaque logical position for consumers of the keyed torrent change stream.
+// The prefix digest detects compaction or replacement without exposing segment
+// descriptors to derived-index code.
+struct TorrentChangeCursor {
+  bool initialized{};
+  std::uint64_t source_generation{};
+  std::uint64_t segment_count{};
+  core::Hash256 segment_prefix_digest{};
+
+  friend bool operator==(const TorrentChangeCursor &,
+                         const TorrentChangeCursor &) = default;
+};
+
+struct TorrentChangeScan {
+  bool full_rebuild_required{};
+  TorrentChangeCursor cursor;
+  std::unique_ptr<RecordStream<model::TorrentRecord>> records;
+};
 
 class TorrentDataset final
     : public KeyedDataset<model::TorrentRecord, core::InfoHash, AllTorrents> {
@@ -43,6 +75,22 @@ public:
   // overwriting the winner, so an orchestrator may safely retry.
   core::Result<CommitResult> enrich(model::TorrentRecord metadata);
 
+  // Atomically folds observation ranges into the durable torrent view while
+  // preserving any metadata already fetched for each infohash. A concurrent
+  // publish returns Conflict, allowing the materializer to replay safely.
+  core::Result<TorrentObservationMergeResult>
+  merge_observations(std::span<const TorrentObservationRange> ranges);
+
+  // Returns the latest value for every key changed after cursor. If physical
+  // history no longer has cursor as a prefix, records is a complete keyed scan
+  // and full_rebuild_required is true.
+  core::Result<TorrentChangeScan>
+  changes_since(TorrentChangeCursor cursor = {}) const;
+
+  // Replaces physical history with one latest-value-per-infohash WARM segment,
+  // sorted by the physical infohash key for indexed point lookup.
+  core::Result<CompactionResult> compact(const CompactionPolicy &policy = {});
+
 private:
   BlobStore *blobs_;
   ManifestCatalog *catalog_;
@@ -65,6 +113,10 @@ struct InfoHashHasher {
     return value;
   }
 };
+
+core::ByteView info_hash_bytes(const core::InfoHash &hash) noexcept {
+  return std::as_bytes(std::span{hash.bytes});
+}
 
 core::Result<std::unique_ptr<RowV1SegmentReader>>
 open_torrent_segment(BlobStore &blobs, const SegmentDescriptor &descriptor,
@@ -108,12 +160,14 @@ read_torrent(RowV1SegmentReader &reader, std::uint64_t ordinal,
 class TorrentStream final : public RecordStream<model::TorrentRecord> {
 public:
   TorrentStream(std::shared_ptr<const ManifestPin> pin, BlobStore &blobs,
-                const TorrentRecordCodec &codec)
+                const TorrentRecordCodec &codec,
+                std::size_t minimum_segment_index = 0)
       : pin_(std::move(pin)), blobs_(&blobs), codec_(codec),
+        minimum_segment_index_(minimum_segment_index),
         segment_index_(pin_->manifest().segments.size()) {}
 
   core::Result<std::optional<model::TorrentRecord>> next() override {
-    while (segment_index_ > 0 || reader_) {
+    while (segment_index_ > minimum_segment_index_ || reader_) {
       if (!reader_) {
         --segment_index_;
         auto opened = open_torrent_segment(
@@ -140,6 +194,7 @@ private:
   BlobStore *blobs_;
   TorrentRecordCodec codec_;
   std::unordered_set<core::InfoHash, InfoHashHasher> seen_;
+  std::size_t minimum_segment_index_{};
   std::size_t segment_index_;
   std::uint64_t record_index_{};
   std::unique_ptr<RowV1SegmentReader> reader_;
@@ -160,9 +215,27 @@ public:
     const auto &segments = manifest().segments;
     for (auto segment = segments.rbegin(); segment != segments.rend();
          ++segment) {
-      auto reader = open_torrent_segment(*blobs_, *segment, codec_);
+      auto reader = reader_for(*segment);
       if (!reader)
         return std::unexpected(reader.error());
+      if ((*reader)->header().tier == SegmentTier::Warm) {
+        auto location = (*reader)->locate(info_hash_bytes(key));
+        if (!location)
+          return std::unexpected(location.error());
+        if (!*location)
+          continue;
+        auto encoded = (*reader)->read(**location);
+        if (!encoded)
+          return std::unexpected(encoded.error());
+        auto decoded = codec_.decode(*encoded);
+        if (!decoded)
+          return std::unexpected(decoded.error());
+        if (decoded->info_hash != key)
+          return std::unexpected(core::Error{
+              core::ErrorCode::CorruptSegment,
+              "WARM torrent physical key does not match its record"});
+        return std::optional<model::TorrentRecord>{std::move(*decoded)};
+      }
       for (auto ordinal = (*reader)->record_count(); ordinal > 0; --ordinal) {
         auto decoded = read_torrent(**reader, ordinal - 1, codec_);
         if (!decoded)
@@ -174,8 +247,8 @@ public:
     return std::optional<model::TorrentRecord>{};
   }
 
-  // HOT segments are unsorted. Until WARM keyed compaction is available, scans
-  // walk newest-to-oldest and retain only the first value for each InfoHash.
+  // Scans walk newest-to-oldest across HOT and WARM physical history and retain
+  // only the first value for each InfoHash.
   core::Result<std::unique_ptr<RecordStream<model::TorrentRecord>>>
   scan(const AllTorrents &) const override {
     return std::unique_ptr<RecordStream<model::TorrentRecord>>{
@@ -183,9 +256,37 @@ public:
   }
 
 private:
+  core::Result<std::shared_ptr<RowV1SegmentReader>>
+  reader_for(const SegmentDescriptor &segment) const {
+    {
+      std::lock_guard lock{readers_mutex_};
+      const auto found = std::ranges::find_if(readers_, [&](const auto &entry) {
+        return entry.first == segment.object;
+      });
+      if (found != readers_.end())
+        return found->second;
+    }
+    auto opened = open_torrent_segment(*blobs_, segment, codec_);
+    if (!opened)
+      return std::unexpected(opened.error());
+    auto shared = std::shared_ptr<RowV1SegmentReader>{std::move(*opened)};
+    std::lock_guard lock{readers_mutex_};
+    const auto found = std::ranges::find_if(readers_, [&](const auto &entry) {
+      return entry.first == segment.object;
+    });
+    if (found != readers_.end())
+      return found->second;
+    readers_.emplace_back(segment.object, shared);
+    return shared;
+  }
+
   BlobStore *blobs_;
   TorrentRecordCodec codec_;
   core::Timestamp created_at_;
+  mutable std::mutex readers_mutex_;
+  mutable std::vector<
+      std::pair<core::ObjectId, std::shared_ptr<RowV1SegmentReader>>>
+      readers_;
 };
 
 class TorrentWriteSession final : public WriteSession<model::TorrentRecord> {
@@ -291,6 +392,24 @@ make_torrent_snapshot(ManifestCatalog &catalog, BlobStore &blobs,
       std::make_shared<TorrentSnapshot>(std::move(*pin), blobs, codec)};
 }
 
+core::Hash256 segment_prefix_digest(const Manifest &manifest,
+                                    std::size_t count) {
+  core::Sha256Hasher hasher;
+  for (std::size_t index = 0; index < std::min(count, manifest.segments.size());
+       ++index)
+    hasher.update(
+        std::as_bytes(std::span{manifest.segments[index].object.bytes}));
+  return hasher.finalize();
+}
+
+TorrentChangeCursor change_cursor(const Manifest &manifest) {
+  return {.initialized = true,
+          .source_generation = manifest.id.generation,
+          .segment_count = manifest.segments.size(),
+          .segment_prefix_digest =
+              segment_prefix_digest(manifest, manifest.segments.size())};
+}
+
 } // namespace
 
 TorrentDataset::TorrentDataset(BlobStore &blobs, ManifestCatalog &catalog,
@@ -375,6 +494,183 @@ TorrentDataset::enrich(model::TorrentRecord metadata) {
   if (auto appended = write.append(metadata); !appended)
     return std::unexpected(appended.error());
   return write.commit();
+}
+
+core::Result<TorrentObservationMergeResult> TorrentDataset::merge_observations(
+    std::span<const TorrentObservationRange> ranges) {
+  auto base = catalog_->pin_current();
+  if (!base)
+    return std::unexpected(base.error());
+  TorrentSnapshot snapshot{*base, *blobs_, codec_};
+  std::vector<model::TorrentRecord> updates;
+  updates.reserve(ranges.size());
+  for (const auto &range : ranges) {
+    if (range.first_seen > range.last_seen)
+      return std::unexpected(core::Error{
+          core::ErrorCode::InvalidArgument,
+          "Torrent observation range has an invalid seen interval"});
+    auto existing = snapshot.get(range.info_hash);
+    if (!existing)
+      return std::unexpected(existing.error());
+    if (*existing) {
+      auto merged = std::move(**existing);
+      const auto first = std::min(merged.first_seen, range.first_seen);
+      const auto last = std::max(merged.last_seen, range.last_seen);
+      if (first == merged.first_seen && last == merged.last_seen)
+        continue;
+      merged.first_seen = first;
+      merged.last_seen = last;
+      updates.push_back(std::move(merged));
+    } else {
+      updates.push_back(model::TorrentRecord{.info_hash = range.info_hash,
+                                             .first_seen = range.first_seen,
+                                             .last_seen = range.last_seen,
+                                             .name = std::nullopt,
+                                             .total_size = 0,
+                                             .files = {}});
+    }
+  }
+  if (updates.empty())
+    return TorrentObservationMergeResult{
+        .commit = {.generation = (*base)->manifest().id.generation}};
+
+  auto writer = RowV1SegmentWriter::create(*blobs_, segment_header_);
+  if (!writer)
+    return std::unexpected(writer.error());
+  TorrentWriteSession write{*blobs_, *catalog_, codec_, std::move(*base),
+                            std::move(*writer)};
+  if (auto appended = write.append(updates); !appended)
+    return std::unexpected(appended.error());
+  auto committed = write.commit();
+  if (!committed)
+    return std::unexpected(committed.error());
+  return TorrentObservationMergeResult{.commit = *committed,
+                                       .records_written = updates.size()};
+}
+
+core::Result<TorrentChangeScan>
+TorrentDataset::changes_since(TorrentChangeCursor cursor) const {
+  auto pin = catalog_->pin_current();
+  if (!pin)
+    return std::unexpected(pin.error());
+  const auto &manifest = (*pin)->manifest();
+  if (cursor.initialized && cursor.source_generation > manifest.id.generation)
+    return std::unexpected(
+        core::Error{core::ErrorCode::Conflict,
+                    "Torrent change cursor is ahead of the canonical dataset"});
+
+  const bool prefix_is_present =
+      cursor.initialized && cursor.segment_count <= manifest.segments.size() &&
+      segment_prefix_digest(manifest,
+                            static_cast<std::size_t>(cursor.segment_count)) ==
+          cursor.segment_prefix_digest;
+  const auto first_segment =
+      prefix_is_present ? static_cast<std::size_t>(cursor.segment_count) : 0U;
+  return TorrentChangeScan{
+      .full_rebuild_required = !prefix_is_present,
+      .cursor = change_cursor(manifest),
+      .records = std::make_unique<TorrentStream>(std::move(*pin), *blobs_,
+                                                 codec_, first_segment)};
+}
+
+core::Result<CompactionResult>
+TorrentDataset::compact(const CompactionPolicy &policy) {
+  if (policy.minimum_segment_count < 2 || policy.target_block_size == 0)
+    return std::unexpected(core::Error{
+        core::ErrorCode::InvalidArgument,
+        "Torrent compaction requires at least two segments and a nonzero "
+        "block size"});
+
+  auto pin = catalog_->pin_current();
+  if (!pin)
+    return std::unexpected(pin.error());
+  const auto &manifest = (*pin)->manifest();
+  if (manifest.segments.size() < policy.minimum_segment_count)
+    return CompactionResult{.source_generation = manifest.id.generation};
+
+  TorrentStream stream{*pin, *blobs_, codec_};
+  std::vector<model::TorrentRecord> records;
+  while (true) {
+    auto next = stream.next();
+    if (!next)
+      return std::unexpected(next.error());
+    if (!*next)
+      break;
+    records.push_back(std::move(**next));
+  }
+  std::ranges::sort(records, [](const model::TorrentRecord &left,
+                                const model::TorrentRecord &right) {
+    return left.info_hash.bytes < right.info_hash.bytes;
+  });
+
+  SegmentHeader output_header{
+      .format_version = {1, 2},
+      .schema_id = TorrentRecordSchema,
+      .schema_version = {.value = codec_.version().value},
+      .encoding = SegmentEncoding::RowV1,
+      .tier = SegmentTier::Warm,
+      .compression = policy.compression,
+      .target_block_size = policy.target_block_size,
+  };
+  auto writer = RowV1SegmentWriter::create(
+      *blobs_, output_header,
+      RowV1WriterOptions{.compression_level = policy.compression_level});
+  if (!writer)
+    return std::unexpected(writer.error());
+
+  std::optional<core::Timestamp> minimum;
+  std::optional<core::Timestamp> maximum;
+  for (const auto &record : records) {
+    core::ByteBuffer encoded;
+    if (auto result = codec_.encode(record, encoded); !result) {
+      (*writer)->abort();
+      return std::unexpected(result.error());
+    }
+    if (auto appended =
+            (*writer)->append_keyed(info_hash_bytes(record.info_hash), encoded);
+        !appended) {
+      (*writer)->abort();
+      return std::unexpected(appended.error());
+    }
+    minimum =
+        minimum ? std::min(*minimum, record.first_seen) : record.first_seen;
+    maximum = maximum ? std::max(*maximum, record.last_seen) : record.last_seen;
+  }
+
+  auto replacement = (*writer)->finalize();
+  if (!replacement)
+    return std::unexpected(replacement.error());
+  replacement->min_timestamp = minimum;
+  replacement->max_timestamp = maximum;
+  auto verified = open_torrent_segment(*blobs_, *replacement, codec_);
+  if (!verified)
+    return std::unexpected(verified.error());
+  if (auto integrity = (*verified)->verify(); !integrity)
+    return std::unexpected(integrity.error());
+  for (const auto &record : records) {
+    auto location = (*verified)->locate(info_hash_bytes(record.info_hash));
+    if (!location)
+      return std::unexpected(location.error());
+    if (!*location)
+      return std::unexpected(
+          core::Error{core::ErrorCode::CorruptSegment,
+                      "WARM torrent index omitted a compacted record"});
+  }
+
+  const auto bytes_before = std::transform_reduce(
+      manifest.segments.begin(), manifest.segments.end(), std::uint64_t{},
+      std::plus{},
+      [](const SegmentDescriptor &segment) { return segment.physical_size; });
+  auto published = catalog_->publish(manifest.id, {*replacement});
+  if (!published)
+    return std::unexpected(published.error());
+  return CompactionResult{
+      .source_generation = published->generation,
+      .segments_created = 1,
+      .segments_removed = manifest.segments.size(),
+      .bytes_before = bytes_before,
+      .bytes_after = replacement->physical_size,
+  };
 }
 
 } // namespace sakuin::storage

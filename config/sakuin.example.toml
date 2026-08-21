@@ -56,6 +56,19 @@ level = 3
 [storage.compaction]
 minimum_segments = 4
 
+[storage.maintenance]
+enabled = true
+interval_ms = 900000
+verification_interval_ms = 86400000
+
+[storage.materialization]
+enabled = true
+interval_ms = 60000
+
+[indexing.duplicates]
+enabled = true
+interval_ms = 300000
+
 [api]
 enabled = true
 credential_store_directory = "./data/operational/api"
@@ -77,3 +90,10 @@ maximum_body_bytes = 1048576
 enabled = true
 requests_per_window = 120
 window_ms = 60000
+
+[distributed]
+maximum_work_items = 65536
+maximum_payload_bytes = 1048576
+worker_timeout_ms = 30000
+lease_duration_ms = 120000
+heartbeat_interval_ms = 10000

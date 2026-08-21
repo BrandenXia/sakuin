@@ -290,7 +290,8 @@ core::Result<void> parse_storage(const toml::table &table,
   if (auto checked =
           check_keys(table,
                      {"backend", "local_root", "block_target_bytes",
-                      "segment_target_bytes", "compression", "compaction"},
+                      "segment_target_bytes", "compression", "compaction",
+                      "maintenance", "materialization"},
                      "storage.");
       !checked)
     return checked;
@@ -328,9 +329,51 @@ core::Result<void> parse_storage(const toml::table &table,
                                   "storage.compaction.");
         !checked)
       return checked;
-    return scalar<std::int64_t>(**compaction, "minimum_segments",
-                                "storage.compaction.minimum_segments", overlay);
+    if (auto parsed = scalar<std::int64_t>(
+            **compaction, "minimum_segments",
+            "storage.compaction.minimum_segments", overlay);
+        !parsed)
+      return parsed;
   }
+  auto maintenance =
+      optional_table(table, "maintenance", "storage.maintenance");
+  if (!maintenance)
+    return std::unexpected(maintenance.error());
+  if (*maintenance) {
+    if (auto checked =
+            check_keys(**maintenance,
+                       {"enabled", "interval_ms", "verification_interval_ms"},
+                       "storage.maintenance.");
+        !checked)
+      return checked;
+    for (auto result :
+         {scalar<bool>(**maintenance, "enabled", "storage.maintenance.enabled",
+                       overlay),
+          scalar<std::int64_t>(**maintenance, "interval_ms",
+                               "storage.maintenance.interval_ms", overlay),
+          scalar<std::int64_t>(**maintenance, "verification_interval_ms",
+                               "storage.maintenance.verification_interval_ms",
+                               overlay)})
+      if (!result)
+        return result;
+  }
+  auto materialization =
+      optional_table(table, "materialization", "storage.materialization");
+  if (!materialization)
+    return std::unexpected(materialization.error());
+  if (!*materialization)
+    return {};
+  if (auto checked = check_keys(**materialization, {"enabled", "interval_ms"},
+                                "storage.materialization.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<bool>(**materialization, "enabled",
+                     "storage.materialization.enabled", overlay),
+        scalar<std::int64_t>(**materialization, "interval_ms",
+                             "storage.materialization.interval_ms", overlay)})
+    if (!result)
+      return result;
   return {};
 }
 
@@ -394,6 +437,54 @@ core::Result<void> parse_api(const toml::table &table, ConfigOverlay &overlay) {
   return {};
 }
 
+core::Result<void> parse_indexing(const toml::table &table,
+                                  ConfigOverlay &overlay) {
+  if (auto checked = check_keys(table, {"duplicates"}, "indexing."); !checked)
+    return checked;
+  auto duplicates = optional_table(table, "duplicates", "indexing.duplicates");
+  if (!duplicates)
+    return std::unexpected(duplicates.error());
+  if (!*duplicates)
+    return {};
+  if (auto checked = check_keys(**duplicates, {"enabled", "interval_ms"},
+                                "indexing.duplicates.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<bool>(**duplicates, "enabled", "indexing.duplicates.enabled",
+                     overlay),
+        scalar<std::int64_t>(**duplicates, "interval_ms",
+                             "indexing.duplicates.interval_ms", overlay)})
+    if (!result)
+      return result;
+  return {};
+}
+
+core::Result<void> parse_distributed(const toml::table &table,
+                                     ConfigOverlay &overlay) {
+  if (auto checked = check_keys(table,
+                                {"maximum_work_items", "maximum_payload_bytes",
+                                 "worker_timeout_ms", "lease_duration_ms",
+                                 "heartbeat_interval_ms"},
+                                "distributed.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<std::int64_t>(table, "maximum_work_items",
+                             "distributed.maximum_work_items", overlay),
+        scalar<std::int64_t>(table, "maximum_payload_bytes",
+                             "distributed.maximum_payload_bytes", overlay),
+        scalar<std::int64_t>(table, "worker_timeout_ms",
+                             "distributed.worker_timeout_ms", overlay),
+        scalar<std::int64_t>(table, "lease_duration_ms",
+                             "distributed.lease_duration_ms", overlay),
+        scalar<std::int64_t>(table, "heartbeat_interval_ms",
+                             "distributed.heartbeat_interval_ms", overlay)})
+    if (!result)
+      return result;
+  return {};
+}
+
 std::vector<std::string> split_list(std::string_view input) {
   std::vector<std::string> result;
   while (!input.empty()) {
@@ -413,7 +504,9 @@ core::Result<ConfigOverlay> parse_toml(std::string_view source,
                                        std::string_view source_name) {
   try {
     const auto document = toml::parse(source, source_name);
-    if (auto checked = check_keys(document, {"network", "storage", "api"}, "");
+    if (auto checked = check_keys(
+            document, {"network", "storage", "indexing", "api", "distributed"},
+            "");
         !checked)
       return std::unexpected(checked.error());
     ConfigOverlay overlay;
@@ -429,11 +522,23 @@ core::Result<ConfigOverlay> parse_toml(std::string_view source,
     if (*storage)
       if (auto result = parse_storage(**storage, overlay); !result)
         return std::unexpected(result.error());
+    auto indexing = optional_table(document, "indexing", "indexing");
+    if (!indexing)
+      return std::unexpected(indexing.error());
+    if (*indexing)
+      if (auto result = parse_indexing(**indexing, overlay); !result)
+        return std::unexpected(result.error());
     auto api = optional_table(document, "api", "api");
     if (!api)
       return std::unexpected(api.error());
     if (*api)
       if (auto result = parse_api(**api, overlay); !result)
+        return std::unexpected(result.error());
+    auto distributed = optional_table(document, "distributed", "distributed");
+    if (!distributed)
+      return std::unexpected(distributed.error());
+    if (*distributed)
+      if (auto result = parse_distributed(**distributed, overlay); !result)
         return std::unexpected(result.error());
     return overlay;
   } catch (const toml::parse_error &error) {
@@ -509,6 +614,17 @@ core::Result<ConfigOverlay> environment_overlay(
       {"SAKUIN_STORAGE_COMPRESSION_LEVEL", "storage.compression.level"},
       {"SAKUIN_STORAGE_COMPACTION_MINIMUM_SEGMENTS",
        "storage.compaction.minimum_segments"},
+      {"SAKUIN_STORAGE_MAINTENANCE_ENABLED", "storage.maintenance.enabled"},
+      {"SAKUIN_STORAGE_MAINTENANCE_INTERVAL_MS",
+       "storage.maintenance.interval_ms"},
+      {"SAKUIN_STORAGE_MAINTENANCE_VERIFICATION_INTERVAL_MS",
+       "storage.maintenance.verification_interval_ms"},
+      {"SAKUIN_STORAGE_MATERIALIZATION_ENABLED",
+       "storage.materialization.enabled"},
+      {"SAKUIN_STORAGE_MATERIALIZATION_INTERVAL_MS",
+       "storage.materialization.interval_ms"},
+      {"SAKUIN_DUPLICATE_INDEX_ENABLED", "indexing.duplicates.enabled"},
+      {"SAKUIN_DUPLICATE_INDEX_INTERVAL_MS", "indexing.duplicates.interval_ms"},
       {"SAKUIN_API_ENABLED", "api.enabled"},
       {"SAKUIN_API_CREDENTIAL_STORE_DIRECTORY",
        "api.credential_store_directory"},
@@ -528,6 +644,14 @@ core::Result<ConfigOverlay> environment_overlay(
       {"SAKUIN_API_RATE_LIMIT_REQUESTS_PER_WINDOW",
        "api.rate_limit.requests_per_window"},
       {"SAKUIN_API_RATE_LIMIT_WINDOW_MS", "api.rate_limit.window_ms"},
+      {"SAKUIN_DISTRIBUTED_MAXIMUM_WORK_ITEMS",
+       "distributed.maximum_work_items"},
+      {"SAKUIN_DISTRIBUTED_MAXIMUM_PAYLOAD_BYTES",
+       "distributed.maximum_payload_bytes"},
+      {"SAKUIN_DISTRIBUTED_WORKER_TIMEOUT_MS", "distributed.worker_timeout_ms"},
+      {"SAKUIN_DISTRIBUTED_LEASE_DURATION_MS", "distributed.lease_duration_ms"},
+      {"SAKUIN_DISTRIBUTED_HEARTBEAT_INTERVAL_MS",
+       "distributed.heartbeat_interval_ms"},
   };
   ConfigOverlay overlay;
   for (const auto &[name, value] : environment) {

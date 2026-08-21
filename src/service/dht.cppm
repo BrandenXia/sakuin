@@ -6,6 +6,7 @@ import sakuin.config.model;
 import sakuin.core.bytes;
 import sakuin.core.random;
 import sakuin.core.result;
+import sakuin.core.time;
 import sakuin.dht.bootstrap;
 import sakuin.dht.identity;
 import sakuin.dht.krpc;
@@ -24,6 +25,7 @@ import sakuin.runtime.asio_resolver;
 import sakuin.runtime.asio_stream;
 import sakuin.runtime.datagram;
 import sakuin.runtime.traffic;
+import sakuin.scheduler.work;
 import sakuin.storage.dataset.torrents;
 
 export namespace sakuin::service {
@@ -50,6 +52,8 @@ struct AsioDhtFamilyRuntimeDependencies {
   storage::TorrentDataset *torrents{};
   integration::DhtRuntimeWorkerObserver *observer{};
   runtime::TrafficGovernor *traffic{};
+  scheduler::WorkCoordinator *work{};
+  core::Duration worker_heartbeat_interval{std::chrono::seconds{10}};
   std::function<void(std::uint64_t)> on_torrent_committed;
 };
 
@@ -143,6 +147,19 @@ core::Result<BootstrapHost> parse_bootstrap_host(std::string_view configured) {
         core::ErrorCode::InvalidArgument,
         "DHT bootstrap port must be an integer between 1 and 65535"});
   return BootstrapHost{.host = host, .port = static_cast<std::uint16_t>(port)};
+}
+
+std::string dht_worker_id(runtime::AddressFamily family,
+                          const dht::krpc::NodeId &node_id) {
+  constexpr std::string_view hexadecimal{"0123456789abcdef"};
+  std::string result =
+      family == runtime::AddressFamily::IPv4 ? "dht-v4-" : "dht-v6-";
+  result.reserve(result.size() + node_id.bytes.size() * 2);
+  for (const auto byte : node_id.bytes) {
+    result.push_back(hexadecimal[byte >> 4]);
+    result.push_back(hexadecimal[byte & 0x0f]);
+  }
+  return result;
 }
 
 } // namespace
@@ -304,8 +321,12 @@ AsioDhtFamilyRuntime::create(
         *result->node_, *result->datagrams_, *result->pump_);
   }
   result->worker_ = std::make_unique<integration::DhtRuntimeWorker>(
-      *result->driver_, *result->pump_, result->wakeup_,
-      *dependencies.observer);
+      *result->driver_, *result->pump_, result->wakeup_, *dependencies.observer,
+      integration::DhtRuntimeWorkerScheduling{
+          .coordinator = dependencies.work,
+          .worker = {.id = dht_worker_id(address_family, material.node_id),
+                     .capabilities = {scheduler::WorkClass::DhtCrawl}},
+          .heartbeat_interval = dependencies.worker_heartbeat_interval});
   return result;
 }
 

@@ -32,5 +32,15 @@ int main() {
       service::parse_daemon_arguments(positional) ||
       service::parse_daemon_arguments(malformed))
     return 3;
+  const std::array admin{std::string_view{"admin"}, std::string_view{"compact"},
+                         std::string_view{"--config=node.toml"}};
+  parsed = service::parse_daemon_arguments(admin);
+  if (!parsed || parsed->admin_command != service::AdminCommand::Compact ||
+      parsed->configuration_file != std::filesystem::path{"node.toml"})
+    return 4;
+  const std::array invalid_admin{std::string_view{"admin"},
+                                 std::string_view{"repair"}};
+  if (service::parse_daemon_arguments(invalid_admin))
+    return 5;
   return 0;
 }

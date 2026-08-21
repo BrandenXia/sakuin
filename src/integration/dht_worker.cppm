@@ -6,6 +6,7 @@ import sakuin.core.result;
 import sakuin.core.time;
 import sakuin.dht.runtime;
 import sakuin.integration.dht_runtime;
+import sakuin.scheduler.work;
 
 export namespace sakuin::integration {
 
@@ -45,6 +46,12 @@ public:
   virtual void on_worker_error(core::Error error) = 0;
 };
 
+struct DhtRuntimeWorkerScheduling {
+  scheduler::WorkCoordinator *coordinator{};
+  scheduler::WorkerDescriptor worker;
+  core::Duration heartbeat_interval{std::chrono::seconds{10}};
+};
+
 // Current owner-thread implementation. It intentionally depends only on the
 // Sakuin driver/pump abstractions; Standalone Asio remains behind the supplied
 // transport and a future stdexec owner can replace this class without changing
@@ -59,6 +66,13 @@ public:
       Clock clock = [] { return std::chrono::system_clock::now(); })
       : driver_(&driver), pump_(&pump), wakeup_(&wakeup), observer_(&observer),
         clock_(std::move(clock)) {}
+  DhtRuntimeWorker(
+      dht::DhtRuntimeDriver &driver, DhtRuntimeActionPump &pump,
+      DhtRuntimeWakeup &wakeup, DhtRuntimeWorkerObserver &observer,
+      DhtRuntimeWorkerScheduling scheduling,
+      Clock clock = [] { return std::chrono::system_clock::now(); })
+      : driver_(&driver), pump_(&pump), wakeup_(&wakeup), observer_(&observer),
+        clock_(std::move(clock)), scheduling_(std::move(scheduling)) {}
   ~DhtRuntimeWorker();
 
   DhtRuntimeWorker(const DhtRuntimeWorker &) = delete;
@@ -72,6 +86,7 @@ public:
 
 private:
   core::Result<core::Timestamp> now() const noexcept;
+  void unregister_worker(core::Timestamp now) noexcept;
   void run(std::stop_token stop) noexcept;
   void report(core::Error error) noexcept;
 
@@ -80,8 +95,10 @@ private:
   DhtRuntimeWakeup *wakeup_;
   DhtRuntimeWorkerObserver *observer_;
   Clock clock_;
+  DhtRuntimeWorkerScheduling scheduling_;
   std::jthread thread_;
   std::atomic<bool> running_{};
+  std::atomic<bool> registered_{};
 };
 
 } // namespace sakuin::integration
@@ -121,8 +138,29 @@ core::Result<void> DhtRuntimeWorker::start() {
                                         std::memory_order_acq_rel))
     return std::unexpected(core::Error{core::ErrorCode::Conflict,
                                        "DHT runtime worker already started"});
+  auto current = now();
+  if (!current) {
+    running_.store(false, std::memory_order_release);
+    return std::unexpected(current.error());
+  }
+  if (scheduling_.coordinator) {
+    if (scheduling_.heartbeat_interval <= core::Duration::zero()) {
+      running_.store(false, std::memory_order_release);
+      return std::unexpected(
+          core::Error{core::ErrorCode::InvalidArgument,
+                      "DHT worker heartbeat interval must be positive"});
+    }
+    auto registered =
+        scheduling_.coordinator->register_worker(scheduling_.worker, *current);
+    if (!registered) {
+      running_.store(false, std::memory_order_release);
+      return std::unexpected(registered.error());
+    }
+    registered_.store(true, std::memory_order_release);
+  }
   auto started = driver_->start();
   if (!started) {
+    unregister_worker(*current);
     running_.store(false, std::memory_order_release);
     return std::unexpected(started.error());
   }
@@ -130,12 +168,14 @@ core::Result<void> DhtRuntimeWorker::start() {
     thread_ = std::jthread{[this](std::stop_token stop) { run(stop); }};
   } catch (const std::exception &exception) {
     driver_->stop();
+    unregister_worker(*current);
     running_.store(false, std::memory_order_release);
     return std::unexpected(core::Error{
         core::ErrorCode::Internal,
         std::string{"Failed to start DHT owner thread: "} + exception.what()});
   } catch (...) {
     driver_->stop();
+    unregister_worker(*current);
     running_.store(false, std::memory_order_release);
     return std::unexpected(core::Error{core::ErrorCode::Internal,
                                        "Failed to start DHT owner thread"});
@@ -151,6 +191,8 @@ void DhtRuntimeWorker::stop() noexcept {
     if (thread_.get_id() != std::this_thread::get_id())
       thread_.join();
   }
+  if (auto current = now())
+    unregister_worker(*current);
   driver_->stop();
 }
 
@@ -175,6 +217,16 @@ void DhtRuntimeWorker::report(core::Error error) noexcept {
   }
 }
 
+void DhtRuntimeWorker::unregister_worker(core::Timestamp current) noexcept {
+  if (!scheduling_.coordinator ||
+      !registered_.exchange(false, std::memory_order_acq_rel))
+    return;
+  auto unregistered = scheduling_.coordinator->unregister_worker(
+      scheduling_.worker.id, current);
+  if (!unregistered && unregistered.error().code != core::ErrorCode::NotFound)
+    report(unregistered.error());
+}
+
 void DhtRuntimeWorker::run(std::stop_token stop) noexcept {
   while (!stop.stop_requested()) {
     const auto observed = wakeup_->generation();
@@ -183,10 +235,25 @@ void DhtRuntimeWorker::run(std::stop_token stop) noexcept {
       report(current.error());
       break;
     }
+    if (scheduling_.coordinator) {
+      auto heartbeat =
+          scheduling_.coordinator->heartbeat(scheduling_.worker.id, *current);
+      if (!heartbeat) {
+        report(heartbeat.error());
+        break;
+      }
+    }
     try {
       auto poll = pump_->poll(*current);
       auto dispatch = dispatch_dht_runtime(poll, *driver_, *pump_, *current);
-      const auto deadline = poll.next_wakeup;
+      auto deadline = poll.next_wakeup;
+      if (scheduling_.coordinator) {
+        const auto heartbeat_at =
+            *current + std::chrono::duration_cast<core::Timestamp::duration>(
+                           scheduling_.heartbeat_interval);
+        if (!deadline || heartbeat_at < *deadline)
+          deadline = heartbeat_at;
+      }
       try {
         observer_->on_cycle(DhtRuntimeCycle{.poll = std::move(poll),
                                             .dispatch = std::move(dispatch)});
@@ -211,6 +278,8 @@ void DhtRuntimeWorker::run(std::stop_token stop) noexcept {
       break;
     }
   }
+  if (auto current = now())
+    unregister_worker(*current);
   running_.store(false, std::memory_order_release);
   driver_->stop();
 }
