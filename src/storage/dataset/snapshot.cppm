@@ -26,6 +26,7 @@ protected:
       : pin_(std::move(pin)) {}
 
   const Manifest &manifest() const noexcept { return pin_->manifest(); }
+  std::shared_ptr<const ManifestPin> pin() const noexcept { return pin_; }
 
 private:
   // This ownership is the GC barrier for the snapshot's repeatable-read view.

@@ -1,0 +1,58 @@
+[network]
+enable_ipv4 = true
+enable_ipv6 = true
+listen_port = 6881
+
+[network.dht]
+private_network = false
+maximum_in_flight = 128
+query_timeout_ms = 15000
+bootstrap_maximum_in_flight = 8
+bootstrap_maximum_attempts = 3
+bootstrap_retry_delay_ms = 5000
+bootstrap = []
+
+[network.dht.identity]
+mode = "bep42"
+observation_quorum = 3
+vote_window_ms = 600000
+
+[network.traffic]
+window_ms = 3600000
+# inbound_bytes = 1073741824
+# outbound_bytes = 1073741824
+
+[storage]
+backend = "local"
+local_root = "./data"
+block_target_bytes = 2097152
+segment_target_bytes = 134217728
+
+[storage.compression]
+codec = "zstd"
+level = 3
+
+[storage.compaction]
+minimum_segments = 4
+
+[api]
+enabled = true
+credential_store_directory = "./data/operational/api"
+# Loopback is the secure default. Put a TLS reverse proxy in front, or
+# configure both TLS files below before exposing this listener directly.
+listen_address = "127.0.0.1"
+listen_port = 8080
+maximum_connections = 256
+read_buffer_bytes = 16384
+request_timeout_ms = 15000
+maximum_target_bytes = 8192
+maximum_header_bytes = 32768
+maximum_header_count = 100
+maximum_body_bytes = 1048576
+# tls_certificate_chain_file = "/etc/sakuin/tls/fullchain.pem"
+# tls_private_key_file = "/etc/sakuin/tls/privkey.pem"
+
+[api.rate_limit]
+enabled = true
+requests_per_window = 120
+window_ms = 60000

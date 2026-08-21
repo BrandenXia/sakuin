@@ -5,12 +5,19 @@ import std;
 export namespace sakuin::core {
 
 enum class ErrorCode {
-  Io,
-  InvalidArgument,
-  CorruptData,
-  UnsupportedVersion,
   NotFound,
+  InvalidArgument,
+  IoError,
+  PermissionDenied,
+  StorageUnavailable,
+  CorruptSegment,
+  ChecksumMismatch,
+  UnsupportedFormat,
+  InvalidManifest,
+  Conflict,
+  InvalidQuery,
   Timeout,
+  QuotaExceeded,
   Internal,
 };
 

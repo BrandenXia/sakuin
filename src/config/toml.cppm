@@ -1,0 +1,468 @@
+module;
+
+#include <toml++/toml.hpp>
+
+export module sakuin.config.toml;
+
+import std;
+
+import sakuin.config.model;
+import sakuin.core.result;
+
+export namespace sakuin::config {
+
+struct ConfigLoadRequest {
+  std::optional<std::filesystem::path> toml_file;
+  std::span<const std::pair<std::string, std::string>> environment;
+  std::span<const std::string_view> command_line;
+};
+
+core::Result<ConfigOverlay> parse_toml(std::string_view source,
+                                       std::string_view source_name = {});
+core::Result<ConfigOverlay> environment_overlay(
+    std::span<const std::pair<std::string, std::string>> environment);
+core::Result<ConfigOverlay>
+command_line_overlay(std::span<const std::string_view> arguments);
+core::Result<AppConfig> load(const ConfigLoadRequest &request);
+
+} // namespace sakuin::config
+
+namespace sakuin::config {
+namespace {
+
+core::Error invalid(std::string message) {
+  return {core::ErrorCode::InvalidArgument, std::move(message)};
+}
+
+core::Result<void> check_keys(const toml::table &table,
+                              std::initializer_list<std::string_view> allowed,
+                              std::string_view prefix) {
+  for (const auto &[key, _] : table) {
+    const auto name = key.str();
+    if (std::ranges::find(allowed, name) == allowed.end())
+      return std::unexpected(invalid("Unknown configuration key: " +
+                                     std::string{prefix} + std::string{name}));
+  }
+  return {};
+}
+
+core::Result<const toml::table *>
+optional_table(const toml::table &parent, std::string_view name,
+               std::string_view qualified_name) {
+  const auto view = parent[name];
+  if (!view)
+    return static_cast<const toml::table *>(nullptr);
+  if (const auto *table = view.as_table())
+    return table;
+  return std::unexpected(
+      invalid(std::string{qualified_name} + " must be a TOML table"));
+}
+
+template <typename T>
+core::Result<void> scalar(const toml::table &table, std::string_view key,
+                          std::string_view path, ConfigOverlay &overlay) {
+  const auto view = table[key];
+  if (!view)
+    return {};
+  const auto value = view.value<T>();
+  if (!value)
+    return std::unexpected(
+        invalid(std::string{path} + " has the wrong TOML type"));
+  if constexpr (std::same_as<T, std::string>)
+    overlay.scalars[std::string{path}] = *value;
+  else if constexpr (std::same_as<T, bool>)
+    overlay.scalars[std::string{path}] = *value ? "true" : "false";
+  else
+    overlay.scalars[std::string{path}] = std::to_string(*value);
+  return {};
+}
+
+core::Result<void> parse_identity(const toml::table &table,
+                                  ConfigOverlay &overlay) {
+  if (auto checked = check_keys(table,
+                                {"mode", "observation_quorum", "vote_window_ms",
+                                 "fixed_ipv4_node_id", "fixed_ipv6_node_id"},
+                                "network.dht.identity.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<std::string>(table, "mode", "network.dht.identity.mode",
+                            overlay),
+        scalar<std::int64_t>(table, "observation_quorum",
+                             "network.dht.identity.observation_quorum",
+                             overlay),
+        scalar<std::int64_t>(table, "vote_window_ms",
+                             "network.dht.identity.vote_window_ms", overlay),
+        scalar<std::string>(table, "fixed_ipv4_node_id",
+                            "network.dht.identity.fixed_ipv4_node_id", overlay),
+        scalar<std::string>(table, "fixed_ipv6_node_id",
+                            "network.dht.identity.fixed_ipv6_node_id",
+                            overlay)})
+    if (!result)
+      return result;
+  return {};
+}
+
+core::Result<void> parse_dht(const toml::table &table, ConfigOverlay &overlay) {
+  if (auto checked = check_keys(
+          table,
+          {"private_network", "maximum_in_flight", "query_timeout_ms",
+           "bootstrap_maximum_in_flight", "bootstrap_maximum_attempts",
+           "bootstrap_retry_delay_ms", "bootstrap", "identity"},
+          "network.dht.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<bool>(table, "private_network", "network.dht.private_network",
+                     overlay),
+        scalar<std::int64_t>(table, "maximum_in_flight",
+                             "network.dht.maximum_in_flight", overlay),
+        scalar<std::int64_t>(table, "query_timeout_ms",
+                             "network.dht.query_timeout_ms", overlay),
+        scalar<std::int64_t>(table, "bootstrap_maximum_in_flight",
+                             "network.dht.bootstrap_maximum_in_flight",
+                             overlay),
+        scalar<std::int64_t>(table, "bootstrap_maximum_attempts",
+                             "network.dht.bootstrap_maximum_attempts", overlay),
+        scalar<std::int64_t>(table, "bootstrap_retry_delay_ms",
+                             "network.dht.bootstrap_retry_delay_ms", overlay)})
+    if (!result)
+      return result;
+
+  if (const auto bootstrap = table["bootstrap"]) {
+    const auto *array = bootstrap.as_array();
+    if (!array)
+      return std::unexpected(
+          invalid("network.dht.bootstrap must be an array of strings"));
+    std::vector<std::string> values;
+    values.reserve(array->size());
+    for (const auto &entry : *array) {
+      const auto value = entry.value<std::string>();
+      if (!value)
+        return std::unexpected(
+            invalid("network.dht.bootstrap must contain only strings"));
+      values.push_back(*value);
+    }
+    overlay.bootstrap = std::move(values);
+  }
+  auto identity = optional_table(table, "identity", "network.dht.identity");
+  if (!identity)
+    return std::unexpected(identity.error());
+  return *identity ? parse_identity(**identity, overlay) : core::Result<void>{};
+}
+
+core::Result<void> parse_traffic(const toml::table &table,
+                                 ConfigOverlay &overlay) {
+  if (auto checked =
+          check_keys(table, {"window_ms", "inbound_bytes", "outbound_bytes"},
+                     "network.traffic.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<std::int64_t>(table, "window_ms", "network.traffic.window_ms",
+                             overlay),
+        scalar<std::int64_t>(table, "inbound_bytes",
+                             "network.traffic.inbound_bytes", overlay),
+        scalar<std::int64_t>(table, "outbound_bytes",
+                             "network.traffic.outbound_bytes", overlay)})
+    if (!result)
+      return result;
+  return {};
+}
+
+core::Result<void> parse_network(const toml::table &table,
+                                 ConfigOverlay &overlay) {
+  if (auto checked = check_keys(
+          table,
+          {"enable_ipv4", "enable_ipv6", "listen_port", "dht", "traffic"},
+          "network.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<bool>(table, "enable_ipv4", "network.enable_ipv4", overlay),
+        scalar<bool>(table, "enable_ipv6", "network.enable_ipv6", overlay),
+        scalar<std::int64_t>(table, "listen_port", "network.listen_port",
+                             overlay)})
+    if (!result)
+      return result;
+  auto dht = optional_table(table, "dht", "network.dht");
+  if (!dht)
+    return std::unexpected(dht.error());
+  if (*dht)
+    if (auto result = parse_dht(**dht, overlay); !result)
+      return result;
+  auto traffic = optional_table(table, "traffic", "network.traffic");
+  if (!traffic)
+    return std::unexpected(traffic.error());
+  return *traffic ? parse_traffic(**traffic, overlay) : core::Result<void>{};
+}
+
+core::Result<void> parse_storage(const toml::table &table,
+                                 ConfigOverlay &overlay) {
+  if (auto checked =
+          check_keys(table,
+                     {"backend", "local_root", "block_target_bytes",
+                      "segment_target_bytes", "compression", "compaction"},
+                     "storage.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<std::string>(table, "backend", "storage.backend", overlay),
+        scalar<std::string>(table, "local_root", "storage.local_root", overlay),
+        scalar<std::int64_t>(table, "block_target_bytes",
+                             "storage.block_target_bytes", overlay),
+        scalar<std::int64_t>(table, "segment_target_bytes",
+                             "storage.segment_target_bytes", overlay)})
+    if (!result)
+      return result;
+  auto compression =
+      optional_table(table, "compression", "storage.compression");
+  if (!compression)
+    return std::unexpected(compression.error());
+  if (*compression) {
+    if (auto checked = check_keys(**compression, {"codec", "level"},
+                                  "storage.compression.");
+        !checked)
+      return checked;
+    for (auto result :
+         {scalar<std::string>(**compression, "codec",
+                              "storage.compression.codec", overlay),
+          scalar<std::int64_t>(**compression, "level",
+                               "storage.compression.level", overlay)})
+      if (!result)
+        return result;
+  }
+  auto compaction = optional_table(table, "compaction", "storage.compaction");
+  if (!compaction)
+    return std::unexpected(compaction.error());
+  if (*compaction) {
+    if (auto checked = check_keys(**compaction, {"minimum_segments"},
+                                  "storage.compaction.");
+        !checked)
+      return checked;
+    return scalar<std::int64_t>(**compaction, "minimum_segments",
+                                "storage.compaction.minimum_segments", overlay);
+  }
+  return {};
+}
+
+core::Result<void> parse_api(const toml::table &table, ConfigOverlay &overlay) {
+  if (auto checked = check_keys(
+          table,
+          {"enabled", "credential_store_directory", "listen_address",
+           "listen_port", "maximum_connections", "read_buffer_bytes",
+           "request_timeout_ms", "maximum_target_bytes", "maximum_header_bytes",
+           "maximum_header_count", "maximum_body_bytes",
+           "tls_certificate_chain_file", "tls_private_key_file", "rate_limit"},
+          "api.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<bool>(table, "enabled", "api.enabled", overlay),
+        scalar<std::string>(table, "credential_store_directory",
+                            "api.credential_store_directory", overlay),
+        scalar<std::string>(table, "listen_address", "api.listen_address",
+                            overlay),
+        scalar<std::int64_t>(table, "listen_port", "api.listen_port", overlay),
+        scalar<std::int64_t>(table, "maximum_connections",
+                             "api.maximum_connections", overlay),
+        scalar<std::int64_t>(table, "read_buffer_bytes",
+                             "api.read_buffer_bytes", overlay),
+        scalar<std::int64_t>(table, "request_timeout_ms",
+                             "api.request_timeout_ms", overlay),
+        scalar<std::int64_t>(table, "maximum_target_bytes",
+                             "api.maximum_target_bytes", overlay),
+        scalar<std::int64_t>(table, "maximum_header_bytes",
+                             "api.maximum_header_bytes", overlay),
+        scalar<std::int64_t>(table, "maximum_header_count",
+                             "api.maximum_header_count", overlay),
+        scalar<std::int64_t>(table, "maximum_body_bytes",
+                             "api.maximum_body_bytes", overlay),
+        scalar<std::string>(table, "tls_certificate_chain_file",
+                            "api.tls_certificate_chain_file", overlay),
+        scalar<std::string>(table, "tls_private_key_file",
+                            "api.tls_private_key_file", overlay)})
+    if (!result)
+      return result;
+  auto rate_limit = optional_table(table, "rate_limit", "api.rate_limit");
+  if (!rate_limit)
+    return std::unexpected(rate_limit.error());
+  if (*rate_limit) {
+    if (auto checked = check_keys(
+            **rate_limit, {"enabled", "requests_per_window", "window_ms"},
+            "api.rate_limit.");
+        !checked)
+      return checked;
+    for (auto result :
+         {scalar<bool>(**rate_limit, "enabled", "api.rate_limit.enabled",
+                       overlay),
+          scalar<std::int64_t>(**rate_limit, "requests_per_window",
+                               "api.rate_limit.requests_per_window", overlay),
+          scalar<std::int64_t>(**rate_limit, "window_ms",
+                               "api.rate_limit.window_ms", overlay)})
+      if (!result)
+        return result;
+  }
+  return {};
+}
+
+std::vector<std::string> split_list(std::string_view input) {
+  std::vector<std::string> result;
+  while (!input.empty()) {
+    const auto separator = input.find(',');
+    auto entry = input.substr(0, separator);
+    result.emplace_back(entry);
+    if (separator == std::string_view::npos)
+      break;
+    input.remove_prefix(separator + 1);
+  }
+  return result;
+}
+
+} // namespace
+
+core::Result<ConfigOverlay> parse_toml(std::string_view source,
+                                       std::string_view source_name) {
+  try {
+    const auto document = toml::parse(source, source_name);
+    if (auto checked = check_keys(document, {"network", "storage", "api"}, "");
+        !checked)
+      return std::unexpected(checked.error());
+    ConfigOverlay overlay;
+    auto network = optional_table(document, "network", "network");
+    if (!network)
+      return std::unexpected(network.error());
+    if (*network)
+      if (auto result = parse_network(**network, overlay); !result)
+        return std::unexpected(result.error());
+    auto storage = optional_table(document, "storage", "storage");
+    if (!storage)
+      return std::unexpected(storage.error());
+    if (*storage)
+      if (auto result = parse_storage(**storage, overlay); !result)
+        return std::unexpected(result.error());
+    auto api = optional_table(document, "api", "api");
+    if (!api)
+      return std::unexpected(api.error());
+    if (*api)
+      if (auto result = parse_api(**api, overlay); !result)
+        return std::unexpected(result.error());
+    return overlay;
+  } catch (const toml::parse_error &error) {
+    return std::unexpected(
+        invalid("Invalid TOML: " + std::string{error.description()}));
+  }
+}
+
+core::Result<ConfigOverlay> environment_overlay(
+    std::span<const std::pair<std::string, std::string>> environment) {
+  static const std::map<std::string_view, std::string_view> names{
+      {"SAKUIN_NETWORK_ENABLE_IPV4", "network.enable_ipv4"},
+      {"SAKUIN_NETWORK_ENABLE_IPV6", "network.enable_ipv6"},
+      {"SAKUIN_NETWORK_LISTEN_PORT", "network.listen_port"},
+      {"SAKUIN_DHT_MAXIMUM_IN_FLIGHT", "network.dht.maximum_in_flight"},
+      {"SAKUIN_DHT_PRIVATE_NETWORK", "network.dht.private_network"},
+      {"SAKUIN_DHT_QUERY_TIMEOUT_MS", "network.dht.query_timeout_ms"},
+      {"SAKUIN_DHT_IDENTITY_MODE", "network.dht.identity.mode"},
+      {"SAKUIN_DHT_IDENTITY_QUORUM", "network.dht.identity.observation_quorum"},
+      {"SAKUIN_DHT_IDENTITY_VOTE_WINDOW_MS",
+       "network.dht.identity.vote_window_ms"},
+      {"SAKUIN_TRAFFIC_WINDOW_MS", "network.traffic.window_ms"},
+      {"SAKUIN_TRAFFIC_INBOUND_BYTES", "network.traffic.inbound_bytes"},
+      {"SAKUIN_TRAFFIC_OUTBOUND_BYTES", "network.traffic.outbound_bytes"},
+      {"SAKUIN_STORAGE_BACKEND", "storage.backend"},
+      {"SAKUIN_STORAGE_LOCAL_ROOT", "storage.local_root"},
+      {"SAKUIN_STORAGE_BLOCK_TARGET_BYTES", "storage.block_target_bytes"},
+      {"SAKUIN_STORAGE_SEGMENT_TARGET_BYTES", "storage.segment_target_bytes"},
+      {"SAKUIN_STORAGE_COMPRESSION", "storage.compression.codec"},
+      {"SAKUIN_STORAGE_COMPRESSION_LEVEL", "storage.compression.level"},
+      {"SAKUIN_API_ENABLED", "api.enabled"},
+      {"SAKUIN_API_CREDENTIAL_STORE_DIRECTORY",
+       "api.credential_store_directory"},
+      {"SAKUIN_API_LISTEN_ADDRESS", "api.listen_address"},
+      {"SAKUIN_API_LISTEN_PORT", "api.listen_port"},
+      {"SAKUIN_API_MAXIMUM_CONNECTIONS", "api.maximum_connections"},
+      {"SAKUIN_API_READ_BUFFER_BYTES", "api.read_buffer_bytes"},
+      {"SAKUIN_API_REQUEST_TIMEOUT_MS", "api.request_timeout_ms"},
+      {"SAKUIN_API_MAXIMUM_TARGET_BYTES", "api.maximum_target_bytes"},
+      {"SAKUIN_API_MAXIMUM_HEADER_BYTES", "api.maximum_header_bytes"},
+      {"SAKUIN_API_MAXIMUM_HEADER_COUNT", "api.maximum_header_count"},
+      {"SAKUIN_API_MAXIMUM_BODY_BYTES", "api.maximum_body_bytes"},
+      {"SAKUIN_API_TLS_CERTIFICATE_CHAIN_FILE",
+       "api.tls_certificate_chain_file"},
+      {"SAKUIN_API_TLS_PRIVATE_KEY_FILE", "api.tls_private_key_file"},
+      {"SAKUIN_API_RATE_LIMIT_ENABLED", "api.rate_limit.enabled"},
+      {"SAKUIN_API_RATE_LIMIT_REQUESTS_PER_WINDOW",
+       "api.rate_limit.requests_per_window"},
+      {"SAKUIN_API_RATE_LIMIT_WINDOW_MS", "api.rate_limit.window_ms"},
+  };
+  ConfigOverlay overlay;
+  for (const auto &[name, value] : environment) {
+    if (name == "SAKUIN_DHT_BOOTSTRAP") {
+      overlay.bootstrap = split_list(value);
+      continue;
+    }
+    const auto found = names.find(name);
+    if (found != names.end()) {
+      overlay.scalars[std::string{found->second}] = value;
+    } else if (name.starts_with("SAKUIN_")) {
+      return std::unexpected(
+          invalid("Unknown Sakuin environment variable: " + name));
+    }
+  }
+  return overlay;
+}
+
+core::Result<ConfigOverlay>
+command_line_overlay(std::span<const std::string_view> arguments) {
+  ConfigOverlay overlay;
+  for (const auto argument : arguments) {
+    if (!argument.starts_with("--"))
+      return std::unexpected(
+          invalid("Configuration argument must begin with --"));
+    const auto assignment = argument.substr(2);
+    const auto separator = assignment.find('=');
+    if (separator == std::string_view::npos || separator == 0)
+      return std::unexpected(
+          invalid("Configuration argument must use --key=value"));
+    const auto name = assignment.substr(0, separator);
+    const auto value = assignment.substr(separator + 1);
+    if (name == "network.dht.bootstrap")
+      overlay.bootstrap = split_list(value);
+    else
+      overlay.scalars[std::string{name}] = value;
+  }
+  return overlay;
+}
+
+core::Result<AppConfig> load(const ConfigLoadRequest &request) {
+  AppConfig result = defaults();
+  if (request.toml_file) {
+    std::ifstream input{*request.toml_file, std::ios::binary};
+    if (!input)
+      return std::unexpected(core::Error{core::ErrorCode::IoError,
+                                         "Unable to open configuration file: " +
+                                             request.toml_file->string()});
+    std::string contents{std::istreambuf_iterator<char>{input}, {}};
+    auto overlay = parse_toml(contents, request.toml_file->string());
+    if (!overlay)
+      return std::unexpected(overlay.error());
+    if (auto applied = apply(result, *overlay); !applied)
+      return std::unexpected(applied.error());
+  }
+  auto environment = environment_overlay(request.environment);
+  if (!environment)
+    return std::unexpected(environment.error());
+  if (auto applied = apply(result, *environment); !applied)
+    return std::unexpected(applied.error());
+  auto command_line = command_line_overlay(request.command_line);
+  if (!command_line)
+    return std::unexpected(command_line.error());
+  if (auto applied = apply(result, *command_line); !applied)
+    return std::unexpected(applied.error());
+  if (auto valid = validate(result); !valid)
+    return std::unexpected(valid.error());
+  return result;
+}
+
+} // namespace sakuin::config

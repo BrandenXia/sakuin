@@ -1,0 +1,126 @@
+import std;
+
+import sakuin.core;
+import sakuin.model.torrent;
+import sakuin.storage;
+import sakuin.storage.dataset.torrents;
+
+namespace {
+
+struct TemporaryDirectory {
+  std::filesystem::path path;
+  ~TemporaryDirectory() {
+    std::error_code ignored;
+    std::filesystem::remove_all(path, ignored);
+  }
+};
+
+sakuin::core::InfoHash hash(std::uint8_t value) {
+  sakuin::core::InfoHash result;
+  result.bytes.fill(value);
+  return result;
+}
+
+sakuin::model::TorrentRecord torrent(std::uint8_t key, std::string name,
+                                     std::int64_t last_seen) {
+  using namespace sakuin;
+  return {.info_hash = hash(key),
+          .first_seen = core::Timestamp{core::Timestamp::duration{10}},
+          .last_seen = core::Timestamp{core::Timestamp::duration{last_seen}},
+          .name = std::move(name),
+          .total_size = 42,
+          .files = {{"file.bin", 42}}};
+}
+
+} // namespace
+
+int main() {
+  using namespace sakuin;
+  const auto nonce = std::to_string(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  TemporaryDirectory directory{std::filesystem::temp_directory_path() /
+                               ("sakuin-torrents-" + nonce)};
+  storage::LocalBlobStore blobs{directory.path / "blobs"};
+  auto catalog =
+      storage::LocalManifestCatalog::open(directory.path / "catalog", blobs);
+  if (!catalog)
+    return 1;
+  storage::TorrentDataset dataset{blobs, **catalog};
+
+  auto empty = dataset.keyed_snapshot();
+  if (!empty)
+    return 2;
+  auto missing = (*empty)->get(hash(1));
+  if (!missing || missing->has_value())
+    return 3;
+
+  auto first_write = dataset.begin_write();
+  const auto first_a = torrent(1, "first-a", 20);
+  const auto first_b = torrent(2, "first-b", 30);
+  const std::array initial{first_a, first_b};
+  if (!first_write || !(*first_write)->append(initial))
+    return 4;
+  auto first_commit = (*first_write)->commit();
+  if (!first_commit || first_commit->generation != 1)
+    return 5;
+
+  auto first_snapshot = dataset.keyed_snapshot();
+  auto first_value = (*first_snapshot)->get(hash(1));
+  if (!first_value || !*first_value || (*first_value)->name != "first-a")
+    return 6;
+
+  auto second_write = dataset.begin_write();
+  if (!second_write || !(*second_write)->append(torrent(1, "second-a", 40)) ||
+      !(*second_write)->append(torrent(1, "latest-a", 50)))
+    return 7;
+  auto second_commit = (*second_write)->commit();
+  if (!second_commit || second_commit->generation != 2)
+    return 8;
+
+  auto current = dataset.keyed_snapshot();
+  auto latest = (*current)->get(hash(1));
+  auto unchanged = (*current)->get(hash(2));
+  if (!latest || !*latest || (*latest)->name != "latest-a" || !unchanged ||
+      !*unchanged || (*unchanged)->name != "first-b")
+    return 9;
+  auto still_old = (*first_snapshot)->get(hash(1));
+  if (!still_old || !*still_old || (*still_old)->name != "first-a")
+    return 10;
+
+  auto stream = (*current)->scan({});
+  std::unordered_map<std::uint8_t, std::string> values;
+  while (true) {
+    auto next = (*stream)->next();
+    if (!next)
+      return 11;
+    if (!*next)
+      break;
+    values.emplace((*next)->info_hash.bytes[0], *(*next)->name);
+  }
+  if (values.size() != 2 || values[1] != "latest-a" ||
+      values[2] != "first-b")
+    return 12;
+
+  auto stale = dataset.begin_write();
+  auto winner = dataset.begin_write();
+  if (!stale || !winner || !(*stale)->append(torrent(3, "stale", 60)) ||
+      !(*winner)->append(torrent(4, "winner", 60)) ||
+      !(*winner)->commit())
+    return 13;
+  auto conflict = (*stale)->commit();
+  if (conflict || conflict.error().code != core::ErrorCode::Conflict)
+    return 14;
+
+  auto reopened =
+      storage::LocalManifestCatalog::open(directory.path / "catalog", blobs);
+  if (!reopened)
+    return 15;
+  storage::TorrentDataset restarted{blobs, **reopened};
+  auto restarted_snapshot = restarted.keyed_snapshot();
+  auto restarted_value = (*restarted_snapshot)->get(hash(1));
+  if (!restarted_value || !*restarted_value ||
+      (*restarted_value)->name != "latest-a")
+    return 16;
+
+  return 0;
+}

@@ -10,12 +10,6 @@ struct InfoHash {
   friend bool operator==(const InfoHash &, const InfoHash &) = default;
 };
 
-struct ContentId {
-  std::array<std::uint8_t, 32> bytes{};
-
-  friend bool operator==(const ContentId &, const ContentId &) = default;
-};
-
 struct SegmentId {
   std::array<std::uint8_t, 16> bytes{};
 

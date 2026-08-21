@@ -8,6 +8,8 @@ import sakuin.storage.format.block;
 
 export namespace sakuin::storage {
 
+inline constexpr std::uint32_t DefaultTargetBlockSize = 2U * 1024U * 1024U;
+
 enum class SegmentTier : std::uint8_t { Hot, Warm, Cold };
 
 enum class SegmentEncoding : std::uint8_t {
@@ -17,10 +19,18 @@ enum class SegmentEncoding : std::uint8_t {
 
 struct StorageFormatVersion {
   std::uint16_t major{1};
-  std::uint16_t minor{0};
+  std::uint16_t minor{1};
 
   friend bool operator==(const StorageFormatVersion &,
                          const StorageFormatVersion &) = default;
+};
+
+// Identifies the logical record schema independently from its version. The
+// storage engine treats this as an opaque, project-assigned persistent value.
+struct SchemaId {
+  std::uint32_t value{};
+
+  friend bool operator==(const SchemaId &, const SchemaId &) = default;
 };
 
 struct SchemaVersion {
@@ -34,11 +44,12 @@ struct SchemaVersion {
 // its columnar representation is intentionally not defined yet.
 struct SegmentHeader {
   StorageFormatVersion format_version{};
+  SchemaId schema_id{};
   SchemaVersion schema_version{};
   SegmentEncoding encoding{SegmentEncoding::RowV1};
   SegmentTier tier{SegmentTier::Hot};
-  CompressionCodec compression{CompressionCodec::None};
-  std::uint32_t target_block_size{};
+  CompressionCodec compression{CompressionCodec::Zstd};
+  std::uint32_t target_block_size{DefaultTargetBlockSize};
 };
 
 struct SegmentFooter {
@@ -61,13 +72,14 @@ struct SegmentDescriptor {
   std::uint64_t logical_size;
   std::uint64_t physical_size;
 
-  core::Timestamp min_timestamp;
-  core::Timestamp max_timestamp;
+  std::optional<core::Timestamp> min_timestamp;
+  std::optional<core::Timestamp> max_timestamp;
 
   StorageFormatVersion format_version{};
+  SchemaId schema_id{};
   SchemaVersion schema_version{};
   SegmentEncoding encoding{SegmentEncoding::RowV1};
-  CompressionCodec compression{CompressionCodec::None};
+  CompressionCodec compression{CompressionCodec::Zstd};
 };
 
 } // namespace sakuin::storage

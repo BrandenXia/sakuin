@@ -13,8 +13,14 @@ struct SnapshotId {
 };
 
 struct Manifest {
+  std::uint32_t format_version{2};
   SnapshotId id;
   std::vector<SegmentDescriptor> segments;
+};
+
+struct GcResult {
+  std::uint64_t objects_deleted{};
+  std::uint64_t bytes_reclaimed{};
 };
 
 // Search and duplicate indexes are rebuildable projections of these canonical
@@ -35,9 +41,19 @@ public:
   virtual core::Result<std::shared_ptr<const ManifestPin>>
   pin_current() const = 0;
 
+  virtual SnapshotId current_id() const noexcept = 0;
+
+  virtual bool is_pinned(SnapshotId id) const noexcept = 0;
+
+  // Prunes non-current manifest generations that have no live pin and removes
+  // segment objects no longer reachable from any retained generation.
+  virtual core::Result<GcResult> garbage_collect() = 0;
+
   // Atomically makes `manifest` current. Every newly referenced segment must
   // already be durable and integrity-verified before this call.
-  virtual core::Result<SnapshotId> publish(Manifest manifest) = 0;
+  virtual core::Result<SnapshotId>
+  publish(SnapshotId expected_current,
+          std::vector<SegmentDescriptor> segments) = 0;
 };
 
 } // namespace sakuin::storage

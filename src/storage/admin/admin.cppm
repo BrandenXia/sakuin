@@ -5,13 +5,9 @@ import std;
 import sakuin.core.result;
 
 import sakuin.storage.admin.compaction;
+import sakuin.storage.catalog.manifest;
 
 export namespace sakuin::storage {
-
-struct GcResult {
-  std::uint64_t objects_deleted;
-  std::uint64_t bytes_reclaimed;
-};
 
 struct VerifyResult {
   std::uint64_t segments_checked;

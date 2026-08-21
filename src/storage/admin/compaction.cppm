@@ -3,18 +3,15 @@ export module sakuin.storage.admin.compaction;
 import std;
 
 import sakuin.core.result;
+import sakuin.storage.format.block;
+import sakuin.storage.format.segment;
 
 export namespace sakuin::storage {
 
 struct CompactionPolicy {
-  // Deliberately abstract for now.
-  //
-  // Later this can contain:
-  //   tier transitions
-  //   target segment sizes
-  //   compression levels
-  //   age thresholds
-  //   etc.
+  std::size_t minimum_segment_count{2};
+  std::uint32_t target_block_size{DefaultTargetBlockSize};
+  CompressionCodec compression{CompressionCodec::Zstd};
 };
 
 struct CompactionResult {

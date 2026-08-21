@@ -22,6 +22,12 @@ public:
 
   virtual core::Result<core::ByteBuffer>
   read(RecordLocation location) const = 0;
+
+  virtual std::uint64_t record_count() const noexcept = 0;
+
+  // Supports streaming scans without exposing block encoding to callers.
+  virtual core::Result<RecordLocation>
+  location(std::uint64_t ordinal) const = 0;
 };
 
 } // namespace sakuin::storage
