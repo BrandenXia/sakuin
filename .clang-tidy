@@ -1,0 +1,20 @@
+Checks: "bugprone-*"
+WarningsAsErrors: ""
+HeaderFileExtensions:
+  - ""
+  - h
+  - hh
+  - hpp
+  - hxx
+ImplementationFileExtensions:
+  - c
+  - cc
+  - cpp
+  - cxx
+  - cppm
+HeaderFilterRegex: ""
+ExcludeHeaderFilterRegex: ""
+FormatStyle: none
+User: brandenxia
+CheckOptions: {}
+SystemHeaders: false
