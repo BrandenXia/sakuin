@@ -3,7 +3,7 @@
 A self-hostable DHT indexing system and tracker, designed to be performant,
 storage-efficient, and scalable.
 
-Warning: this project is still in development, and it's not yet functional.
+**Warning**: this project is still in development, and it's not yet functional.
 
 **Why re-invent the wheel?**
 
@@ -31,10 +31,14 @@ Sakuin depends on [openssl](https://github.com/openssl/openssl),
 [zstd](https://github.com/facebook/zstd), [asio](https://github.com/chriskohlhoff/asio),
 [toml++](https://github.com/marzer/tomlplusplus), [llhttp](https://github.com/nodejs/llhttp),
 [nlohmann/json](https://github.com/nlohmann/json), and [spdlog](https://github.com/gabime/spdlog).
-[xmake](https://xmake.io/) should be able to handle all the dependencies automatically.
+
+[Xmake](https://xmake.io) should be able to handle all the dependencies automatically.
 Meanwhile, C++20 module support is required.
 
 ```bash
+git clone https://github.com/BrandenXia/sakuin
+cd sakuin/
+
 # MacOS
 # since Apple clang does not yet have module support, you need to install llvm
 # via homebrew and use it as the toolchain
@@ -43,4 +47,6 @@ xmake f --toolchain=clang --sdk=/opt/homebrew/opt/llvm
 # The latest gcc have complete module support. It should be available on most
 # Linux distributions.
 xmake f --toolchain=gcc
+
+xmake build
 ```
