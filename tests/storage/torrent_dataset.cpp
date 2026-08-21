@@ -97,30 +97,54 @@ int main() {
       break;
     values.emplace((*next)->info_hash.bytes[0], *(*next)->name);
   }
-  if (values.size() != 2 || values[1] != "latest-a" ||
-      values[2] != "first-b")
+  if (values.size() != 2 || values[1] != "latest-a" || values[2] != "first-b")
     return 12;
 
   auto stale = dataset.begin_write();
   auto winner = dataset.begin_write();
   if (!stale || !winner || !(*stale)->append(torrent(3, "stale", 60)) ||
-      !(*winner)->append(torrent(4, "winner", 60)) ||
-      !(*winner)->commit())
+      !(*winner)->append(torrent(4, "winner", 60)) || !(*winner)->commit())
     return 13;
   auto conflict = (*stale)->commit();
   if (conflict || conflict.error().code != core::ErrorCode::Conflict)
     return 14;
 
+  auto placeholder_write = dataset.begin_write();
+  model::TorrentRecord placeholder{
+      .info_hash = hash(5),
+      .first_seen = core::Timestamp{core::Timestamp::duration{5}},
+      .last_seen = core::Timestamp{core::Timestamp::duration{80}},
+      .name = std::nullopt,
+      .total_size = 0,
+      .files = {}};
+  if (!placeholder_write || !(*placeholder_write)->append(placeholder) ||
+      !(*placeholder_write)->commit())
+    return 15;
+  auto enriched = torrent(5, "metadata", 40);
+  enriched.first_seen = core::Timestamp{core::Timestamp::duration{20}};
+  auto enrichment = dataset.enrich(std::move(enriched));
+  if (!enrichment)
+    return 16;
+  auto enriched_snapshot = dataset.keyed_snapshot();
+  auto enriched_value = (*enriched_snapshot)->get(hash(5));
+  if (!enriched_value || !*enriched_value ||
+      (*enriched_value)->name != "metadata" ||
+      (*enriched_value)->first_seen != placeholder.first_seen ||
+      (*enriched_value)->last_seen != placeholder.last_seen ||
+      (*enriched_value)->total_size != 42 ||
+      (*enriched_value)->files.size() != 1)
+    return 17;
+
   auto reopened =
       storage::LocalManifestCatalog::open(directory.path / "catalog", blobs);
   if (!reopened)
-    return 15;
+    return 18;
   storage::TorrentDataset restarted{blobs, **reopened};
   auto restarted_snapshot = restarted.keyed_snapshot();
   auto restarted_value = (*restarted_snapshot)->get(hash(1));
   if (!restarted_value || !*restarted_value ||
       (*restarted_value)->name != "latest-a")
-    return 16;
+    return 19;
 
   return 0;
 }

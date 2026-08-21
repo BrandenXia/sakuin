@@ -21,6 +21,19 @@ mode = "bep42"
 observation_quorum = 4
 vote_window_ms = 300000
 
+[network.dht.metadata]
+maximum_in_flight = 32
+maximum_queued = 2048
+maximum_attempts_per_peer = 4
+initial_retry_delay_ms = 15000
+maximum_retry_delay_ms = 600000
+connect_timeout_ms = 7000
+idle_timeout_ms = 20000
+maximum_metadata_bytes = 2097152
+maximum_outstanding_requests = 8
+maximum_queued_write_bytes = 524288
+storage_conflict_attempts = 5
+
 [network.traffic]
 window_ms = 3600000
 outbound_bytes = 1000000
@@ -58,6 +71,8 @@ window_ms = 10000
       std::pair{std::string{"SAKUIN_API_LISTEN_PORT"}, std::string{"9001"}},
       std::pair{std::string{"SAKUIN_API_CREDENTIAL_STORE_DIRECTORY"},
                 std::string{"/var/lib/sakuin/api-credentials"}},
+      std::pair{std::string{"SAKUIN_DHT_METADATA_MAXIMUM_IN_FLIGHT"},
+                std::string{"48"}},
       std::pair{std::string{"UNRELATED"}, std::string{"ignored"}}};
   auto env = config::environment_overlay(environment);
   if (!env)
@@ -76,6 +91,18 @@ window_ms = 10000
     return 5;
   if (loaded.network.enable_ipv6 || loaded.network.listen_port != 7100 ||
       loaded.network.dht.maximum_in_flight != 256 ||
+      loaded.network.dht.metadata.maximum_in_flight != 48 ||
+      loaded.network.dht.metadata.maximum_queued != 2048 ||
+      loaded.network.dht.metadata.maximum_attempts_per_peer != 4 ||
+      loaded.network.dht.metadata.initial_retry_delay !=
+          std::chrono::seconds{15} ||
+      loaded.network.dht.metadata.maximum_retry_delay !=
+          std::chrono::minutes{10} ||
+      loaded.network.dht.metadata.connect_timeout != std::chrono::seconds{7} ||
+      loaded.network.dht.metadata.maximum_metadata_bytes !=
+          2U * 1024U * 1024U ||
+      loaded.network.dht.metadata.maximum_outstanding_requests != 8 ||
+      loaded.network.dht.metadata.storage_conflict_attempts != 5 ||
       loaded.network.dht.identity.observation_quorum != 4 ||
       loaded.network.dht.bootstrap.size() != 2 ||
       loaded.storage.local_root != "/srv/sakuin" ||

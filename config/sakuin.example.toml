@@ -17,6 +17,20 @@ mode = "bep42"
 observation_quorum = 3
 vote_window_ms = 600000
 
+[network.dht.metadata]
+enabled = true
+maximum_in_flight = 64
+maximum_queued = 4096
+maximum_attempts_per_peer = 3
+initial_retry_delay_ms = 30000
+maximum_retry_delay_ms = 1800000
+connect_timeout_ms = 10000
+idle_timeout_ms = 30000
+maximum_metadata_bytes = 4194304
+maximum_outstanding_requests = 4
+maximum_queued_write_bytes = 1048576
+storage_conflict_attempts = 3
+
 [network.traffic]
 window_ms = 3600000
 # inbound_bytes = 1073741824

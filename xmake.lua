@@ -232,6 +232,43 @@ target("sakuin-krpc-tests")
   add_deps("sakuin-core", "sakuin-dht")
   add_tests("krpc")
 
+target("sakuin-metadata-exchange-tests")
+  set_kind("binary")
+  add_files("tests/dht/metadata.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-runtime", "sakuin-dht")
+  add_tests("metadata-exchange")
+
+target("sakuin-metainfo-tests")
+  set_kind("binary")
+  add_files("tests/dht/metainfo.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-dht")
+  add_tests("metainfo")
+
+target("sakuin-metadata-fetch-tests")
+  set_kind("binary")
+  add_files("tests/dht/metadata_fetch.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-runtime", "sakuin-dht")
+  add_tests("metadata-fetch")
+
+target("sakuin-metadata-storage-tests")
+  set_kind("binary")
+  add_files("tests/dht/metadata_storage.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs", "sakuin-dht", "sakuin-integrations")
+  add_tests("metadata-storage")
+
+target("sakuin-metadata-queue-tests")
+  set_kind("binary")
+  add_files("tests/dht/metadata_queue.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-runtime", "sakuin-dht")
+  add_tests("metadata-queue")
+
+target("sakuin-metadata-controller-tests")
+  set_kind("binary")
+  add_files("tests/dht/metadata_controller.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-runtime", "sakuin-dht")
+  add_tests("metadata-controller")
+
 target("sakuin-routing-tests")
   set_kind("binary")
   add_files("tests/dht/routing.cpp")
@@ -277,6 +314,13 @@ target("sakuin-asio-datagram-tests")
            "sakuin-model-codecs", "sakuin-dht", "sakuin-integrations",
            "sakuin-runtime", "sakuin-runtime-asio")
   add_tests("asio-datagram")
+
+target("sakuin-asio-stream-tests")
+  set_kind("binary")
+  add_files("tests/runtime/asio_stream.cpp")
+  add_deps("sakuin-core", "sakuin-runtime", "sakuin-runtime-asio")
+  add_packages("asio")
+  add_tests("asio-stream")
 
 target("sakuin-asio-http-tests")
   set_kind("binary")

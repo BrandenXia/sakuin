@@ -24,10 +24,17 @@ struct ParseLimits {
   std::size_t maximum_bytes{65'507};
   std::size_t maximum_depth{16};
   std::size_t maximum_values{4'096};
+  bool require_canonical_dictionary_order{};
 };
 
-core::Result<Value> parse(core::ByteView input,
-                          const ParseLimits &limits = {});
+struct ParsedValue {
+  Value value;
+  std::size_t consumed{};
+};
+
+core::Result<Value> parse(core::ByteView input, const ParseLimits &limits = {});
+core::Result<ParsedValue> parse_prefix(core::ByteView input,
+                                       const ParseLimits &limits = {});
 
 core::Result<core::ByteBuffer> encode(const Value &value,
                                       std::size_t maximum_bytes = 65'507);
@@ -66,6 +73,7 @@ public:
   }
 
   bool finished() const noexcept { return position_ == input_.size(); }
+  std::size_t position() const noexcept { return position_; }
 
 private:
   char character(std::size_t offset) const noexcept {
@@ -79,8 +87,8 @@ private:
       return std::unexpected(end.error());
     if (*end == begin)
       return std::unexpected(malformed("Empty bencode integer"));
-    std::string_view text{
-        reinterpret_cast<const char *>(input_.data() + begin), *end - begin};
+    std::string_view text{reinterpret_cast<const char *>(input_.data() + begin),
+                          *end - begin};
     if ((text.size() > 1 && text.front() == '0') ||
         (text.size() > 1 && text[0] == '-' && text[1] == '0'))
       return std::unexpected(malformed("Non-canonical bencode integer"));
@@ -106,7 +114,8 @@ private:
     std::size_t length{};
     const auto [parsed, error] = std::from_chars(
         length_text.data(), length_text.data() + length_text.size(), length);
-    if (error != std::errc{} || parsed != length_text.data() + length_text.size())
+    if (error != std::errc{} ||
+        parsed != length_text.data() + length_text.size())
       return std::unexpected(malformed("Invalid bencode string length"));
     position_ = *colon + 1;
     if (length > input_.size() - position_)
@@ -135,6 +144,7 @@ private:
   core::Result<Value> dictionary_value(std::size_t depth) {
     ++position_;
     Value::Dictionary result;
+    std::optional<std::string> previous_key;
     while (position_ < input_.size() && character(position_) != 'e') {
       auto key = string_value();
       if (!key)
@@ -142,6 +152,11 @@ private:
       const auto *key_bytes = key->string();
       std::string key_text{reinterpret_cast<const char *>(key_bytes->data()),
                            key_bytes->size()};
+      if (limits_.require_canonical_dictionary_order && previous_key &&
+          key_text <= *previous_key)
+        return std::unexpected(
+            malformed("Non-canonical bencode dictionary key order"));
+      previous_key = key_text;
       auto element = value(depth + 1);
       if (!element)
         return std::unexpected(element.error());
@@ -184,15 +199,24 @@ const Value::Dictionary *Value::dictionary() const noexcept {
 }
 
 core::Result<Value> parse(core::ByteView input, const ParseLimits &limits) {
+  auto parsed = parse_prefix(input, limits);
+  if (!parsed)
+    return std::unexpected(parsed.error());
+  if (parsed->consumed != input.size())
+    return std::unexpected(malformed("Bencode input has trailing bytes"));
+  return std::move(parsed->value);
+}
+
+core::Result<ParsedValue> parse_prefix(core::ByteView input,
+                                       const ParseLimits &limits) {
   if (input.size() > limits.maximum_bytes)
     return std::unexpected(malformed("Bencode input exceeds packet limit"));
   Parser parser{input, limits};
   auto result = parser.value();
   if (!result)
     return std::unexpected(result.error());
-  if (!parser.finished())
-    return std::unexpected(malformed("Bencode input has trailing bytes"));
-  return result;
+  return ParsedValue{.value = std::move(*result),
+                     .consumed = parser.position()};
 }
 
 namespace {
@@ -245,8 +269,8 @@ core::Result<void> append_encoded(const Value &value, core::ByteBuffer &output,
     core::ByteBuffer key_bytes;
     const auto view = std::as_bytes(std::span{key});
     key_bytes.assign(view.begin(), view.end());
-    if (auto encoded = append_encoded(Value{std::move(key_bytes)}, output,
-                                      maximum);
+    if (auto encoded =
+            append_encoded(Value{std::move(key_bytes)}, output, maximum);
         !encoded)
       return encoded;
     if (auto encoded = append_encoded(element, output, maximum); !encoded)

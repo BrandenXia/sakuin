@@ -6,6 +6,12 @@ import sakuin.core.bytes;
 
 export namespace sakuin::core {
 
+struct Hash160 {
+  std::array<std::uint8_t, 20> bytes;
+
+  friend bool operator==(const Hash160 &, const Hash160 &) = default;
+};
+
 struct Hash256 {
   std::array<std::uint8_t, 32> bytes;
 
@@ -31,6 +37,7 @@ private:
 };
 
 Hash256 sha256(ByteView data);
+Hash160 sha1(ByteView data);
 Hash256 hmac_sha256(ByteView key, ByteView data);
 bool constant_time_equal(ByteView left, ByteView right) noexcept;
 
