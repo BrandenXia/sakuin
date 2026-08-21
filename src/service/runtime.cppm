@@ -41,6 +41,7 @@ struct AsioDhtRuntimeDependencies {
   dht::ObservationSink *observations{};
   storage::TorrentDataset *torrents{};
   DhtRuntimeObserver *observer{};
+  std::function<void(std::uint64_t)> on_torrent_committed;
 };
 
 // Owns the enabled address-family workers and their one shared traffic budget.
@@ -210,7 +211,8 @@ AsioDhtRuntime::create_family(runtime::AddressFamily family,
       {.observations = dependencies_.observations,
        .torrents = dependencies_.torrents,
        .observer = observer,
-       .traffic = traffic_.get()});
+       .traffic = traffic_.get(),
+       .on_torrent_committed = dependencies_.on_torrent_committed});
 }
 
 AsioDhtRuntime::~AsioDhtRuntime() { stop(); }

@@ -15,8 +15,10 @@ export namespace sakuin::integration {
 // retained for orchestration/diagnostics and propagated to the fetch session.
 class TorrentMetadataSink final : public dht::MetadataFetchObserver {
 public:
-  explicit TorrentMetadataSink(storage::TorrentDataset &dataset,
-                               std::size_t maximum_conflict_attempts = 3);
+  explicit TorrentMetadataSink(
+      storage::TorrentDataset &dataset,
+      std::size_t maximum_conflict_attempts = 3,
+      std::function<void(std::uint64_t)> on_torrent_committed = {});
 
   core::Result<void> on_metadata_fetched(model::TorrentRecord record) override;
   void on_metadata_fetch_failed(core::Error error) override;
@@ -27,6 +29,7 @@ public:
 private:
   storage::TorrentDataset *dataset_;
   std::size_t maximum_conflict_attempts_;
+  std::function<void(std::uint64_t)> on_torrent_committed_;
   mutable std::mutex mutex_;
   std::optional<std::uint64_t> last_generation_;
   std::optional<core::Error> last_error_;
@@ -36,10 +39,11 @@ private:
 
 namespace sakuin::integration {
 
-TorrentMetadataSink::TorrentMetadataSink(storage::TorrentDataset &dataset,
-                                         std::size_t maximum_conflict_attempts)
-    : dataset_(&dataset),
-      maximum_conflict_attempts_(maximum_conflict_attempts) {}
+TorrentMetadataSink::TorrentMetadataSink(
+    storage::TorrentDataset &dataset, std::size_t maximum_conflict_attempts,
+    std::function<void(std::uint64_t)> on_torrent_committed)
+    : dataset_(&dataset), maximum_conflict_attempts_(maximum_conflict_attempts),
+      on_torrent_committed_(std::move(on_torrent_committed)) {}
 
 core::Result<void>
 TorrentMetadataSink::on_metadata_fetched(model::TorrentRecord record) {
@@ -52,9 +56,19 @@ TorrentMetadataSink::on_metadata_fetched(model::TorrentRecord record) {
        ++attempt) {
     auto committed = dataset_->enrich(record);
     if (committed) {
-      std::lock_guard lock{mutex_};
-      last_generation_ = committed->generation;
-      last_error_.reset();
+      {
+        std::lock_guard lock{mutex_};
+        last_generation_ = committed->generation;
+        last_error_.reset();
+      }
+      if (on_torrent_committed_) {
+        try {
+          on_torrent_committed_(committed->generation);
+        } catch (...) {
+          // Persistence succeeded. A derived-index wakeup must not turn that
+          // durable success into a metadata-fetch failure.
+        }
+      }
       return {};
     }
     if (committed.error().code != core::ErrorCode::Conflict ||

@@ -106,7 +106,15 @@ target("sakuin-service")
   add_files("src/service/**.cppm", {public = true})
   add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
            "sakuin-model-codecs", "sakuin-runtime", "sakuin-dht",
-           "sakuin-integrations", "sakuin-runtime-asio", "sakuin-scheduler")
+           "sakuin-integrations", "sakuin-runtime-asio", "sakuin-scheduler",
+           "sakuin-api", "sakuin-api-credentials", "sakuin-http",
+           "sakuin-runtime-http", "sakuin-runtime-asio-http", "sakuin-search",
+           "sakuin-search-pipeline")
+
+target("sakuin")
+  set_kind("binary")
+  add_files("tools/sakuin.cpp")
+  add_deps("sakuin-core", "sakuin-config", "sakuin-dht", "sakuin-service")
 
 target("sakuin-index")
   set_kind("static")
@@ -294,7 +302,8 @@ target("sakuin-dht-service-tests")
   set_kind("binary")
   add_files("tests/service/dht.cpp")
   add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-runtime",
-           "sakuin-dht", "sakuin-integrations", "sakuin-service")
+           "sakuin-dht", "sakuin-integrations", "sakuin-api-credentials",
+           "sakuin-service")
   add_tests("dht-service")
 
 target("sakuin-storage-service-tests")
@@ -304,6 +313,21 @@ target("sakuin-storage-service-tests")
            "sakuin-model-codecs", "sakuin-dht", "sakuin-integrations",
            "sakuin-service")
   add_tests("storage-service")
+
+target("sakuin-api-service-tests")
+  set_kind("binary")
+  add_files("tests/service/api.cpp")
+  add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs", "sakuin-api", "sakuin-api-credentials",
+           "sakuin-service")
+  add_packages("asio")
+  add_tests("api-service")
+
+target("sakuin-application-tests")
+  set_kind("binary")
+  add_files("tests/service/application.cpp")
+  add_deps("sakuin-core", "sakuin-service")
+  add_tests("application")
 
 target("sakuin-routing-tests")
   set_kind("binary")

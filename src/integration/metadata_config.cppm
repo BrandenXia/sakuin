@@ -33,7 +33,8 @@ public:
   create(dht::PeerId peer_id, runtime::StreamTransportFactory &factory,
          storage::TorrentDataset &dataset,
          const config::MetadataAcquisitionConfig &config,
-         std::function<void()> wake_owner);
+         std::function<void()> wake_owner,
+         std::function<void(std::uint64_t)> on_torrent_committed = {});
 
   dht::MetadataAcquisitionController *controller() noexcept {
     return controller_.get();
@@ -46,9 +47,11 @@ public:
   void stop() noexcept;
 
 private:
-  TorrentMetadataAcquisition(storage::TorrentDataset &dataset,
-                             std::size_t storage_conflict_attempts)
-      : sink_(dataset, storage_conflict_attempts) {}
+  TorrentMetadataAcquisition(
+      storage::TorrentDataset &dataset, std::size_t storage_conflict_attempts,
+      std::function<void(std::uint64_t)> on_torrent_committed)
+      : sink_(dataset, storage_conflict_attempts,
+              std::move(on_torrent_committed)) {}
 
   // Controller is destroyed first and therefore cannot callback into a
   // destroyed sink during teardown.
@@ -98,14 +101,15 @@ TorrentMetadataAcquisition::create(
     dht::PeerId peer_id, runtime::StreamTransportFactory &factory,
     storage::TorrentDataset &dataset,
     const config::MetadataAcquisitionConfig &config,
-    std::function<void()> wake_owner) {
+    std::function<void()> wake_owner,
+    std::function<void(std::uint64_t)> on_torrent_committed) {
   if (config.storage_conflict_attempts == 0)
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
                     "Metadata storage conflict-attempt limit must be nonzero"});
   auto result = std::unique_ptr<TorrentMetadataAcquisition>{
-      new TorrentMetadataAcquisition{dataset,
-                                     config.storage_conflict_attempts}};
+      new TorrentMetadataAcquisition{dataset, config.storage_conflict_attempts,
+                                     std::move(on_torrent_committed)}};
   auto runtime = metadata_runtime_config(config);
   if (!runtime.enabled)
     return result;

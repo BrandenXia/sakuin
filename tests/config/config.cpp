@@ -82,6 +82,18 @@ window_ms = 10000
                 std::string{"48"}},
       std::pair{std::string{"SAKUIN_DHT_ROUTING_MAXIMUM_QUEUED"},
                 std::string{"768"}},
+      std::pair{std::string{"SAKUIN_DHT_BOOTSTRAP_MAXIMUM_ATTEMPTS"},
+                std::string{"7"}},
+      std::pair{std::string{"SAKUIN_DHT_BOOTSTRAP_MAXIMUM_IN_FLIGHT"},
+                std::string{"5"}},
+      std::pair{std::string{"SAKUIN_DHT_BOOTSTRAP_RETRY_DELAY_MS"},
+                std::string{"9000"}},
+      std::pair{std::string{"SAKUIN_DHT_IDENTITY_FIXED_IPV4_NODE_ID"},
+                std::string(40, 'a')},
+      std::pair{std::string{"SAKUIN_DHT_IDENTITY_FIXED_IPV6_NODE_ID"},
+                std::string(40, 'b')},
+      std::pair{std::string{"SAKUIN_STORAGE_COMPACTION_MINIMUM_SEGMENTS"},
+                std::string{"8"}},
       std::pair{std::string{"UNRELATED"}, std::string{"ignored"}}};
   auto env = config::environment_overlay(environment);
   if (!env)
@@ -120,9 +132,15 @@ window_ms = 10000
       loaded.network.dht.routing.maximum_attempts != 4 ||
       loaded.network.dht.routing.retry_delay !=
           std::chrono::milliseconds{2500} ||
+      loaded.network.dht.bootstrap_maximum_attempts != 7 ||
+      loaded.network.dht.bootstrap_maximum_in_flight != 5 ||
+      loaded.network.dht.bootstrap_retry_delay != std::chrono::seconds{9} ||
+      loaded.network.dht.identity.fixed_ipv4_node_id != std::string(40, 'a') ||
+      loaded.network.dht.identity.fixed_ipv6_node_id != std::string(40, 'b') ||
       loaded.network.dht.bootstrap.size() != 2 ||
       loaded.storage.local_root != "/srv/sakuin" ||
       loaded.storage.compression_level != 5 ||
+      loaded.storage.compaction_minimum_segments != 8 ||
       loaded.api.credential_store_directory !=
           "/var/lib/sakuin/api-credentials" ||
       loaded.api.listen_address != "::1" || loaded.api.listen_port != 9001 ||

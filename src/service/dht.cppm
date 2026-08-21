@@ -50,6 +50,7 @@ struct AsioDhtFamilyRuntimeDependencies {
   storage::TorrentDataset *torrents{};
   integration::DhtRuntimeWorkerObserver *observer{};
   runtime::TrafficGovernor *traffic{};
+  std::function<void(std::uint64_t)> on_torrent_committed;
 };
 
 // Owns one IPv4 or IPv6 DHT execution graph. Standalone Asio is confined to
@@ -276,7 +277,7 @@ AsioDhtFamilyRuntime::create(
   if (configuration.metadata.enabled) {
     auto metadata = integration::TorrentMetadataAcquisition::create(
         material.peer_id, result->streams_, *dependencies.torrents,
-        configuration.metadata, wake_owner);
+        configuration.metadata, wake_owner, dependencies.on_torrent_committed);
     if (!metadata)
       return std::unexpected(metadata.error());
     result->metadata_ = std::move(*metadata);
