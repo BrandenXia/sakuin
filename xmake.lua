@@ -282,6 +282,12 @@ target("sakuin-routing-tests")
   add_deps("sakuin-core", "sakuin-runtime", "sakuin-dht")
   add_tests("routing")
 
+target("sakuin-routing-maintenance-tests")
+  set_kind("binary")
+  add_files("tests/dht/routing_maintenance.cpp")
+  add_deps("sakuin-core", "sakuin-runtime", "sakuin-dht")
+  add_tests("routing-maintenance")
+
 target("sakuin-dht-identity-tests")
   set_kind("binary")
   add_files("tests/dht/identity.cpp")

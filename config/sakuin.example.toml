@@ -17,6 +17,12 @@ mode = "bep42"
 observation_quorum = 3
 vote_window_ms = 600000
 
+[network.dht.routing]
+maximum_queued = 1024
+maximum_in_flight = 8
+maximum_attempts = 2
+retry_delay_ms = 5000
+
 [network.dht.metadata]
 enabled = true
 maximum_in_flight = 64

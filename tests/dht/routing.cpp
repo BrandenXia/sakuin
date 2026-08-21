@@ -18,8 +18,8 @@ sakuin::dht::NodeContact contact(std::uint8_t first, std::uint8_t last,
   return {.id = node(first, last),
           .endpoint = {.address = sakuin::runtime::IpAddress::loopback_v4(),
                        .port = port},
-          .last_seen = sakuin::core::Timestamp{
-              sakuin::core::Timestamp::duration{last}}};
+          .last_seen =
+              sakuin::core::Timestamp{sakuin::core::Timestamp::duration{last}}};
 }
 
 } // namespace
@@ -47,19 +47,18 @@ int main() {
 
   auto overflow = table.observe(contact(0x80, 20, 7'000));
   if (overflow.mutation != dht::RoutingMutation::ProbeRequired ||
-      !overflow.least_recently_seen ||
-      overflow.least_recently_seen->id != node(0x80, 0) ||
+      !overflow.probe || overflow.probe->incumbent.id != node(0x80, 0) ||
+      overflow.probe->replacement.id != node(0x80, 20) ||
       table.size() != dht::k_bucket_size)
     return 5;
 
   auto refreshed = table.observe(contact(0x80, 0, 8'000));
   overflow = table.observe(contact(0x80, 21, 7'001));
   if (refreshed.mutation != dht::RoutingMutation::Refreshed ||
-      !overflow.least_recently_seen ||
-      overflow.least_recently_seen->id != node(0x80, 1))
+      !overflow.probe || overflow.probe->incumbent.id != node(0x80, 1) ||
+      overflow.probe->replacement.id != node(0x80, 21))
     return 6;
-  if (!table.replace_unresponsive(node(0x80, 1),
-                                  contact(0x80, 21, 7'001)) ||
+  if (!table.replace_unresponsive(node(0x80, 1), contact(0x80, 21, 7'001)) ||
       table.replace_unresponsive(node(0x80, 2), contact(0x40, 1, 9'000)))
     return 7;
 
@@ -70,8 +69,8 @@ int main() {
   const auto now = core::Timestamp{core::Timestamp::duration{123}};
   const std::array ipv4_contacts{contact(0x80, 30, 6881),
                                  contact(0x80, 31, 51413)};
-  auto ipv4 = dht::encode_compact_nodes(ipv4_contacts,
-                                        runtime::AddressFamily::IPv4);
+  auto ipv4 =
+      dht::encode_compact_nodes(ipv4_contacts, runtime::AddressFamily::IPv4);
   auto decoded_ipv4 =
       ipv4 ? dht::decode_compact_nodes(*ipv4, runtime::AddressFamily::IPv4, now)
            : core::Result<std::vector<dht::NodeContact>>{
@@ -86,8 +85,8 @@ int main() {
   ipv6_contact.endpoint.address.family = runtime::AddressFamily::IPv6;
   std::ranges::iota(ipv6_contact.endpoint.address.bytes, std::uint8_t{1});
   const std::array ipv6_contacts{ipv6_contact};
-  auto ipv6 = dht::encode_compact_nodes(ipv6_contacts,
-                                        runtime::AddressFamily::IPv6);
+  auto ipv6 =
+      dht::encode_compact_nodes(ipv6_contacts, runtime::AddressFamily::IPv6);
   auto decoded_ipv6 =
       ipv6 ? dht::decode_compact_nodes(*ipv6, runtime::AddressFamily::IPv6, now)
            : core::Result<std::vector<dht::NodeContact>>{
@@ -103,8 +102,7 @@ int main() {
   auto zero_port = ipv4_contacts.front();
   zero_port.endpoint.port = 0;
   const std::array invalid_contacts{zero_port};
-  if (dht::encode_compact_nodes(invalid_contacts,
-                                runtime::AddressFamily::IPv4))
+  if (dht::encode_compact_nodes(invalid_contacts, runtime::AddressFamily::IPv4))
     return 12;
   if (!table.remove(node(0x80, 21)) || table.size() != 7)
     return 13;

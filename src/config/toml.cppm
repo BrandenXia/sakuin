@@ -152,13 +152,36 @@ core::Result<void> parse_metadata(const toml::table &table,
   return {};
 }
 
+core::Result<void> parse_routing(const toml::table &table,
+                                 ConfigOverlay &overlay) {
+  if (auto checked = check_keys(table,
+                                {"maximum_queued", "maximum_in_flight",
+                                 "maximum_attempts", "retry_delay_ms"},
+                                "network.dht.routing.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<std::int64_t>(table, "maximum_queued",
+                             "network.dht.routing.maximum_queued", overlay),
+        scalar<std::int64_t>(table, "maximum_in_flight",
+                             "network.dht.routing.maximum_in_flight", overlay),
+        scalar<std::int64_t>(table, "maximum_attempts",
+                             "network.dht.routing.maximum_attempts", overlay),
+        scalar<std::int64_t>(table, "retry_delay_ms",
+                             "network.dht.routing.retry_delay_ms", overlay)})
+    if (!result)
+      return result;
+  return {};
+}
+
 core::Result<void> parse_dht(const toml::table &table, ConfigOverlay &overlay) {
-  if (auto checked = check_keys(
-          table,
-          {"private_network", "maximum_in_flight", "query_timeout_ms",
-           "bootstrap_maximum_in_flight", "bootstrap_maximum_attempts",
-           "bootstrap_retry_delay_ms", "bootstrap", "identity", "metadata"},
-          "network.dht.");
+  if (auto checked =
+          check_keys(table,
+                     {"private_network", "maximum_in_flight",
+                      "query_timeout_ms", "bootstrap_maximum_in_flight",
+                      "bootstrap_maximum_attempts", "bootstrap_retry_delay_ms",
+                      "bootstrap", "identity", "routing", "metadata"},
+                     "network.dht.");
       !checked)
     return checked;
   for (auto result :
@@ -199,6 +222,12 @@ core::Result<void> parse_dht(const toml::table &table, ConfigOverlay &overlay) {
     return std::unexpected(identity.error());
   if (*identity)
     if (auto result = parse_identity(**identity, overlay); !result)
+      return result;
+  auto routing = optional_table(table, "routing", "network.dht.routing");
+  if (!routing)
+    return std::unexpected(routing.error());
+  if (*routing)
+    if (auto result = parse_routing(**routing, overlay); !result)
       return result;
   auto metadata = optional_table(table, "metadata", "network.dht.metadata");
   if (!metadata)
@@ -418,6 +447,14 @@ core::Result<ConfigOverlay> environment_overlay(
       {"SAKUIN_DHT_MAXIMUM_IN_FLIGHT", "network.dht.maximum_in_flight"},
       {"SAKUIN_DHT_PRIVATE_NETWORK", "network.dht.private_network"},
       {"SAKUIN_DHT_QUERY_TIMEOUT_MS", "network.dht.query_timeout_ms"},
+      {"SAKUIN_DHT_ROUTING_MAXIMUM_QUEUED",
+       "network.dht.routing.maximum_queued"},
+      {"SAKUIN_DHT_ROUTING_MAXIMUM_IN_FLIGHT",
+       "network.dht.routing.maximum_in_flight"},
+      {"SAKUIN_DHT_ROUTING_MAXIMUM_ATTEMPTS",
+       "network.dht.routing.maximum_attempts"},
+      {"SAKUIN_DHT_ROUTING_RETRY_DELAY_MS",
+       "network.dht.routing.retry_delay_ms"},
       {"SAKUIN_DHT_IDENTITY_MODE", "network.dht.identity.mode"},
       {"SAKUIN_DHT_IDENTITY_QUORUM", "network.dht.identity.observation_quorum"},
       {"SAKUIN_DHT_IDENTITY_VOTE_WINDOW_MS",

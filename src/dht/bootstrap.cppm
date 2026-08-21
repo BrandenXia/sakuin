@@ -2,6 +2,7 @@ export module sakuin.dht.bootstrap;
 
 import std;
 
+import sakuin.core.bytes;
 import sakuin.core.result;
 import sakuin.core.time;
 import sakuin.dht.krpc;
@@ -19,7 +20,6 @@ struct BootstrapOptions {
 
 struct BootstrapStep {
   std::vector<DatagramSend> sends;
-  std::vector<QueryTimeout> timeouts;
   std::size_t known_candidates{};
   bool complete{};
   std::optional<core::Timestamp> next_wakeup;
@@ -36,8 +36,9 @@ public:
   // call them from a timer, while a future stdexec scheduler can own timing,
   // cancellation, and worker lifetime without changing bootstrap state.
   core::Result<BootstrapStep> poll(core::Timestamp now);
-  void consume(const DhtActions &actions, core::Timestamp now);
-  void delivery_failed(const DatagramSend &send, core::Timestamp now);
+  bool consume(const DhtActions &actions, core::Timestamp now);
+  bool consume_timeout(const QueryTimeout &timeout, core::Timestamp now);
+  bool delivery_failed(const DatagramSend &send, core::Timestamp now);
 
 private:
   struct Candidate {
@@ -46,6 +47,7 @@ private:
     std::size_t attempts{};
     bool outstanding{};
     bool completed{};
+    core::ByteBuffer transaction;
     core::Timestamp next_attempt{core::Timestamp::min()};
   };
 
@@ -53,7 +55,10 @@ private:
       : node_(&node), options_(options) {}
 
   void discover_routing_contacts();
-  void failed(runtime::DatagramEndpoint endpoint, core::Timestamp now);
+  std::vector<Candidate>::iterator
+  find(core::ByteView transaction,
+       const runtime::DatagramEndpoint &remote) noexcept;
+  void failed(Candidate &candidate, core::Timestamp now);
   core::Timestamp retry_at(core::Timestamp now) const;
 
   DhtNode *node_;
@@ -75,16 +80,16 @@ core::Result<std::unique_ptr<BootstrapPlanner>> BootstrapPlanner::create(
         "At least one resolved DHT bootstrap endpoint is required"});
   if (options.maximum_in_flight == 0 || options.maximum_attempts == 0 ||
       options.retry_delay < core::Duration::zero())
-    return std::unexpected(core::Error{
-        core::ErrorCode::InvalidArgument, "Invalid DHT bootstrap options"});
+    return std::unexpected(core::Error{core::ErrorCode::InvalidArgument,
+                                       "Invalid DHT bootstrap options"});
 
-  auto result = std::unique_ptr<BootstrapPlanner>{
-      new BootstrapPlanner{node, options}};
+  auto result =
+      std::unique_ptr<BootstrapPlanner>{new BootstrapPlanner{node, options}};
   for (const auto &endpoint : bootstrap_endpoints) {
     if (endpoint.port == 0)
-      return std::unexpected(core::Error{
-          core::ErrorCode::InvalidArgument,
-          "DHT bootstrap endpoints must use a nonzero port"});
+      return std::unexpected(
+          core::Error{core::ErrorCode::InvalidArgument,
+                      "DHT bootstrap endpoints must use a nonzero port"});
     if (std::ranges::find(result->candidates_, endpoint,
                           &Candidate::endpoint) == result->candidates_.end())
       result->candidates_.push_back(Candidate{.endpoint = endpoint});
@@ -110,30 +115,37 @@ void BootstrapPlanner::discover_routing_contacts() {
           Candidate{.id = contact.id, .endpoint = contact.endpoint});
     } else {
       found->id = contact.id;
-      found->endpoint = contact.endpoint;
+      if (!found->outstanding)
+        found->endpoint = contact.endpoint;
     }
   }
 }
 
-void BootstrapPlanner::failed(runtime::DatagramEndpoint endpoint,
-                              core::Timestamp now) {
-  const auto found = std::ranges::find(candidates_, endpoint,
-                                       &Candidate::endpoint);
-  if (found == candidates_.end())
-    return;
-  found->outstanding = false;
-  found->next_attempt = retry_at(now);
+std::vector<BootstrapPlanner::Candidate>::iterator
+BootstrapPlanner::find(core::ByteView transaction,
+                       const runtime::DatagramEndpoint &remote) noexcept {
+  return std::ranges::find_if(candidates_, [&](const auto &candidate) {
+    return candidate.outstanding && candidate.endpoint == remote &&
+           std::ranges::equal(candidate.transaction, transaction);
+  });
 }
 
-void BootstrapPlanner::consume(const DhtActions &actions,
-                               core::Timestamp now) {
+void BootstrapPlanner::failed(Candidate &candidate, core::Timestamp now) {
+  candidate.outstanding = false;
+  candidate.transaction.clear();
+  candidate.next_attempt = retry_at(now);
+}
+
+bool BootstrapPlanner::consume(const DhtActions &actions, core::Timestamp now) {
+  bool consumed = false;
   if (actions.query_completion &&
       actions.query_completion->kind == krpc::QueryKind::FindNode) {
-    const auto found =
-        std::ranges::find(candidates_, actions.query_completion->remote,
-                          &Candidate::endpoint);
+    const auto found = find(actions.query_completion->transaction,
+                            actions.query_completion->remote);
     if (found != candidates_.end()) {
+      consumed = true;
       found->outstanding = false;
+      found->transaction.clear();
       if (actions.query_completion->protocol_error)
         found->next_attempt = retry_at(now);
       else
@@ -141,22 +153,34 @@ void BootstrapPlanner::consume(const DhtActions &actions,
     }
   }
   discover_routing_contacts();
+  return consumed;
 }
 
-void BootstrapPlanner::delivery_failed(const DatagramSend &send,
+bool BootstrapPlanner::consume_timeout(const QueryTimeout &timeout,
                                        core::Timestamp now) {
-  if (send.query_transaction)
-    node_->cancel_query(*send.query_transaction, send.destination);
-  failed(send.destination, now);
+  if (timeout.kind != krpc::QueryKind::FindNode)
+    return false;
+  const auto found = find(timeout.transaction, timeout.remote);
+  if (found == candidates_.end())
+    return false;
+  failed(*found, now);
+  return true;
+}
+
+bool BootstrapPlanner::delivery_failed(const DatagramSend &send,
+                                       core::Timestamp now) {
+  if (!send.query_transaction)
+    return false;
+  const auto found = find(*send.query_transaction, send.destination);
+  if (found == candidates_.end())
+    return false;
+  node_->cancel_query(*send.query_transaction, send.destination);
+  failed(*found, now);
+  return true;
 }
 
 core::Result<BootstrapStep> BootstrapPlanner::poll(core::Timestamp now) {
   BootstrapStep step;
-  step.timeouts = node_->expire_queries(now);
-  for (const auto &timeout : step.timeouts) {
-    if (timeout.kind == krpc::QueryKind::FindNode)
-      failed(timeout.remote, now);
-  }
   discover_routing_contacts();
 
   const auto outstanding = node_->outstanding_queries();
@@ -170,7 +194,8 @@ core::Result<BootstrapStep> BootstrapPlanner::poll(core::Timestamp now) {
         candidate.attempts >= options_.maximum_attempts ||
         candidate.next_attempt > now)
       continue;
-    const auto target = candidate.id.value_or(node_->routing_table().local_id());
+    const auto target =
+        candidate.id.value_or(node_->routing_table().local_id());
     auto query = node_->find_node(candidate.endpoint, target, now);
     if (!query) {
       for (const auto &created : step.sends) {
@@ -180,6 +205,7 @@ core::Result<BootstrapStep> BootstrapPlanner::poll(core::Timestamp now) {
               candidates_, created.destination, &Candidate::endpoint);
           if (rollback != candidates_.end()) {
             rollback->outstanding = false;
+            rollback->transaction.clear();
             --rollback->attempts;
           }
         }
@@ -187,6 +213,7 @@ core::Result<BootstrapStep> BootstrapPlanner::poll(core::Timestamp now) {
       return std::unexpected(query.error());
     }
     candidate.outstanding = true;
+    candidate.transaction = *query->query_transaction;
     ++candidate.attempts;
     step.sends.push_back(std::move(*query));
     --capacity;

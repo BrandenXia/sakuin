@@ -21,6 +21,12 @@ mode = "bep42"
 observation_quorum = 4
 vote_window_ms = 300000
 
+[network.dht.routing]
+maximum_queued = 512
+maximum_in_flight = 6
+maximum_attempts = 4
+retry_delay_ms = 2500
+
 [network.dht.metadata]
 maximum_in_flight = 32
 maximum_queued = 2048
@@ -73,6 +79,8 @@ window_ms = 10000
                 std::string{"/var/lib/sakuin/api-credentials"}},
       std::pair{std::string{"SAKUIN_DHT_METADATA_MAXIMUM_IN_FLIGHT"},
                 std::string{"48"}},
+      std::pair{std::string{"SAKUIN_DHT_ROUTING_MAXIMUM_QUEUED"},
+                std::string{"768"}},
       std::pair{std::string{"UNRELATED"}, std::string{"ignored"}}};
   auto env = config::environment_overlay(environment);
   if (!env)
@@ -104,6 +112,11 @@ window_ms = 10000
       loaded.network.dht.metadata.maximum_outstanding_requests != 8 ||
       loaded.network.dht.metadata.storage_conflict_attempts != 5 ||
       loaded.network.dht.identity.observation_quorum != 4 ||
+      loaded.network.dht.routing.maximum_queued != 768 ||
+      loaded.network.dht.routing.maximum_in_flight != 6 ||
+      loaded.network.dht.routing.maximum_attempts != 4 ||
+      loaded.network.dht.routing.retry_delay !=
+          std::chrono::milliseconds{2500} ||
       loaded.network.dht.bootstrap.size() != 2 ||
       loaded.storage.local_root != "/srv/sakuin" ||
       loaded.storage.compression_level != 5 ||
