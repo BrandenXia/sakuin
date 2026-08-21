@@ -29,6 +29,11 @@ public:
   create(dht::PeerId peer_id, runtime::StreamTransportFactory &factory,
          storage::TorrentDataset &dataset,
          const config::MetadataAcquisitionConfig &config);
+  static core::Result<std::unique_ptr<TorrentMetadataAcquisition>>
+  create(dht::PeerId peer_id, runtime::StreamTransportFactory &factory,
+         storage::TorrentDataset &dataset,
+         const config::MetadataAcquisitionConfig &config,
+         std::function<void()> wake_owner);
 
   dht::MetadataAcquisitionController *controller() noexcept {
     return controller_.get();
@@ -76,6 +81,7 @@ metadata_runtime_config(const config::MetadataAcquisitionConfig &config) {
       config.maximum_outstanding_requests;
   result.controller.fetch.metainfo.maximum_metadata_bytes =
       config.maximum_metadata_bytes;
+  result.controller.storage_retry_delay = config.storage_retry_delay;
   return result;
 }
 
@@ -84,6 +90,15 @@ TorrentMetadataAcquisition::create(
     dht::PeerId peer_id, runtime::StreamTransportFactory &factory,
     storage::TorrentDataset &dataset,
     const config::MetadataAcquisitionConfig &config) {
+  return create(peer_id, factory, dataset, config, {});
+}
+
+core::Result<std::unique_ptr<TorrentMetadataAcquisition>>
+TorrentMetadataAcquisition::create(
+    dht::PeerId peer_id, runtime::StreamTransportFactory &factory,
+    storage::TorrentDataset &dataset,
+    const config::MetadataAcquisitionConfig &config,
+    std::function<void()> wake_owner) {
   if (config.storage_conflict_attempts == 0)
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
@@ -91,9 +106,10 @@ TorrentMetadataAcquisition::create(
   auto result = std::unique_ptr<TorrentMetadataAcquisition>{
       new TorrentMetadataAcquisition{dataset,
                                      config.storage_conflict_attempts}};
-  const auto runtime = metadata_runtime_config(config);
+  auto runtime = metadata_runtime_config(config);
   if (!runtime.enabled)
     return result;
+  runtime.controller.wake_owner = std::move(wake_owner);
   auto controller = dht::MetadataAcquisitionController::create(
       peer_id, factory, result->sink_, runtime.controller);
   if (!controller)

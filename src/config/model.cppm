@@ -32,6 +32,7 @@ struct MetadataAcquisitionConfig {
   std::size_t maximum_outstanding_requests{4};
   std::size_t maximum_queued_write_bytes{1024U * 1024U};
   std::size_t storage_conflict_attempts{3};
+  core::Duration storage_retry_delay{std::chrono::seconds{1}};
 };
 
 struct RoutingMaintenanceConfig {
@@ -327,6 +328,11 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.network.dht.metadata.storage_conflict_attempts = *value;
+    } else if (name == "network.dht.metadata.storage_retry_delay_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.storage_retry_delay = *value;
     } else if (name == "network.traffic.window_ms") {
       auto value = duration_ms(text, name);
       if (!value)
@@ -513,7 +519,8 @@ core::Result<void> validate(const AppConfig &config) {
       metadata.maximum_queued_write_bytes < 68 ||
       metadata.maximum_queued_write_bytes > 64U * 1024U * 1024U ||
       metadata.storage_conflict_attempts == 0 ||
-      metadata.storage_conflict_attempts > 32)
+      metadata.storage_conflict_attempts > 32 ||
+      metadata.storage_retry_delay <= core::Duration::zero())
     return std::unexpected(
         invalid("DHT metadata acquisition limits are invalid"));
   if (config.network.traffic.window <= core::Duration::zero() ||

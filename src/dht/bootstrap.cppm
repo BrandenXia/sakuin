@@ -225,7 +225,7 @@ core::Result<BootstrapStep> BootstrapPlanner::poll(core::Timestamp now) {
                     return candidate.completed ||
                            candidate.attempts >= options_.maximum_attempts;
                   });
-  if (!step.complete) {
+  if (!step.complete && capacity != 0) {
     for (const auto &candidate : candidates_) {
       if (candidate.completed || candidate.outstanding ||
           candidate.attempts >= options_.maximum_attempts)

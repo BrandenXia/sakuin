@@ -35,6 +35,7 @@ public:
 
   core::Result<bool> offer(PeerMetadataCandidate candidate);
   std::vector<MetadataFetchTicket> ready(core::Timestamp now);
+  std::optional<core::Timestamp> next_ready_at() const noexcept;
   core::Result<void> complete(std::uint64_t ticket,
                               MetadataFetchOutcome outcome,
                               core::Timestamp now);
@@ -158,6 +159,20 @@ MetadataCandidateQueue::ready(core::Timestamp now) {
     result.push_back(
         MetadataFetchTicket{.id = next_ticket_, .candidate = entry.candidate});
     in_flight_.emplace(next_ticket_, std::move(entry));
+  }
+  return result;
+}
+
+std::optional<core::Timestamp>
+MetadataCandidateQueue::next_ready_at() const noexcept {
+  if (in_flight_.size() >= options_.maximum_in_flight)
+    return std::nullopt;
+  std::optional<core::Timestamp> result;
+  for (const auto &entry : queued_) {
+    if (active_hashes_.contains(entry.candidate.info_hash))
+      continue;
+    if (!result || entry.ready_at < *result)
+      result = entry.ready_at;
   }
   return result;
 }

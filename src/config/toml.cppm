@@ -111,7 +111,8 @@ core::Result<void> parse_metadata(const toml::table &table,
            "maximum_attempts_per_peer", "initial_retry_delay_ms",
            "maximum_retry_delay_ms", "connect_timeout_ms", "idle_timeout_ms",
            "maximum_metadata_bytes", "maximum_outstanding_requests",
-           "maximum_queued_write_bytes", "storage_conflict_attempts"},
+           "maximum_queued_write_bytes", "storage_conflict_attempts",
+           "storage_retry_delay_ms"},
           "network.dht.metadata.");
       !checked)
     return checked;
@@ -146,6 +147,9 @@ core::Result<void> parse_metadata(const toml::table &table,
                              overlay),
         scalar<std::int64_t>(table, "storage_conflict_attempts",
                              "network.dht.metadata.storage_conflict_attempts",
+                             overlay),
+        scalar<std::int64_t>(table, "storage_retry_delay_ms",
+                             "network.dht.metadata.storage_retry_delay_ms",
                              overlay)})
     if (!result)
       return result;
@@ -482,6 +486,8 @@ core::Result<ConfigOverlay> environment_overlay(
        "network.dht.metadata.maximum_queued_write_bytes"},
       {"SAKUIN_DHT_METADATA_STORAGE_CONFLICT_ATTEMPTS",
        "network.dht.metadata.storage_conflict_attempts"},
+      {"SAKUIN_DHT_METADATA_STORAGE_RETRY_DELAY_MS",
+       "network.dht.metadata.storage_retry_delay_ms"},
       {"SAKUIN_TRAFFIC_WINDOW_MS", "network.traffic.window_ms"},
       {"SAKUIN_TRAFFIC_INBOUND_BYTES", "network.traffic.inbound_bytes"},
       {"SAKUIN_TRAFFIC_OUTBOUND_BYTES", "network.traffic.outbound_bytes"},

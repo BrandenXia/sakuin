@@ -276,6 +276,13 @@ target("sakuin-dht-runtime-integration-tests")
            "sakuin-dht", "sakuin-integrations")
   add_tests("dht-runtime-integration")
 
+target("sakuin-dht-runtime-worker-tests")
+  set_kind("binary")
+  add_files("tests/dht/runtime_worker.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-runtime", "sakuin-dht",
+           "sakuin-integrations")
+  add_tests("dht-runtime-worker")
+
 target("sakuin-routing-tests")
   set_kind("binary")
   add_files("tests/dht/routing.cpp")
