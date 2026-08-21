@@ -1,5 +1,6 @@
 import std;
 
+import sakuin.api.credentials;
 import sakuin.config;
 import sakuin.core;
 import sakuin.dht;
@@ -7,6 +8,7 @@ import sakuin.integration.dht_worker;
 import sakuin.model.observation;
 import sakuin.runtime;
 import sakuin.service.dht;
+import sakuin.service.api;
 import sakuin.service.local;
 import sakuin.service.runtime;
 import sakuin.service.traffic;
@@ -78,6 +80,12 @@ public:
   std::condition_variable condition;
   std::set<sakuin::runtime::AddressFamily> families;
   std::size_t errors{};
+};
+
+class ApiObserver final : public sakuin::service::ApiServiceObserver {
+public:
+  void on_api_error(sakuin::core::Error) override { ++errors; }
+  std::atomic<std::size_t> errors{};
 };
 
 struct TemporaryDirectory {
@@ -230,5 +238,24 @@ int main() {
     return 16;
   if (!(*local)->stop() || (*local)->running())
     return 17;
+
+  app_configuration.api.credential_store_directory =
+      temporary.path / "operational" / "api";
+  app_configuration.api.listen_port = local_test_port;
+  if (!api::LocalApiCredentialStore::initialize(
+          app_configuration.api.credential_store_directory))
+    return 18;
+  RuntimeObserver node_observer;
+  ApiObserver api_observer;
+  auto node = service::LocalSakuinService::create(app_configuration,
+                                                  node_observer, api_observer);
+  if (!node || !(*node)->api_endpoint() ||
+      (*node)->api_endpoint()->port != app_configuration.api.listen_port ||
+      !(*node)->start() || !node_observer.wait_for_count(1) ||
+      !(*node)->running())
+    return 19;
+  if (!(*node)->reload_api_credentials() || !(*node)->refresh_search() ||
+      !(*node)->stop() || (*node)->running() || api_observer.errors != 0)
+    return 20;
   return 0;
 }

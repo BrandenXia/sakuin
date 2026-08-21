@@ -63,7 +63,10 @@ int main() {
   if (!write || !(*write)->append(placeholder) || !(*write)->commit())
     return 2;
 
-  integration::TorrentMetadataSink sink{dataset};
+  std::atomic<std::uint64_t> notified_generation{};
+  integration::TorrentMetadataSink sink{
+      dataset, 3,
+      [&](std::uint64_t generation) { notified_generation = generation; }};
   model::TorrentRecord metadata{
       .info_hash = info_hash,
       .first_seen = core::Timestamp{core::Timestamp::duration{40}},
@@ -74,7 +77,8 @@ int main() {
                 {.path = "dir/b.bin", .size = 7}}};
   if (auto stored = sink.on_metadata_fetched(std::move(metadata)); !stored)
     return 3;
-  if (sink.last_generation() != 2 || sink.last_error())
+  if (sink.last_generation() != 2 || sink.last_error() ||
+      notified_generation != 2)
     return 4;
 
   auto snapshot = dataset.keyed_snapshot();
