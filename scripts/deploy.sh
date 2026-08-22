@@ -62,7 +62,7 @@ initialize_credentials() {
 
 wait_for_health() {
   local attempt
-  for attempt in {1..30}; do
+  for ((attempt = 1; attempt <= 30; ++attempt)); do
     if "${compose[@]}" exec -T sakuin \
       curl --fail --silent http://127.0.0.1:8080/v1/health >/dev/null 2>&1; then
       return 0
