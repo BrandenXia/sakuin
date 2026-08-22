@@ -56,7 +56,8 @@ while IFS= read -r dependency; do
   esac
   cp -L -- "${dependency}" "${staging_directory}/lib/"
 done < <(ldd "${binary_directory}/sakuin" \
-  "${binary_directory}/sakuin-api-key" | awk '/=> \/[^ ]+/ { print $3 } /^\// { print $1 }' | sort -u)
+  "${binary_directory}/sakuin-api-key" | \
+  awk '/=> \/[^ ]+/ { print $3 } /^\// && $1 !~ /:$/ { print $1 }' | sort -u)
 
 if [[ -z "$(find "${staging_directory}/lib" -mindepth 1 -print -quit)" ]]; then
   rmdir "${staging_directory}/lib"

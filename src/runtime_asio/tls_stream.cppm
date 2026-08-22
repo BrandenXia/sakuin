@@ -78,9 +78,17 @@ core::Result<Tcp::endpoint> to_asio(StreamEndpoint endpoint) {
   return Tcp::endpoint{asio::ip::address_v6{bytes}, endpoint.port};
 }
 
+X509 *peer_certificate(SSL *ssl) {
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+  return SSL_get1_peer_certificate(ssl);
+#else
+  return SSL_get_peer_certificate(ssl);
+#endif
+}
+
 core::Result<StreamPeerIdentity> certificate_identity(SSL *ssl) {
-  std::unique_ptr<X509, decltype(&X509_free)> certificate{
-      SSL_get1_peer_certificate(ssl), X509_free};
+  std::unique_ptr<X509, decltype(&X509_free)> certificate{peer_certificate(ssl),
+                                                          X509_free};
   if (!certificate)
     return std::unexpected(
         core::Error{core::ErrorCode::PermissionDenied,

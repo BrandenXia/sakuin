@@ -75,9 +75,17 @@ StreamEndpoint from_asio(const Tcp::endpoint &endpoint) {
   return result;
 }
 
+X509 *peer_certificate(SSL *ssl) {
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+  return SSL_get1_peer_certificate(ssl);
+#else
+  return SSL_get_peer_certificate(ssl);
+#endif
+}
+
 core::Result<StreamPeerIdentity> certificate_identity(SSL *ssl) {
-  std::unique_ptr<X509, decltype(&X509_free)> certificate{
-      SSL_get1_peer_certificate(ssl), X509_free};
+  std::unique_ptr<X509, decltype(&X509_free)> certificate{peer_certificate(ssl),
+                                                          X509_free};
   if (!certificate)
     return std::unexpected(
         core::Error{core::ErrorCode::PermissionDenied,
@@ -127,6 +135,8 @@ core::Result<void> validate(const StreamServerOptions &transport,
                                        "Invalid TLS stream server options"});
   return {};
 }
+
+} // namespace
 
 class AsioTlsStreamSession final
     : public StreamServerSession,
@@ -350,8 +360,6 @@ private:
   bool opened_{};
   bool writing_{};
 };
-
-} // namespace
 
 struct AsioTlsStreamServer::Impl {
   Impl(StreamServerOptions configured, StreamTlsServerOptions secure)

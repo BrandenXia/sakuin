@@ -80,6 +80,21 @@ struct RowV1BloomData {
   core::ByteBuffer bits;
 };
 
+struct BlockInfo {
+  std::uint64_t payload_offset{};
+  std::uint32_t record_count{};
+  std::uint32_t uncompressed_size{};
+  std::uint32_t compressed_size{};
+  CompressionCodec compression{};
+  std::uint32_t checksum{};
+  std::uint64_t first_ordinal{};
+};
+
+struct SparseIndexEntry {
+  core::ByteBuffer key;
+  std::uint32_t block{};
+};
+
 namespace {
 
 constexpr std::size_t LegacyHeaderSize = 24;
@@ -215,21 +230,6 @@ core::SegmentId segment_id(core::ObjectId object) {
   std::copy_n(object.bytes.begin(), id.bytes.size(), id.bytes.begin());
   return id;
 }
-
-struct BlockInfo {
-  std::uint64_t payload_offset{};
-  std::uint32_t record_count{};
-  std::uint32_t uncompressed_size{};
-  std::uint32_t compressed_size{};
-  CompressionCodec compression{};
-  std::uint32_t checksum{};
-  std::uint64_t first_ordinal{};
-};
-
-struct SparseIndexEntry {
-  core::ByteBuffer key;
-  std::uint32_t block{};
-};
 
 std::strong_ordering compare_bytes(core::ByteView left,
                                    core::ByteView right) noexcept {

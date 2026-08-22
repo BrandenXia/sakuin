@@ -82,6 +82,8 @@ api::HttpResponse plain_response(unsigned status, std::string_view message) {
           .body = {view.begin(), view.end()}};
 }
 
+} // namespace
+
 template <typename Stream>
 class HttpSession final
     : public std::enable_shared_from_this<HttpSession<Stream>> {
@@ -243,6 +245,8 @@ private:
   bool closed_{};
   std::function<void()> on_done_;
 };
+
+namespace {
 
 core::Result<void> validate(const HttpServerOptions &options) {
   if (options.maximum_connections == 0)

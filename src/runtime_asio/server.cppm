@@ -94,6 +94,8 @@ core::Result<void> validate(const StreamServerOptions &options) {
   return {};
 }
 
+} // namespace
+
 class AsioTcpStreamSession final
     : public StreamServerSession,
       public std::enable_shared_from_this<AsioTcpStreamSession> {
@@ -292,8 +294,6 @@ private:
   std::atomic<std::size_t> queued_bytes_{};
   bool writing_{};
 };
-
-} // namespace
 
 struct AsioTcpStreamServer::Impl {
   explicit Impl(StreamServerOptions configured)

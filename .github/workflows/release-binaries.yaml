@@ -38,8 +38,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            build-essential clang clang-tools cmake libc++-dev libc++abi-dev \
-            lld ninja-build perl pkg-config shellcheck
+            build-essential clang-20 clang-tools-20 cmake \
+            libc++-20-dev libc++abi-20-dev lld-20 ninja-build perl \
+            pkg-config shellcheck unzip zip
 
       - name: Validate deployment files
         run: |
@@ -53,7 +54,12 @@ jobs:
 
       - name: Build release binaries
         run: |
-          xmake f --yes --mode=release --toolchain=clang --runtimes=c++_shared
+          xmake f --yes --mode=release --toolchain=clang-20 \
+            --cc=/usr/lib/llvm-20/bin/clang \
+            --cxx=/usr/lib/llvm-20/bin/clang++ \
+            --ld=/usr/lib/llvm-20/bin/clang++ \
+            --sh=/usr/lib/llvm-20/bin/clang++ \
+            --sdk=/usr/lib/llvm-20 --runtimes=c++_shared
           xmake build --yes --jobs=2 sakuin
           xmake build --yes --jobs=2 sakuin-api-key
 
