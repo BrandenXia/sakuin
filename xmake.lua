@@ -517,6 +517,12 @@ target("sakuin-work-coordinator-tests")
   add_deps("sakuin-core", "sakuin-runtime", "sakuin-scheduler")
   add_tests("work-coordinator")
 
+target("sakuin-work-recovery-tests")
+  set_kind("binary")
+  add_files("tests/scheduler/recovery.cpp")
+  add_deps("sakuin-core", "sakuin-runtime", "sakuin-scheduler")
+  add_tests("work-recovery")
+
 target("sakuin-work-worker-tests")
   set_kind("binary")
   add_files("tests/scheduler/worker.cpp")

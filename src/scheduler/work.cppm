@@ -85,6 +85,30 @@ struct WorkCoordinatorSnapshot {
   std::size_t workers{};
 };
 
+// Recoverable operational state deliberately excludes live workers and lease
+// ownership. A leased entry is checkpointed as pending (or failed when its
+// attempt budget is exhausted), so process loss safely yields at-least-once
+// execution without pretending ephemeral worker state is canonical.
+enum class WorkRecoveryState : std::uint8_t { Pending, Succeeded, Failed };
+
+struct WorkRecoveryEntry {
+  WorkItem item;
+  WorkRecoveryState state{WorkRecoveryState::Pending};
+  std::uint64_t sequence{};
+  std::uint32_t attempts{};
+
+  friend bool operator==(const WorkRecoveryEntry &,
+                         const WorkRecoveryEntry &) = default;
+};
+
+struct WorkRecoverySnapshot {
+  std::uint64_t next_sequence{};
+  std::vector<WorkRecoveryEntry> entries;
+
+  friend bool operator==(const WorkRecoverySnapshot &,
+                         const WorkRecoverySnapshot &) = default;
+};
+
 WorkId content_work_id(core::ByteView material);
 WorkId content_work_result_id(WorkResultKind kind, core::ByteView payload);
 
@@ -119,6 +143,8 @@ class LocalWorkCoordinator final : public WorkCoordinator {
 public:
   static core::Result<std::unique_ptr<LocalWorkCoordinator>>
   create(WorkCoordinatorOptions options = {});
+  static core::Result<std::unique_ptr<LocalWorkCoordinator>>
+  create(WorkCoordinatorOptions options, WorkRecoverySnapshot recovery);
 
   core::Result<bool> submit(WorkItem item) override;
   core::Result<bool> register_worker(WorkerDescriptor worker,
@@ -138,6 +164,7 @@ public:
   core::Result<void> unregister_worker(std::string_view worker,
                                        core::Timestamp now) override;
   core::Result<WorkCoordinatorSnapshot> snapshot(core::Timestamp now) override;
+  WorkRecoverySnapshot recovery_snapshot() const;
 
 private:
   enum class State : std::uint8_t { Pending, Leased, Succeeded, Failed };
@@ -163,7 +190,7 @@ private:
   core::Result<Entry *> active_lease(std::string_view worker, LeaseId lease);
 
   WorkCoordinatorOptions options_;
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
   std::map<WorkId, Entry> work_;
   std::map<std::string, Worker, std::less<>> workers_;
   std::uint64_t next_sequence_{};
@@ -213,6 +240,71 @@ LocalWorkCoordinator::create(WorkCoordinatorOptions options) {
                     "Work coordinator limits and durations must be positive"});
   return std::unique_ptr<LocalWorkCoordinator>{
       new LocalWorkCoordinator{options}};
+}
+
+core::Result<std::unique_ptr<LocalWorkCoordinator>>
+LocalWorkCoordinator::create(WorkCoordinatorOptions options,
+                             WorkRecoverySnapshot recovery) {
+  auto coordinator = create(options);
+  if (!coordinator)
+    return std::unexpected(coordinator.error());
+  if (recovery.entries.size() > options.maximum_work_items)
+    return std::unexpected(core::Error{
+        core::ErrorCode::QuotaExceeded,
+        "Recovered work exceeds the configured coordinator item limit"});
+
+  std::set<std::uint64_t> sequences;
+  std::uint64_t maximum_sequence{};
+  for (auto &recovered : recovery.entries) {
+    const auto work_class =
+        static_cast<std::uint8_t>(recovered.item.work_class);
+    const auto state = static_cast<std::uint8_t>(recovered.state);
+    if (work_class > static_cast<std::uint8_t>(WorkClass::Compaction) ||
+        state > static_cast<std::uint8_t>(WorkRecoveryState::Failed) ||
+        recovered.item.payload.size() > options.maximum_payload_bytes ||
+        recovered.item.maximum_attempts == 0 ||
+        recovered.attempts > recovered.item.maximum_attempts ||
+        recovered.sequence == 0 || !sequences.insert(recovered.sequence).second)
+      return std::unexpected(
+          core::Error{core::ErrorCode::InvalidArgument,
+                      "Recovered work entry violates coordinator invariants"});
+    if (recovered.state == WorkRecoveryState::Pending &&
+        recovered.attempts >= recovered.item.maximum_attempts)
+      return std::unexpected(core::Error{
+          core::ErrorCode::InvalidArgument,
+          "Recovered pending work has exhausted its attempt budget"});
+
+    State internal = State::Pending;
+    switch (recovered.state) {
+    case WorkRecoveryState::Pending:
+      internal = State::Pending;
+      break;
+    case WorkRecoveryState::Succeeded:
+      internal = State::Succeeded;
+      break;
+    case WorkRecoveryState::Failed:
+      internal = State::Failed;
+      break;
+    }
+    const auto id = recovered.item.id;
+    auto [_, inserted] =
+        (*coordinator)
+            ->work_.emplace(id, Entry{.item = std::move(recovered.item),
+                                      .state = internal,
+                                      .sequence = recovered.sequence,
+                                      .attempts = recovered.attempts});
+    if (!inserted)
+      return std::unexpected(
+          core::Error{core::ErrorCode::Conflict,
+                      "Recovered work contains a duplicate work identity"});
+    maximum_sequence = std::max(maximum_sequence, recovered.sequence);
+  }
+  if (recovery.next_sequence < maximum_sequence)
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidArgument,
+                    "Recovered work sequence watermark is invalid"});
+  (*coordinator)->next_sequence_ = recovery.next_sequence;
+  return coordinator;
 }
 
 core::Result<bool> LocalWorkCoordinator::submit(WorkItem item) {
@@ -450,6 +542,38 @@ LocalWorkCoordinator::snapshot(core::Timestamp now) {
       ++result.failed;
       break;
     }
+  }
+  return result;
+}
+
+WorkRecoverySnapshot LocalWorkCoordinator::recovery_snapshot() const {
+  std::lock_guard lock{mutex_};
+  WorkRecoverySnapshot result{.next_sequence = next_sequence_};
+  result.entries.reserve(work_.size());
+  for (const auto &[_, entry] : work_) {
+    WorkRecoveryState state = WorkRecoveryState::Pending;
+    switch (entry.state) {
+    case State::Pending:
+      state = entry.attempts >= entry.item.maximum_attempts
+                  ? WorkRecoveryState::Failed
+                  : WorkRecoveryState::Pending;
+      break;
+    case State::Leased:
+      state = entry.attempts >= entry.item.maximum_attempts
+                  ? WorkRecoveryState::Failed
+                  : WorkRecoveryState::Pending;
+      break;
+    case State::Succeeded:
+      state = WorkRecoveryState::Succeeded;
+      break;
+    case State::Failed:
+      state = WorkRecoveryState::Failed;
+      break;
+    }
+    result.entries.push_back({.item = entry.item,
+                              .state = state,
+                              .sequence = entry.sequence,
+                              .attempts = entry.attempts});
   }
   return result;
 }

@@ -10,6 +10,7 @@ import sakuin.runtime.datagram;
 import sakuin.runtime.stream;
 import sakuin.runtime.traffic;
 import sakuin.scheduler.traffic;
+import sakuin.scheduler.recovery;
 import sakuin.scheduler.work;
 import sakuin.search.rebuild;
 import sakuin.service.api;
@@ -50,13 +51,13 @@ public:
 
 private:
   LocalAsioDhtService(std::unique_ptr<LocalCanonicalStorage> storage,
-                      std::unique_ptr<scheduler::LocalWorkCoordinator> work,
+                      std::unique_ptr<scheduler::WorkCoordinator> work,
                       std::unique_ptr<AsioDhtRuntime> runtime)
       : storage_(std::move(storage)), work_(std::move(work)),
         runtime_(std::move(runtime)) {}
 
   std::unique_ptr<LocalCanonicalStorage> storage_;
-  std::unique_ptr<scheduler::LocalWorkCoordinator> work_;
+  std::unique_ptr<scheduler::WorkCoordinator> work_;
   std::unique_ptr<AsioDhtRuntime> runtime_;
 };
 
@@ -112,7 +113,7 @@ private:
       std::unique_ptr<TorrentMaterializationCoordinator> materialization,
       std::unique_ptr<DuplicateIndexCoordinator> duplicates,
       std::unique_ptr<StorageMaintenanceCoordinator> maintenance,
-      std::unique_ptr<scheduler::LocalWorkCoordinator> work,
+      std::unique_ptr<scheduler::WorkCoordinator> work,
       std::unique_ptr<runtime::TrafficGovernor> aggregate_traffic,
       std::unique_ptr<scheduler::GovernorTrafficGrantSource> traffic_grants,
       std::unique_ptr<scheduler::GrantedTrafficGovernor> local_traffic,
@@ -132,7 +133,7 @@ private:
   std::unique_ptr<TorrentMaterializationCoordinator> materialization_;
   std::unique_ptr<DuplicateIndexCoordinator> duplicates_;
   std::unique_ptr<StorageMaintenanceCoordinator> maintenance_;
-  std::unique_ptr<scheduler::LocalWorkCoordinator> work_;
+  std::unique_ptr<scheduler::WorkCoordinator> work_;
   std::unique_ptr<runtime::TrafficGovernor> aggregate_traffic_;
   std::unique_ptr<scheduler::GovernorTrafficGrantSource> traffic_grants_;
   std::unique_ptr<scheduler::GrantedTrafficGovernor> local_traffic_;
@@ -145,13 +146,28 @@ private:
 namespace sakuin::service {
 namespace {
 
-core::Result<std::unique_ptr<scheduler::LocalWorkCoordinator>>
-create_local_work_coordinator(const config::DistributedConfig &configuration) {
-  return scheduler::LocalWorkCoordinator::create(
-      {.maximum_work_items = configuration.maximum_work_items,
-       .maximum_payload_bytes = configuration.maximum_payload_bytes,
-       .worker_timeout = configuration.worker_timeout,
-       .lease_duration = configuration.lease_duration});
+core::Result<std::unique_ptr<scheduler::WorkCoordinator>>
+create_local_work_coordinator(const config::AppConfig &configuration) {
+  const scheduler::WorkCoordinatorOptions options{
+      .maximum_work_items = configuration.distributed.maximum_work_items,
+      .maximum_payload_bytes = configuration.distributed.maximum_payload_bytes,
+      .worker_timeout = configuration.distributed.worker_timeout,
+      .lease_duration = configuration.distributed.lease_duration};
+  const auto &recovery = configuration.distributed.coordinator;
+  if (!recovery.recovery_enabled) {
+    auto created = scheduler::LocalWorkCoordinator::create(options);
+    if (!created)
+      return std::unexpected(created.error());
+    return std::unique_ptr<scheduler::WorkCoordinator>{std::move(*created)};
+  }
+  auto path = recovery.recovery_file.value_or(configuration.storage.local_root /
+                                              "operational" / "scheduler" /
+                                              "work.checkpoint");
+  auto created = scheduler::RecoveringWorkCoordinator::open_local(
+      options, std::move(path), recovery.recovery_maximum_bytes);
+  if (!created)
+    return std::unexpected(created.error());
+  return std::unique_ptr<scheduler::WorkCoordinator>{std::move(*created)};
 }
 
 } // namespace
@@ -165,7 +181,7 @@ LocalAsioDhtService::create(const config::AppConfig &configuration,
   auto storage = LocalCanonicalStorage::open(configuration.storage);
   if (!storage)
     return std::unexpected(storage.error());
-  auto work = create_local_work_coordinator(configuration.distributed);
+  auto work = create_local_work_coordinator(configuration);
   if (!work)
     return std::unexpected(work.error());
   auto runtime =
@@ -210,7 +226,7 @@ core::Result<std::unique_ptr<LocalSakuinService>> LocalSakuinService::create(
   auto storage = LocalCanonicalStorage::open(configuration.storage);
   if (!storage)
     return std::unexpected(storage.error());
-  auto work = create_local_work_coordinator(configuration.distributed);
+  auto work = create_local_work_coordinator(configuration);
   if (!work)
     return std::unexpected(work.error());
 
