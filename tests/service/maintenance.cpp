@@ -2,7 +2,9 @@ import std;
 
 import sakuin.config;
 import sakuin.core;
+import sakuin.integration.work_results;
 import sakuin.model.observation;
+import sakuin.scheduler;
 import sakuin.service.maintenance;
 import sakuin.service.storage;
 
@@ -80,6 +82,24 @@ int main() {
   }
   if (!(*storage)->flush())
     return 3;
+  std::vector<scheduler::WorkResultBatch> result_batches;
+  for (std::uint8_t marker = 0; marker < 3; ++marker) {
+    model::ObservationRecord remote_record;
+    remote_record.info_hash.bytes.front() = marker + 10;
+    remote_record.observed_at =
+        core::Timestamp{std::chrono::seconds{marker + 10}};
+    auto payload = integration::encode_observation_result_batch(
+        std::span{&remote_record, std::size_t{1}});
+    if (!payload)
+      return 8;
+    auto batch = integration::make_work_result_batch(
+        scheduler::WorkResultKind::ObservationBatch, std::move(*payload));
+    auto published =
+        (*storage)->work_results().publish_result("worker-1", batch);
+    if (!published || !*published)
+      return 10;
+    result_batches.push_back(std::move(batch));
+  }
 
   Observer observer;
   std::atomic<std::uint64_t> observation_generation{};
@@ -96,6 +116,10 @@ int main() {
     return 5;
   if (observation_generation == 0)
     return 6;
+  auto replay = (*storage)->work_results().publish_result(
+      "worker-1", result_batches.front());
+  if (!replay || *replay)
+    return 9;
 
   std::lock_guard lock{observer.mutex};
   if (!observer.errors.empty() ||
@@ -113,8 +137,23 @@ int main() {
             return event.dataset == service::LocalDataset::Observations &&
                    event.operation == service::MaintenanceOperation::Retention;
           }) ||
+      !std::ranges::any_of(
+          observer.events,
+          [](const auto &event) {
+            return event.dataset == service::LocalDataset::Observations &&
+                   event.operation ==
+                       service::MaintenanceOperation::GarbageCollection;
+          }) ||
+      !std::ranges::any_of(
+          observer.events,
+          [](const auto &event) {
+            return event.dataset == service::LocalDataset::WorkResults &&
+                   event.operation ==
+                       service::MaintenanceOperation::Compaction &&
+                   event.segments_affected >= 2;
+          }) ||
       !std::ranges::any_of(observer.events, [](const auto &event) {
-        return event.dataset == service::LocalDataset::Observations &&
+        return event.dataset == service::LocalDataset::WorkResults &&
                event.operation ==
                    service::MaintenanceOperation::GarbageCollection;
       }))

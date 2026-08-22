@@ -19,7 +19,7 @@ import sakuin.storage.format.segment;
 
 export namespace sakuin::integration {
 
-inline constexpr storage::SchemaId WorkResultBatchSchema{100};
+inline constexpr storage::SchemaId WorkResultReceiptSchema{100};
 
 struct WorkResultReceipt {
   scheduler::WorkId id;
@@ -96,6 +96,7 @@ private:
   storage::SegmentHeader header_;
   mutable std::mutex mutex_;
   mutable bool index_loaded_{};
+  mutable std::uint64_t indexed_generation_{};
   mutable std::map<scheduler::WorkId, scheduler::WorkResultKind> index_;
 };
 
@@ -193,73 +194,101 @@ constexpr std::array<core::Byte, 8> TorrentMetadataBatchMagic{
     core::Byte{'S'}, core::Byte{'A'}, core::Byte{'K'}, core::Byte{'M'},
     core::Byte{'T'}, core::Byte{'D'}, core::Byte{'1'}, core::Byte{0}};
 
-core::Result<core::ByteBuffer>
-encode_result(const scheduler::WorkResultBatch &result) {
-  if (result.payload.empty() ||
-      result.payload.size() > std::numeric_limits<std::uint32_t>::max())
-    return std::unexpected(core::Error{core::ErrorCode::InvalidArgument,
-                                       "Work-result payload is invalid"});
+bool valid_result_kind(std::uint8_t kind) {
+  return kind >= static_cast<std::uint8_t>(
+                     scheduler::WorkResultKind::ObservationBatch) &&
+         kind <= static_cast<std::uint8_t>(
+                     scheduler::WorkResultKind::TorrentMetadataBatch);
+}
+
+core::ByteBuffer encode_receipt(const WorkResultReceipt &receipt) {
   core::ByteBuffer encoded;
-  encoded.reserve(21 + result.payload.size());
-  for (const auto byte : result.id.bytes)
+  encoded.reserve(17);
+  for (const auto byte : receipt.id.bytes)
     encoded.push_back(static_cast<std::byte>(byte));
-  encoded.push_back(static_cast<std::byte>(result.kind));
-  append_u32(encoded, static_cast<std::uint32_t>(result.payload.size()));
-  encoded.insert(encoded.end(), result.payload.begin(), result.payload.end());
+  encoded.push_back(static_cast<std::byte>(receipt.kind));
   return encoded;
 }
 
-core::Result<scheduler::WorkResultBatch> decode_result(core::ByteView encoded) {
-  if (encoded.size() < 21)
+core::Result<WorkResultReceipt> decode_receipt(core::ByteView encoded,
+                                               std::uint32_t schema_version) {
+  if ((schema_version == 1 && encoded.size() < 21) ||
+      (schema_version == 2 && encoded.size() != 17))
     return std::unexpected(core::Error{core::ErrorCode::CorruptSegment,
-                                       "Work-result record is truncated"});
-  scheduler::WorkResultBatch result;
-  for (std::size_t index = 0; index < result.id.bytes.size(); ++index)
-    result.id.bytes[index] = std::to_integer<std::uint8_t>(encoded[index]);
+                                       "Work-result receipt size is invalid"});
+  WorkResultReceipt receipt;
+  for (std::size_t index = 0; index < receipt.id.bytes.size(); ++index)
+    receipt.id.bytes[index] = std::to_integer<std::uint8_t>(encoded[index]);
   const auto kind = std::to_integer<std::uint8_t>(encoded[16]);
-  if (kind < static_cast<std::uint8_t>(
-                 scheduler::WorkResultKind::ObservationBatch) ||
-      kind > static_cast<std::uint8_t>(
-                 scheduler::WorkResultKind::TorrentMetadataBatch))
+  if (!valid_result_kind(kind))
     return std::unexpected(core::Error{core::ErrorCode::CorruptSegment,
                                        "Work-result kind is invalid"});
-  result.kind = static_cast<scheduler::WorkResultKind>(kind);
+  receipt.kind = static_cast<scheduler::WorkResultKind>(kind);
+  if (schema_version == 2)
+    return receipt;
+
+  // Schema v1 stored the entire result payload. Read and validate it during
+  // migration so a corrupt legacy receipt cannot suppress canonical data.
   std::size_t position = 17;
   auto size = read_u32(encoded, position);
   if (!size || *size == 0 || encoded.size() - position != *size)
     return std::unexpected(size ? core::Error{core::ErrorCode::CorruptSegment,
                                               "Work-result length is invalid"}
                                 : size.error());
-  result.payload.assign(encoded.begin() + position, encoded.end());
+  const auto payload = encoded.subspan(position, *size);
   const auto expected =
-      scheduler::content_work_result_id(result.kind, result.payload);
-  if (expected != result.id)
+      scheduler::content_work_result_id(receipt.kind, payload);
+  if (expected != receipt.id)
     return std::unexpected(core::Error{core::ErrorCode::ChecksumMismatch,
                                        "Work-result content id is invalid"});
-  return result;
+  return receipt;
 }
 
-core::Result<scheduler::WorkResultBatch>
-read_segment(storage::BlobStore &blobs,
-             const storage::SegmentDescriptor &descriptor) {
+core::Result<std::vector<WorkResultReceipt>>
+read_receipt_segment(storage::BlobStore &blobs,
+                     const storage::SegmentDescriptor &descriptor) {
   if (descriptor.encoding != storage::SegmentEncoding::RowV1 ||
-      descriptor.schema_id != WorkResultBatchSchema ||
-      descriptor.schema_version.value != 1 || descriptor.record_count != 1)
+      descriptor.schema_id != WorkResultReceiptSchema ||
+      (descriptor.schema_version.value != 1 &&
+       descriptor.schema_version.value != 2) ||
+      (descriptor.schema_version.value == 1 && descriptor.record_count != 1))
     return std::unexpected(
         core::Error{core::ErrorCode::UnsupportedFormat,
                     "Work-result inbox segment uses an unsupported schema"});
   auto reader = storage::RowV1SegmentReader::open(blobs, descriptor.object);
   if (!reader)
     return std::unexpected(reader.error());
+  const auto &header = (*reader)->header();
+  if (header.format_version != descriptor.format_version ||
+      header.schema_id != descriptor.schema_id ||
+      header.schema_version != descriptor.schema_version ||
+      header.encoding != descriptor.encoding ||
+      header.tier != descriptor.tier ||
+      header.compression != descriptor.compression)
+    return std::unexpected(core::Error{
+        core::ErrorCode::CorruptSegment,
+        "Work-result manifest metadata does not match its segment"});
   if (auto verified = (*reader)->verify(); !verified)
     return std::unexpected(verified.error());
-  auto location = (*reader)->location(0);
-  if (!location)
-    return std::unexpected(location.error());
-  auto encoded = (*reader)->read(*location);
-  if (!encoded)
-    return std::unexpected(encoded.error());
-  return decode_result(*encoded);
+  if ((*reader)->record_count() != descriptor.record_count)
+    return std::unexpected(core::Error{core::ErrorCode::CorruptSegment,
+                                       "Work-result receipt count differs"});
+  std::vector<WorkResultReceipt> receipts;
+  receipts.reserve(static_cast<std::size_t>(descriptor.record_count));
+  for (std::uint64_t ordinal = 0; ordinal < descriptor.record_count;
+       ++ordinal) {
+    auto location = (*reader)->location(ordinal);
+    if (!location)
+      return std::unexpected(location.error());
+    auto encoded = (*reader)->read(*location);
+    if (!encoded)
+      return std::unexpected(encoded.error());
+    auto receipt = decode_receipt(*encoded, descriptor.schema_version.value);
+    if (!receipt)
+      return std::unexpected(receipt.error());
+    receipts.push_back(*receipt);
+  }
+  return receipts;
 }
 
 } // namespace
@@ -448,8 +477,8 @@ CanonicalWorkResultInbox::CanonicalWorkResultInbox(
     storage::SegmentHeader header)
     : blobs_(&blobs), catalog_(&catalog), header_(header) {
   header_.format_version = {1, 1};
-  header_.schema_id = WorkResultBatchSchema;
-  header_.schema_version = {1};
+  header_.schema_id = WorkResultReceiptSchema;
+  header_.schema_version = {2};
   header_.encoding = storage::SegmentEncoding::RowV1;
   header_.tier = storage::SegmentTier::Hot;
 }
@@ -460,18 +489,19 @@ CanonicalWorkResultInbox::publish_result(std::string_view worker,
   if (worker.empty() || worker.size() > 128)
     return std::unexpected(core::Error{core::ErrorCode::InvalidArgument,
                                        "Work-result worker id is invalid"});
-  auto encoded = encode_result(batch);
-  if (!encoded)
-    return std::unexpected(encoded.error());
-  auto decoded = decode_result(*encoded);
-  if (!decoded)
-    return std::unexpected(decoded.error());
+  if (!valid_result_kind(static_cast<std::uint8_t>(batch.kind)) ||
+      batch.payload.empty() ||
+      batch.id != scheduler::content_work_result_id(batch.kind, batch.payload))
+    return std::unexpected(core::Error{core::ErrorCode::ChecksumMismatch,
+                                       "Work-result content id is invalid"});
+  const WorkResultReceipt receipt{.id = batch.id, .kind = batch.kind};
+  const auto encoded = encode_receipt(receipt);
 
   std::lock_guard lock{mutex_};
   if (auto indexed = load_index_locked(); !indexed)
     return std::unexpected(indexed.error());
   if (const auto found = index_.find(batch.id); found != index_.end()) {
-    if (found->second == batch)
+    if (found->second == batch.kind)
       return false;
     return std::unexpected(core::Error{
         core::ErrorCode::Conflict,
@@ -484,79 +514,156 @@ CanonicalWorkResultInbox::publish_result(std::string_view worker,
   auto writer = storage::RowV1SegmentWriter::create(*blobs_, header_);
   if (!writer)
     return std::unexpected(writer.error());
-  if (auto appended = (*writer)->append(*encoded); !appended)
+  if (auto appended = (*writer)->append(encoded); !appended)
     return std::unexpected(appended.error());
   auto descriptor = (*writer)->finalize();
   if (!descriptor)
     return std::unexpected(descriptor.error());
-  auto verified = read_segment(*blobs_, *descriptor);
-  if (!verified)
-    return std::unexpected(verified.error());
+  auto verified = read_receipt_segment(*blobs_, *descriptor);
+  if (!verified || verified->size() != 1 || verified->front() != receipt)
+    return std::unexpected(
+        verified ? core::Error{core::ErrorCode::CorruptSegment,
+                               "Work-result receipt verification failed"}
+                 : verified.error());
   auto segments = (*base)->manifest().segments;
   segments.push_back(*descriptor);
   auto published =
       catalog_->publish((*base)->manifest().id, std::move(segments));
   if (!published)
     return std::unexpected(published.error());
-  index_.emplace(batch.id, std::move(batch));
+  index_.emplace(batch.id, batch.kind);
+  indexed_generation_ = published->generation;
   return true;
 }
 
 core::Result<void> CanonicalWorkResultInbox::load_index_locked() const {
-  if (index_loaded_)
+  const auto current = catalog_->current_id().generation;
+  if (index_loaded_ && indexed_generation_ == current)
     return {};
   auto pin = catalog_->pin_current();
   if (!pin)
     return std::unexpected(pin.error());
-  std::map<scheduler::WorkId, scheduler::WorkResultBatch> loaded;
+  std::map<scheduler::WorkId, scheduler::WorkResultKind> loaded;
   for (const auto &segment : (*pin)->manifest().segments) {
-    auto result = read_segment(*blobs_, segment);
-    if (!result)
-      return std::unexpected(result.error());
-    const auto [found, inserted] = loaded.emplace(result->id, *result);
-    if (!inserted && found->second != *result)
-      return std::unexpected(
-          core::Error{core::ErrorCode::Conflict,
-                      "Work-result inbox contains a conflicting content id"});
+    auto receipts = read_receipt_segment(*blobs_, segment);
+    if (!receipts)
+      return std::unexpected(receipts.error());
+    for (const auto &receipt : *receipts) {
+      const auto [found, inserted] = loaded.emplace(receipt.id, receipt.kind);
+      if (!inserted && found->second != receipt.kind)
+        return std::unexpected(
+            core::Error{core::ErrorCode::Conflict,
+                        "Work-result inbox contains a conflicting content id"});
+    }
   }
   index_ = std::move(loaded);
   index_loaded_ = true;
+  indexed_generation_ = (*pin)->manifest().id.generation;
   return {};
 }
 
-core::Result<std::vector<scheduler::WorkResultBatch>>
-CanonicalWorkResultInbox::scan() const {
+core::Result<std::vector<WorkResultReceipt>>
+CanonicalWorkResultInbox::scan_receipts() const {
   std::lock_guard lock{mutex_};
-  auto pin = catalog_->pin_current();
-  if (!pin)
-    return std::unexpected(pin.error());
-  std::vector<scheduler::WorkResultBatch> results;
-  results.reserve((*pin)->manifest().segments.size());
-  for (const auto &segment : (*pin)->manifest().segments) {
-    auto result = read_segment(*blobs_, segment);
-    if (!result)
-      return std::unexpected(result.error());
-    results.push_back(std::move(*result));
-  }
-  return results;
+  if (auto indexed = load_index_locked(); !indexed)
+    return std::unexpected(indexed.error());
+  std::vector<WorkResultReceipt> receipts;
+  receipts.reserve(index_.size());
+  for (const auto &[id, kind] : index_)
+    receipts.push_back({.id = id, .kind = kind});
+  return receipts;
 }
 
 core::Result<bool> CanonicalWorkResultInbox::contains(
     const scheduler::WorkResultBatch &batch) const {
-  if (batch.id != scheduler::content_work_result_id(batch.kind, batch.payload))
+  if (!valid_result_kind(static_cast<std::uint8_t>(batch.kind)) ||
+      batch.payload.empty() ||
+      batch.id != scheduler::content_work_result_id(batch.kind, batch.payload))
     return std::unexpected(core::Error{core::ErrorCode::ChecksumMismatch,
                                        "Work-result content id is invalid"});
   std::lock_guard lock{mutex_};
   if (auto indexed = load_index_locked(); !indexed)
     return std::unexpected(indexed.error());
   if (const auto found = index_.find(batch.id); found != index_.end()) {
-    if (found->second == batch)
+    if (found->second == batch.kind)
       return true;
     return std::unexpected(
         core::Error{core::ErrorCode::Conflict,
-                    "Work-result id is associated with different content"});
+                    "Work-result id is associated with a different kind"});
   }
   return false;
+}
+
+core::Result<storage::CompactionResult>
+CanonicalWorkResultInbox::compact(const storage::CompactionPolicy &policy) {
+  if (policy.minimum_segment_count < 2 || policy.target_block_size == 0)
+    return std::unexpected(core::Error{
+        core::ErrorCode::InvalidArgument,
+        "Receipt compaction requires at least two segments and a nonzero "
+        "block size"});
+
+  std::lock_guard lock{mutex_};
+  if (auto indexed = load_index_locked(); !indexed)
+    return std::unexpected(indexed.error());
+  auto base = catalog_->pin_current();
+  if (!base)
+    return std::unexpected(base.error());
+  const auto &manifest = (*base)->manifest();
+  if (manifest.segments.empty())
+    return storage::CompactionResult{.source_generation =
+                                         manifest.id.generation};
+  const bool has_legacy = std::ranges::any_of(
+      manifest.segments, [](const storage::SegmentDescriptor &segment) {
+        return segment.schema_version.value == 1;
+      });
+  if (!has_legacy && manifest.segments.size() < policy.minimum_segment_count)
+    return storage::CompactionResult{.source_generation =
+                                         manifest.id.generation};
+
+  auto output_header = header_;
+  output_header.target_block_size = policy.target_block_size;
+  output_header.compression = policy.compression;
+  auto writer = storage::RowV1SegmentWriter::create(
+      *blobs_, output_header,
+      storage::RowV1WriterOptions{.compression_level =
+                                      policy.compression_level});
+  if (!writer)
+    return std::unexpected(writer.error());
+  std::uint64_t bytes_before{};
+  for (const auto &segment : manifest.segments)
+    bytes_before += segment.physical_size;
+  for (const auto &[id, kind] : index_) {
+    const auto encoded = encode_receipt({.id = id, .kind = kind});
+    if (auto appended = (*writer)->append(encoded); !appended) {
+      (*writer)->abort();
+      return std::unexpected(appended.error());
+    }
+  }
+  auto replacement = (*writer)->finalize();
+  if (!replacement)
+    return std::unexpected(replacement.error());
+  auto verified = read_receipt_segment(*blobs_, *replacement);
+  if (!verified || verified->size() != index_.size())
+    return std::unexpected(
+        verified ? core::Error{core::ErrorCode::CorruptSegment,
+                               "Compacted receipt set is incomplete"}
+                 : verified.error());
+  for (const auto &receipt : *verified) {
+    const auto found = index_.find(receipt.id);
+    if (found == index_.end() || found->second != receipt.kind)
+      return std::unexpected(
+          core::Error{core::ErrorCode::CorruptSegment,
+                      "Compacted receipt set contains an unexpected identity"});
+  }
+  auto published = catalog_->publish(manifest.id, {*replacement});
+  if (!published)
+    return std::unexpected(published.error());
+  indexed_generation_ = published->generation;
+  return storage::CompactionResult{.source_generation = published->generation,
+                                   .segments_created = 1,
+                                   .segments_removed = manifest.segments.size(),
+                                   .bytes_before = bytes_before,
+                                   .bytes_after = replacement->physical_size};
 }
 
 CanonicalObservationResultPublisher::CanonicalObservationResultPublisher(

@@ -141,7 +141,8 @@ void StorageMaintenanceCoordinator::notify_error(LocalDataset dataset,
 
 void StorageMaintenanceCoordinator::run_once(bool perform_verification) {
   constexpr std::array datasets{LocalDataset::Observations,
-                                LocalDataset::Torrents};
+                                LocalDataset::Torrents,
+                                LocalDataset::WorkResults};
   for (const auto dataset : datasets) {
     if (dataset == LocalDataset::Observations) {
       auto retained =
@@ -182,8 +183,8 @@ void StorageMaintenanceCoordinator::run_once(bool perform_verification) {
               .segments_affected = compacted->segments_removed,
               .bytes_before = compacted->bytes_before,
               .bytes_after = compacted->bytes_after});
-    if (compacted && compacted->segments_removed != 0 &&
-        on_dataset_committed_) {
+    if (dataset != LocalDataset::WorkResults && compacted &&
+        compacted->segments_removed != 0 && on_dataset_committed_) {
       try {
         on_dataset_committed_(dataset, compacted->source_generation);
       } catch (...) {
