@@ -46,6 +46,29 @@ private:
   std::vector<sakuin::core::Error> errors_;
 };
 
+class ResultPublisher final : public sakuin::scheduler::WorkResultPublisher {
+public:
+  sakuin::core::Result<bool>
+  publish_result(std::string_view,
+                 sakuin::scheduler::WorkResultBatch batch) override {
+    std::lock_guard lock{mutex_};
+    if (!ids_.insert(batch.id).second)
+      return false;
+    batches_.push_back(std::move(batch));
+    return true;
+  }
+
+  std::size_t count() const {
+    std::lock_guard lock{mutex_};
+    return batches_.size();
+  }
+
+private:
+  mutable std::mutex mutex_;
+  std::set<sakuin::scheduler::WorkId> ids_;
+  std::vector<sakuin::scheduler::WorkResultBatch> batches_;
+};
+
 } // namespace
 
 int main() {
@@ -57,10 +80,21 @@ int main() {
        .lease_duration = std::chrono::seconds{1}});
   if (!local)
     return 1;
-  scheduler::WorkProtocolDispatcher dispatcher{**local};
+  scheduler::WorkProtocolLimits limits{.maximum_frame_bytes = 256,
+                                       .maximum_work_payload_bytes = 64,
+                                       .maximum_result_payload_bytes = 64,
+                                       .maximum_chunked_result_bytes = 512,
+                                       .maximum_result_reassembly_bytes = 1'024,
+                                       .maximum_result_transfers = 4,
+                                       .result_transfer_timeout =
+                                           std::chrono::seconds{5}};
+  ResultPublisher results;
+  scheduler::WorkProtocolDispatcher dispatcher{
+      **local, [] { return std::chrono::system_clock::now(); }, &results,
+      nullptr, limits};
   scheduler::LoopbackWorkProtocolAccessPolicy access;
   Observer observer;
-  scheduler::WorkProtocolService service{dispatcher, access, {}, &observer};
+  scheduler::WorkProtocolService service{dispatcher, access, limits, &observer};
   auto server = runtime::AsioTcpStreamServer::create(
       {.bind_to = {.address = runtime::IpAddress::loopback_v4(), .port = 0},
        .idle_timeout = std::chrono::seconds{15},
@@ -85,7 +119,8 @@ int main() {
                      .idle_timeout = std::chrono::seconds{15},
                      .read_buffer_bytes = 29,
                      .maximum_queued_write_bytes = 2U * 1024U * 1024U},
-       .request_timeout = std::chrono::seconds{10}});
+       .request_timeout = std::chrono::seconds{10},
+       .protocol_limits = limits});
   if (!remote) {
     std::cerr << "remote connect: " << remote.error().message << '\n';
     return 3;
@@ -141,19 +176,32 @@ int main() {
   if (leased_count.load(std::memory_order_relaxed) != parallel_count)
     return 11;
 
+  core::ByteBuffer result_payload(180, core::Byte{0x6d});
+  scheduler::WorkResultBatch result{
+      .id = scheduler::content_work_result_id(
+          scheduler::WorkResultKind::TorrentMetadataBatch, result_payload),
+      .kind = scheduler::WorkResultKind::TorrentMetadataBatch,
+      .payload = result_payload};
+  auto published = (*remote)->publish_result(worker.id, result);
+  auto duplicate_result = (*remote)->publish_result(worker.id, result);
+  if (!published || !*published || !duplicate_result || *duplicate_result ||
+      results.count() != 1)
+    return 12;
+
   (*server)->stop();
   auto unavailable = (*remote)->snapshot(now);
   if (unavailable || (unavailable.error().code != core::ErrorCode::IoError &&
-                      unavailable.error().code != core::ErrorCode::Timeout)) {
+                      unavailable.error().code != core::ErrorCode::Timeout &&
+                      unavailable.error().code != core::ErrorCode::Conflict)) {
     if (unavailable)
       std::cerr << "snapshot unexpectedly succeeded after server stop\n";
     else
       std::cerr << "snapshot after stop returned "
                 << static_cast<int>(unavailable.error().code) << ": "
                 << unavailable.error().message << '\n';
-    return 12;
+    return 13;
   }
   if (!observer.empty())
-    return 13;
+    return 14;
   return 0;
 }

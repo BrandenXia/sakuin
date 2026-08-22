@@ -151,6 +151,9 @@ struct DistributedConfig {
     std::size_t read_buffer_bytes{16U * 1024U};
     std::size_t maximum_frame_bytes{2U * 1024U * 1024U};
     std::size_t maximum_queued_write_bytes{4U * 1024U * 1024U};
+    std::size_t maximum_result_reassembly_bytes{128U * 1024U * 1024U};
+    std::size_t maximum_result_transfers{64};
+    core::Duration result_transfer_timeout{std::chrono::minutes{2}};
     core::Duration idle_timeout{std::chrono::seconds{30}};
     std::optional<std::filesystem::path> tls_trust_anchor_file;
     std::optional<std::filesystem::path> tls_certificate_chain_file;
@@ -176,6 +179,7 @@ struct DistributedConfig {
 
   std::size_t maximum_work_items{65'536};
   std::size_t maximum_payload_bytes{1U * 1024U * 1024U};
+  std::size_t maximum_result_bytes{8U * 1024U * 1024U};
   core::Duration worker_timeout{std::chrono::seconds{30}};
   core::Duration lease_duration{std::chrono::minutes{2}};
   core::Duration heartbeat_interval{std::chrono::seconds{10}};
@@ -627,6 +631,11 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.distributed.maximum_payload_bytes = *value;
+    } else if (name == "distributed.maximum_result_bytes") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.maximum_result_bytes = *value;
     } else if (name == "distributed.worker_timeout_ms") {
       auto value = duration_ms(text, name);
       if (!value)
@@ -686,6 +695,22 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.distributed.coordinator.maximum_queued_write_bytes = *value;
+    } else if (name ==
+               "distributed.coordinator.maximum_result_reassembly_bytes") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.maximum_result_reassembly_bytes = *value;
+    } else if (name == "distributed.coordinator.maximum_result_transfers") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.maximum_result_transfers = *value;
+    } else if (name == "distributed.coordinator.result_transfer_timeout_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.result_transfer_timeout = *value;
     } else if (name == "distributed.coordinator.idle_timeout_ms") {
       auto value = duration_ms(text, name);
       if (!value)
@@ -905,6 +930,9 @@ core::Result<void> validate(const AppConfig &config) {
       config.distributed.maximum_work_items > 10'000'000 ||
       config.distributed.maximum_payload_bytes == 0 ||
       config.distributed.maximum_payload_bytes > 64U * 1024U * 1024U ||
+      config.distributed.maximum_result_bytes <
+          config.distributed.maximum_payload_bytes ||
+      config.distributed.maximum_result_bytes > 64U * 1024U * 1024U ||
       config.distributed.worker_timeout <= core::Duration::zero() ||
       config.distributed.lease_duration <= core::Duration::zero() ||
       config.distributed.heartbeat_interval <= core::Duration::zero() ||
@@ -929,6 +957,14 @@ core::Result<void> validate(const AppConfig &config) {
       coordinator.maximum_queued_write_bytes <
           coordinator.maximum_frame_bytes ||
       coordinator.maximum_queued_write_bytes > 64U * 1024U * 1024U ||
+      coordinator.maximum_result_reassembly_bytes <
+          config.distributed.maximum_result_bytes ||
+      coordinator.maximum_result_reassembly_bytes >
+          4ULL * 1024U * 1024U * 1024U ||
+      coordinator.maximum_result_transfers == 0 ||
+      coordinator.maximum_result_transfers > 65'536 ||
+      coordinator.result_transfer_timeout < std::chrono::seconds{1} ||
+      coordinator.result_transfer_timeout > std::chrono::hours{24} ||
       coordinator.idle_timeout <= core::Duration::zero())
     return std::unexpected(
         invalid("Distributed coordinator listener limits are invalid"));
@@ -960,6 +996,8 @@ core::Result<void> validate(const AppConfig &config) {
       (!valid_worker_id || worker.coordinator_address.empty() ||
        worker.coordinator_port == 0 || worker.observation_batch_size == 0 ||
        worker.observation_batch_size > 65'536 ||
+       config.distributed.maximum_result_bytes <
+           config.network.dht.metadata.maximum_metadata_bytes ||
        config.distributed.maximum_payload_bytes <= 12 ||
        worker.observation_batch_size >
            (config.distributed.maximum_payload_bytes - 12) / 32 ||

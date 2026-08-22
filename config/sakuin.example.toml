@@ -108,10 +108,12 @@ window_ms = 60000
 
 [distributed]
 maximum_work_items = 65536
-# This is also the maximum encoded metadata record a remote worker can return.
-# Raise it together with the frame/queued-write limits below if remote workers
-# should accept torrents near maximum_metadata_bytes.
+# Per-frame work/result payload limit. Larger logical results are divided into
+# bounded ordered chunks without increasing the TCP frame or write-queue size.
 maximum_payload_bytes = 1048576
+# Maximum reassembled logical worker result. Keep this above the encoded size
+# of the largest accepted torrent metadata record.
+maximum_result_bytes = 8388608
 worker_timeout_ms = 30000
 lease_duration_ms = 120000
 heartbeat_interval_ms = 10000
@@ -135,6 +137,11 @@ maximum_connections = 256
 read_buffer_bytes = 16384
 maximum_frame_bytes = 2097152
 maximum_queued_write_bytes = 4194304
+# Global coordinator bounds for incomplete chunked results. Abandoned
+# transfers expire without publishing partial canonical data.
+maximum_result_reassembly_bytes = 134217728
+maximum_result_transfers = 64
+result_transfer_timeout_ms = 120000
 idle_timeout_ms = 30000
 # tls_trust_anchor_file = "/etc/sakuin/workers/ca.pem"
 # tls_certificate_chain_file = "/etc/sakuin/workers/coordinator.pem"

@@ -96,6 +96,7 @@ window_ms = 10000
 [distributed]
 maximum_work_items = 8192
 maximum_payload_bytes = 524288
+maximum_result_bytes = 4194304
 worker_timeout_ms = 20000
 lease_duration_ms = 60000
 heartbeat_interval_ms = 5000
@@ -111,6 +112,9 @@ maximum_connections = 32
 read_buffer_bytes = 8192
 maximum_frame_bytes = 1048576
 maximum_queued_write_bytes = 2097152
+maximum_result_reassembly_bytes = 33554432
+maximum_result_transfers = 8
+result_transfer_timeout_ms = 30000
 idle_timeout_ms = 15000
 tls_trust_anchor_file = "/etc/sakuin/workers/ca.pem"
 tls_certificate_chain_file = "/etc/sakuin/workers/coordinator.pem"
@@ -181,6 +185,10 @@ tls_server_name = "coordinator.internal"
       std::pair{
           std::string{"SAKUIN_DISTRIBUTED_COORDINATOR_RECOVERY_MAXIMUM_BYTES"},
           std::string{"134217728"}},
+      std::pair{
+          std::string{
+              "SAKUIN_DISTRIBUTED_COORDINATOR_MAXIMUM_RESULT_REASSEMBLY_BYTES"},
+          std::string{"67108864"}},
       std::pair{std::string{"SAKUIN_DISTRIBUTED_WORKER_OBSERVATION_BATCH_SIZE"},
                 std::string{"1024"}},
       std::pair{std::string{"UNRELATED"}, std::string{"ignored"}}};
@@ -258,6 +266,7 @@ tls_server_name = "coordinator.internal"
       loaded.api.rate_limit.window != std::chrono::seconds{10} ||
       loaded.distributed.maximum_work_items != 16'384 ||
       loaded.distributed.maximum_payload_bytes != 512U * 1024U ||
+      loaded.distributed.maximum_result_bytes != 4U * 1024U * 1024U ||
       loaded.distributed.worker_timeout != std::chrono::seconds{20} ||
       loaded.distributed.lease_duration != std::chrono::minutes{1} ||
       loaded.distributed.heartbeat_interval != std::chrono::seconds{5} ||
@@ -274,6 +283,11 @@ tls_server_name = "coordinator.internal"
       loaded.distributed.coordinator.maximum_frame_bytes != 1024U * 1024U ||
       loaded.distributed.coordinator.maximum_queued_write_bytes !=
           2U * 1024U * 1024U ||
+      loaded.distributed.coordinator.maximum_result_reassembly_bytes !=
+          64U * 1024U * 1024U ||
+      loaded.distributed.coordinator.maximum_result_transfers != 8 ||
+      loaded.distributed.coordinator.result_transfer_timeout !=
+          std::chrono::seconds{30} ||
       loaded.distributed.coordinator.idle_timeout != std::chrono::seconds{15} ||
       loaded.distributed.coordinator.tls_trust_anchor_file !=
           "/etc/sakuin/workers/ca.pem" ||
@@ -349,6 +363,11 @@ tls_server_name = "coordinator.internal"
   invalid_coordinator.distributed.coordinator.recovery_maximum_bytes = 1024;
   if (config::validate(invalid_coordinator))
     return 18;
+  invalid_coordinator = config::defaults();
+  invalid_coordinator.distributed.coordinator.maximum_result_reassembly_bytes =
+      1024;
+  if (config::validate(invalid_coordinator))
+    return 19;
   auto incomplete_worker_tls = config::defaults();
   incomplete_worker_tls.distributed.coordinator.tls_trust_anchor_file =
       "ca.pem";

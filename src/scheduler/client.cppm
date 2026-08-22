@@ -348,13 +348,66 @@ StreamWorkCoordinator::snapshot(core::Timestamp) {
 core::Result<bool>
 StreamWorkCoordinator::publish_result(std::string_view worker,
                                       WorkResultBatch result) {
-  auto response =
-      exchange(WorkProtocolOperation::PublishResult,
-               PublishWorkResultRequest{.worker = std::string{worker},
-                                        .result = std::move(result)});
-  if (!response)
-    return std::unexpected(response.error());
-  return response_value<bool>(std::move(*response));
+  const auto &limits = options_.protocol_limits;
+  if (worker.empty() || worker.size() > 128 || result.payload.empty() ||
+      result.id != content_work_result_id(result.kind, result.payload))
+    return std::unexpected(core::Error{core::ErrorCode::InvalidArgument,
+                                       "Work result envelope is invalid"});
+
+  constexpr std::size_t direct_fixed_bytes = 20 + 2 + 16 + 1 + 4;
+  const auto direct_fits_frame =
+      limits.maximum_frame_bytes > direct_fixed_bytes + worker.size() &&
+      result.payload.size() <=
+          limits.maximum_frame_bytes - direct_fixed_bytes - worker.size();
+  if (result.payload.size() <= limits.maximum_result_payload_bytes &&
+      direct_fits_frame) {
+    auto response =
+        exchange(WorkProtocolOperation::PublishResult,
+                 PublishWorkResultRequest{.worker = std::string{worker},
+                                          .result = std::move(result)});
+    if (!response)
+      return std::unexpected(response.error());
+    return response_value<bool>(std::move(*response));
+  }
+
+  if (result.payload.size() > limits.maximum_chunked_result_bytes)
+    return std::unexpected(core::Error{
+        core::ErrorCode::QuotaExceeded,
+        "Work result exceeds the logical distributed result limit"});
+  constexpr std::size_t chunk_fixed_bytes = 20 + 2 + 16 + 1 + 8 + 8 + 4;
+  if (limits.maximum_frame_bytes <= chunk_fixed_bytes + worker.size())
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidArgument,
+                    "Work result frame is too small for chunk metadata"});
+  const auto chunk_bytes =
+      std::min(limits.maximum_result_payload_bytes,
+               limits.maximum_frame_bytes - chunk_fixed_bytes - worker.size());
+  if (chunk_bytes == 0)
+    return std::unexpected(core::Error{core::ErrorCode::InvalidArgument,
+                                       "Work result chunk size is invalid"});
+
+  bool published{};
+  for (std::size_t offset = 0; offset < result.payload.size();) {
+    const auto count = std::min(chunk_bytes, result.payload.size() - offset);
+    core::ByteBuffer chunk{result.payload.begin() + offset,
+                           result.payload.begin() + offset + count};
+    auto response = exchange(
+        WorkProtocolOperation::PublishResultChunk,
+        PublishWorkResultChunkRequest{.worker = std::string{worker},
+                                      .id = result.id,
+                                      .kind = result.kind,
+                                      .total_bytes = result.payload.size(),
+                                      .offset = offset,
+                                      .chunk = std::move(chunk)});
+    if (!response)
+      return std::unexpected(response.error());
+    auto accepted = response_value<bool>(std::move(*response));
+    if (!accepted)
+      return std::unexpected(accepted.error());
+    published = *accepted;
+    offset += count;
+  }
+  return published;
 }
 
 core::Result<TrafficGrant> StreamWorkCoordinator::acquire(
