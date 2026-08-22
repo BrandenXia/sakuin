@@ -20,10 +20,12 @@ int main() {
   for (std::size_t index = 0; index < hash.bytes.size(); ++index)
     hash.bytes[index] = static_cast<std::uint8_t>(index);
 
-  const auto first = core::Timestamp{std::chrono::duration_cast<
-      core::Timestamp::duration>(std::chrono::nanoseconds{123456789})};
-  const auto last = core::Timestamp{std::chrono::duration_cast<
-      core::Timestamp::duration>(std::chrono::nanoseconds{987654321})};
+  const auto first =
+      core::Timestamp{std::chrono::duration_cast<core::Timestamp::duration>(
+          std::chrono::nanoseconds{123456789})};
+  const auto last =
+      core::Timestamp{std::chrono::duration_cast<core::Timestamp::duration>(
+          std::chrono::nanoseconds{987654321})};
   core::ByteBuffer encoded;
 
   storage::ObservationRecordCodec observation_codec;
@@ -46,6 +48,7 @@ int main() {
   };
   if (!torrent_codec.encode(torrent, encoded))
     return 3;
+  const auto valid_torrent_encoding = encoded;
   auto decoded_torrent = torrent_codec.decode(encoded);
   if (!decoded_torrent || decoded_torrent->info_hash != hash ||
       !same_time(decoded_torrent->first_seen, first) ||
@@ -62,19 +65,27 @@ int main() {
   if (truncated || truncated.error().code != core::ErrorCode::CorruptSegment)
     return 5;
 
-  core::ByteBuffer empty;
-  if (!torrent_codec.encode(
-          model::TorrentRecord{.info_hash = hash,
-                               .first_seen = first,
-                               .last_seen = last,
-                               .name = std::nullopt,
-                               .total_size = 0,
-                               .files = {}},
-          empty))
+  auto bounded = torrent_codec.decode(
+      valid_torrent_encoding,
+      {.maximum_record_bytes = valid_torrent_encoding.size(),
+       .maximum_files = 1,
+       .maximum_name_bytes = 64,
+       .maximum_path_bytes = 64});
+  if (bounded || bounded.error().code != core::ErrorCode::CorruptSegment)
     return 6;
+
+  core::ByteBuffer empty;
+  if (!torrent_codec.encode(model::TorrentRecord{.info_hash = hash,
+                                                 .first_seen = first,
+                                                 .last_seen = last,
+                                                 .name = std::nullopt,
+                                                 .total_size = 0,
+                                                 .files = {}},
+                            empty))
+    return 7;
   auto decoded_empty = torrent_codec.decode(empty);
   if (!decoded_empty || decoded_empty->name || !decoded_empty->files.empty())
-    return 7;
+    return 8;
 
   return 0;
 }

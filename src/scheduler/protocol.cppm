@@ -5,11 +5,13 @@ import std;
 import sakuin.core.bytes;
 import sakuin.core.result;
 import sakuin.core.time;
+import sakuin.runtime.traffic;
+import sakuin.scheduler.traffic;
 import sakuin.scheduler.work;
 
 export namespace sakuin::scheduler {
 
-inline constexpr std::uint16_t WorkProtocolVersion = 1;
+inline constexpr std::uint16_t WorkProtocolVersion = 3;
 
 enum class WorkProtocolOperation : std::uint8_t {
   Submit = 1,
@@ -21,11 +23,15 @@ enum class WorkProtocolOperation : std::uint8_t {
   Fail = 7,
   UnregisterWorker = 8,
   Snapshot = 9,
+  PublishResult = 10,
+  AcquireTraffic = 11,
 };
 
 struct WorkProtocolLimits {
   std::size_t maximum_frame_bytes{2U * 1024U * 1024U};
   std::size_t maximum_work_payload_bytes{1U * 1024U * 1024U};
+  std::size_t maximum_result_payload_bytes{1U * 1024U * 1024U};
+  std::uint64_t maximum_traffic_grant_bytes{16U * 1024U * 1024U};
   std::size_t maximum_leases_per_response{1'024};
   std::size_t maximum_error_message_bytes{4U * 1024U};
   core::Duration maximum_retry_delay{std::chrono::days{30}};
@@ -66,10 +72,21 @@ struct UnregisterWorkerRequest {
 
 struct WorkSnapshotRequest {};
 
+struct PublishWorkResultRequest {
+  std::string worker;
+  WorkResultBatch result;
+};
+
+struct AcquireTrafficRequest {
+  std::string worker;
+  runtime::TrafficRequest traffic;
+};
+
 using WorkProtocolRequestPayload =
     std::variant<SubmitWorkRequest, RegisterWorkerRequest,
                  WorkerHeartbeatRequest, LeaseWorkRequest, LeaseMutationRequest,
-                 FailWorkRequest, UnregisterWorkerRequest, WorkSnapshotRequest>;
+                 FailWorkRequest, UnregisterWorkerRequest, WorkSnapshotRequest,
+                 PublishWorkResultRequest, AcquireTrafficRequest>;
 
 struct WorkProtocolRequest {
   std::uint64_t request_id{};
@@ -79,7 +96,7 @@ struct WorkProtocolRequest {
 
 using WorkProtocolResponsePayload =
     std::variant<std::monostate, bool, std::vector<WorkLease>,
-                 WorkCoordinatorSnapshot, core::Error>;
+                 WorkCoordinatorSnapshot, TrafficGrant, core::Error>;
 
 struct WorkProtocolResponse {
   std::uint64_t request_id{};
@@ -126,8 +143,11 @@ public:
 
   explicit WorkProtocolDispatcher(
       WorkCoordinator &coordinator,
-      Clock clock = [] { return std::chrono::system_clock::now(); })
-      : coordinator_(&coordinator), clock_(std::move(clock)) {}
+      Clock clock = [] { return std::chrono::system_clock::now(); },
+      WorkResultPublisher *results = nullptr,
+      TrafficGrantSource *traffic = nullptr)
+      : coordinator_(&coordinator), results_(results), traffic_(traffic),
+        clock_(std::move(clock)) {}
 
   WorkProtocolResponse dispatch(const WorkProtocolRequest &request);
   core::Result<core::ByteBuffer> handle(core::ByteView frame,
@@ -135,6 +155,8 @@ public:
 
 private:
   WorkCoordinator *coordinator_;
+  WorkResultPublisher *results_{};
+  TrafficGrantSource *traffic_{};
   Clock clock_;
 };
 
@@ -159,7 +181,8 @@ core::Error corrupt(std::string message) {
 
 bool valid_operation(std::uint8_t value) {
   return value >= static_cast<std::uint8_t>(WorkProtocolOperation::Submit) &&
-         value <= static_cast<std::uint8_t>(WorkProtocolOperation::Snapshot);
+         value <=
+             static_cast<std::uint8_t>(WorkProtocolOperation::AcquireTraffic);
 }
 
 bool valid_limits(const WorkProtocolLimits &limits) {
@@ -167,6 +190,10 @@ bool valid_limits(const WorkProtocolLimits &limits) {
          limits.maximum_frame_bytes <= 64U * 1024U * 1024U &&
          limits.maximum_work_payload_bytes > 0 &&
          limits.maximum_work_payload_bytes <= limits.maximum_frame_bytes &&
+         limits.maximum_result_payload_bytes > 0 &&
+         limits.maximum_result_payload_bytes <= limits.maximum_frame_bytes &&
+         limits.maximum_traffic_grant_bytes > 0 &&
+         limits.maximum_traffic_grant_bytes <= 64U * 1024U * 1024U &&
          limits.maximum_leases_per_response > 0 &&
          limits.maximum_leases_per_response <= 65'536 &&
          limits.maximum_error_message_bytes > 0 &&
@@ -415,6 +442,27 @@ core::Result<WorkClass> work_class(std::uint8_t value) {
   }
 }
 
+core::Result<std::uint8_t> result_kind_value(WorkResultKind value) {
+  switch (value) {
+  case WorkResultKind::ObservationBatch:
+    return 1;
+  case WorkResultKind::TorrentMetadataBatch:
+    return 2;
+  }
+  return std::unexpected(invalid("Unknown work-result kind"));
+}
+
+core::Result<WorkResultKind> result_kind(std::uint8_t value) {
+  switch (value) {
+  case 1:
+    return WorkResultKind::ObservationBatch;
+  case 2:
+    return WorkResultKind::TorrentMetadataBatch;
+  default:
+    return std::unexpected(corrupt("Unknown work-result kind"));
+  }
+}
+
 core::Result<void> write_work_item(Writer &writer, const WorkItem &item,
                                    const WorkProtocolLimits &limits) {
   if (item.payload.size() > limits.maximum_work_payload_bytes ||
@@ -509,6 +557,48 @@ core::Result<WorkerDescriptor> read_worker(Reader &reader) {
 
 core::Result<void> write_worker_id(Writer &writer, std::string_view worker) {
   return writer.string(worker, 128);
+}
+
+core::Result<void> write_result(Writer &writer, const WorkResultBatch &result,
+                                const WorkProtocolLimits &limits) {
+  if (result.payload.empty() ||
+      result.payload.size() > limits.maximum_result_payload_bytes ||
+      result.payload.size() > std::numeric_limits<std::uint32_t>::max())
+    return std::unexpected(invalid("Work result exceeds protocol limits"));
+  auto kind = result_kind_value(result.kind);
+  if (!kind)
+    return std::unexpected(kind.error());
+  if (result.id != content_work_result_id(result.kind, result.payload))
+    return std::unexpected(invalid("Work result content id is invalid"));
+  writer.raw(std::as_bytes(std::span{result.id.bytes}));
+  writer.u8(*kind);
+  writer.u32(static_cast<std::uint32_t>(result.payload.size()));
+  writer.raw(result.payload);
+  return {};
+}
+
+core::Result<WorkResultBatch> read_result(Reader &reader,
+                                          const WorkProtocolLimits &limits) {
+  auto id = reader.raw(WorkId{}.bytes.size());
+  auto encoded_kind = reader.u8();
+  auto payload_size = reader.u32();
+  if (!id || !encoded_kind || !payload_size)
+    return std::unexpected(!id             ? id.error()
+                           : !encoded_kind ? encoded_kind.error()
+                                           : payload_size.error());
+  if (*payload_size == 0 || *payload_size > limits.maximum_result_payload_bytes)
+    return std::unexpected(corrupt("Work result exceeds protocol limits"));
+  auto kind = result_kind(*encoded_kind);
+  auto payload = reader.raw(*payload_size);
+  if (!kind || !payload)
+    return std::unexpected(kind ? payload.error() : kind.error());
+  WorkResultBatch result{.kind = *kind,
+                         .payload = {payload->begin(), payload->end()}};
+  for (std::size_t index = 0; index < result.id.bytes.size(); ++index)
+    result.id.bytes[index] = std::to_integer<std::uint8_t>((*id)[index]);
+  if (result.id != content_work_result_id(result.kind, result.payload))
+    return std::unexpected(corrupt("Work result content id is invalid"));
+  return result;
 }
 
 core::Result<void> write_lease(Writer &writer, const WorkLease &lease,
@@ -667,6 +757,10 @@ bool operation_matches(const WorkProtocolRequest &request) {
     return std::holds_alternative<UnregisterWorkerRequest>(request.payload);
   case WorkProtocolOperation::Snapshot:
     return std::holds_alternative<WorkSnapshotRequest>(request.payload);
+  case WorkProtocolOperation::PublishResult:
+    return std::holds_alternative<PublishWorkResultRequest>(request.payload);
+  case WorkProtocolOperation::AcquireTraffic:
+    return std::holds_alternative<AcquireTrafficRequest>(request.payload);
   }
   return false;
 }
@@ -677,7 +771,10 @@ bool response_matches(const WorkProtocolResponse &response) {
   switch (response.operation) {
   case WorkProtocolOperation::Submit:
   case WorkProtocolOperation::RegisterWorker:
+  case WorkProtocolOperation::PublishResult:
     return std::holds_alternative<bool>(response.payload);
+  case WorkProtocolOperation::AcquireTraffic:
+    return std::holds_alternative<TrafficGrant>(response.payload);
   case WorkProtocolOperation::Heartbeat:
   case WorkProtocolOperation::Renew:
   case WorkProtocolOperation::Complete:
@@ -760,6 +857,32 @@ encode_work_request(const WorkProtocolRequest &request,
     break;
   case WorkProtocolOperation::Snapshot:
     break;
+  case WorkProtocolOperation::PublishResult: {
+    const auto &value = std::get<PublishWorkResultRequest>(request.payload);
+    written = write_worker_id(payload, value.worker);
+    if (written)
+      written = write_result(payload, value.result, limits);
+    break;
+  }
+  case WorkProtocolOperation::AcquireTraffic: {
+    const auto &value = std::get<AcquireTrafficRequest>(request.payload);
+    written = write_worker_id(payload, value.worker);
+    if (written) {
+      if (value.traffic.direction != runtime::TrafficDirection::Inbound &&
+          value.traffic.direction != runtime::TrafficDirection::Outbound)
+        written = std::unexpected(invalid("Traffic direction is invalid"));
+      else if (value.traffic.bytes == 0 ||
+               value.traffic.bytes > limits.maximum_traffic_grant_bytes)
+        written =
+            std::unexpected(invalid("Traffic grant request is out of bounds"));
+      else {
+        payload.u8(static_cast<std::uint8_t>(value.traffic.direction));
+        payload.u16(value.traffic.traffic_class);
+        payload.u64(value.traffic.bytes);
+      }
+    }
+    break;
+  }
   }
   if (!written)
     return std::unexpected(written.error());
@@ -851,6 +974,39 @@ decode_work_request(core::ByteView encoded, WorkProtocolLimits limits) {
   case WorkProtocolOperation::Snapshot:
     result.payload = WorkSnapshotRequest{};
     break;
+  case WorkProtocolOperation::PublishResult: {
+    auto worker = payload.string(128);
+    if (!worker)
+      return std::unexpected(worker.error());
+    auto published = read_result(payload, limits);
+    if (!published)
+      return std::unexpected(published.error());
+    result.payload = PublishWorkResultRequest{.worker = std::move(*worker),
+                                              .result = std::move(*published)};
+    break;
+  }
+  case WorkProtocolOperation::AcquireTraffic: {
+    auto worker = payload.string(128);
+    auto direction = payload.u8();
+    auto traffic_class = payload.u16();
+    auto bytes = payload.u64();
+    if (!worker || !direction || !traffic_class || !bytes)
+      return std::unexpected(!worker          ? worker.error()
+                             : !direction     ? direction.error()
+                             : !traffic_class ? traffic_class.error()
+                                              : bytes.error());
+    if (*direction >
+            static_cast<std::uint8_t>(runtime::TrafficDirection::Outbound) ||
+        *bytes == 0 || *bytes > limits.maximum_traffic_grant_bytes)
+      return std::unexpected(corrupt("Traffic grant request is invalid"));
+    result.payload = AcquireTrafficRequest{
+        .worker = std::move(*worker),
+        .traffic = {.direction =
+                        static_cast<runtime::TrafficDirection>(*direction),
+                    .traffic_class = *traffic_class,
+                    .bytes = *bytes}};
+    break;
+  }
   }
   if (auto complete = finish(payload); !complete)
     return std::unexpected(complete.error());
@@ -879,6 +1035,7 @@ encode_work_response(const WorkProtocolResponse &response,
     switch (response.operation) {
     case WorkProtocolOperation::Submit:
     case WorkProtocolOperation::RegisterWorker:
+    case WorkProtocolOperation::PublishResult:
       payload.u8(std::get<bool>(response.payload) ? 1 : 0);
       break;
     case WorkProtocolOperation::Heartbeat:
@@ -904,6 +1061,22 @@ encode_work_response(const WorkProtocolResponse &response,
            {snapshot.pending, snapshot.leased, snapshot.succeeded,
             snapshot.failed, snapshot.workers})
         payload.u64(count);
+      break;
+    }
+    case WorkProtocolOperation::AcquireTraffic: {
+      const auto &grant = std::get<TrafficGrant>(response.payload);
+      if (grant.bytes > limits.maximum_traffic_grant_bytes)
+        return std::unexpected(invalid("Traffic grant exceeds its limit"));
+      payload.u64(grant.bytes);
+      if (grant.retry_after) {
+        auto delay = duration_milliseconds(*grant.retry_after, limits);
+        if (!delay)
+          return std::unexpected(delay.error());
+        payload.u8(1);
+        payload.u64(*delay);
+      } else {
+        payload.u8(0);
+      }
       break;
     }
     }
@@ -937,7 +1110,8 @@ decode_work_response(core::ByteView encoded, WorkProtocolLimits limits) {
   } else {
     switch (parsed->operation) {
     case WorkProtocolOperation::Submit:
-    case WorkProtocolOperation::RegisterWorker: {
+    case WorkProtocolOperation::RegisterWorker:
+    case WorkProtocolOperation::PublishResult: {
       auto value = payload.u8();
       if (!value || *value > 1)
         return std::unexpected(value ? corrupt("Invalid boolean response")
@@ -987,6 +1161,28 @@ decode_work_response(core::ByteView encoded, WorkProtocolLimits limits) {
           .succeeded = static_cast<std::size_t>(counts[2]),
           .failed = static_cast<std::size_t>(counts[3]),
           .workers = static_cast<std::size_t>(counts[4])};
+      break;
+    }
+    case WorkProtocolOperation::AcquireTraffic: {
+      auto bytes = payload.u64();
+      auto has_retry = payload.u8();
+      if (!bytes || !has_retry || *has_retry > 1 ||
+          (bytes && *bytes > limits.maximum_traffic_grant_bytes))
+        return std::unexpected(!bytes ? bytes.error()
+                               : !has_retry
+                                   ? has_retry.error()
+                                   : corrupt("Traffic grant is invalid"));
+      TrafficGrant grant{.bytes = *bytes};
+      if (*has_retry != 0) {
+        auto delay = payload.u64();
+        if (!delay)
+          return std::unexpected(delay.error());
+        auto decoded = duration_from_milliseconds(*delay, limits);
+        if (!decoded)
+          return std::unexpected(decoded.error());
+        grant.retry_after = *decoded;
+      }
+      result.payload = grant;
       break;
     }
     }
@@ -1138,6 +1334,28 @@ WorkProtocolDispatcher::dispatch(const WorkProtocolRequest &request) {
     }
     case WorkProtocolOperation::Snapshot: {
       auto result = coordinator_->snapshot(now);
+      if (!result)
+        return fail(result.error());
+      response.payload = *result;
+      break;
+    }
+    case WorkProtocolOperation::PublishResult: {
+      if (!results_)
+        return fail({core::ErrorCode::UnsupportedFormat,
+                     "Coordinator does not accept remote work results"});
+      const auto &value = std::get<PublishWorkResultRequest>(request.payload);
+      auto result = results_->publish_result(value.worker, value.result);
+      if (!result)
+        return fail(result.error());
+      response.payload = *result;
+      break;
+    }
+    case WorkProtocolOperation::AcquireTraffic: {
+      if (!traffic_)
+        return fail({core::ErrorCode::UnsupportedFormat,
+                     "Coordinator does not allocate traffic grants"});
+      const auto &value = std::get<AcquireTrafficRequest>(request.payload);
+      auto result = traffic_->acquire(value.worker, value.traffic, now);
       if (!result)
         return fail(result.error());
       response.payload = *result;

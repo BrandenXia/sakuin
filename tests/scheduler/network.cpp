@@ -143,8 +143,16 @@ int main() {
 
   (*server)->stop();
   auto unavailable = (*remote)->snapshot(now);
-  if (unavailable || unavailable.error().code != core::ErrorCode::IoError)
+  if (unavailable || (unavailable.error().code != core::ErrorCode::IoError &&
+                      unavailable.error().code != core::ErrorCode::Timeout)) {
+    if (unavailable)
+      std::cerr << "snapshot unexpectedly succeeded after server stop\n";
+    else
+      std::cerr << "snapshot after stop returned "
+                << static_cast<int>(unavailable.error().code) << ": "
+                << unavailable.error().message << '\n';
     return 12;
+  }
   if (!observer.empty())
     return 13;
   return 0;

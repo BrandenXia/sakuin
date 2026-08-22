@@ -28,6 +28,24 @@ struct TrafficBudgetPolicy {
   std::vector<ClassifiedTrafficPolicy> classes;
 };
 
+// A coordinator reserves bounded byte grants from the aggregate policy. The
+// interface is transport-neutral so a worker may obtain grants locally or over
+// the distributed work channel without exposing its networking runtime.
+struct TrafficGrant {
+  std::uint64_t bytes{};
+  std::optional<core::Duration> retry_after;
+
+  friend bool operator==(const TrafficGrant &, const TrafficGrant &) = default;
+};
+
+class TrafficGrantSource {
+public:
+  virtual ~TrafficGrantSource() = default;
+  virtual core::Result<TrafficGrant> acquire(std::string_view worker,
+                                             runtime::TrafficRequest request,
+                                             core::Timestamp now) = 0;
+};
+
 class FixedWindowTrafficGovernor final : public runtime::TrafficGovernor {
 public:
   static core::Result<std::unique_ptr<FixedWindowTrafficGovernor>>
@@ -61,6 +79,48 @@ private:
   mutable std::mutex mutex_;
   PolicyState global_;
   std::unordered_map<runtime::TrafficClassId, PolicyState> classes_;
+};
+
+// Reserves grants against any aggregate governor. Denied large reservations
+// are reduced to the remaining bytes in the current window when possible.
+class GovernorTrafficGrantSource final : public TrafficGrantSource {
+public:
+  explicit GovernorTrafficGrantSource(runtime::TrafficGovernor &governor)
+      : governor_(&governor) {}
+
+  core::Result<TrafficGrant> acquire(std::string_view worker,
+                                     runtime::TrafficRequest request,
+                                     core::Timestamp now) override;
+
+private:
+  runtime::TrafficGovernor *governor_;
+};
+
+// Worker-side governor backed by coarse coordinator grants. Network traffic is
+// admitted synchronously from local balances; the distributed round trip only
+// occurs when a direction/class balance needs replenishment.
+class GrantedTrafficGovernor final : public runtime::TrafficGovernor {
+public:
+  static core::Result<std::unique_ptr<GrantedTrafficGovernor>>
+  create(TrafficGrantSource &source, std::string worker,
+         std::uint64_t grant_bytes = 64U * 1024U);
+
+  runtime::TrafficDecision admit(runtime::TrafficRequest request,
+                                 core::Timestamp now) override;
+
+private:
+  GrantedTrafficGovernor(TrafficGrantSource &source, std::string worker,
+                         std::uint64_t grant_bytes)
+      : source_(&source), worker_(std::move(worker)),
+        grant_bytes_(grant_bytes) {}
+
+  static std::uint32_t key(runtime::TrafficRequest request) noexcept;
+
+  TrafficGrantSource *source_;
+  std::string worker_;
+  std::uint64_t grant_bytes_{};
+  std::mutex mutex_;
+  std::unordered_map<std::uint32_t, std::uint64_t> balances_;
 };
 
 } // namespace sakuin::scheduler
@@ -110,9 +170,9 @@ FixedWindowTrafficGovernor::create(TrafficBudgetPolicy policy) {
   std::unordered_set<runtime::TrafficClassId> seen;
   for (const auto &entry : policy.classes) {
     if (!seen.insert(entry.traffic_class).second)
-      return std::unexpected(core::Error{
-          core::ErrorCode::InvalidArgument,
-          "Traffic policy contains a duplicate class id"});
+      return std::unexpected(
+          core::Error{core::ErrorCode::InvalidArgument,
+                      "Traffic policy contains a duplicate class id"});
     if (auto valid = validate_quota(entry.limits.inbound, "Class inbound");
         !valid)
       return std::unexpected(valid.error());
@@ -140,9 +200,9 @@ FixedWindowTrafficGovernor::admit(runtime::TrafficRequest request,
   if (count == 0)
     return {};
 
-  const auto elapsed = std::chrono::duration_cast<core::Duration>(
-                           now.time_since_epoch())
-                           .count();
+  const auto elapsed =
+      std::chrono::duration_cast<core::Duration>(now.time_since_epoch())
+          .count();
   runtime::TrafficDecision decision;
   decision.remaining_bytes = std::numeric_limits<std::uint64_t>::max();
 
@@ -163,8 +223,7 @@ FixedWindowTrafficGovernor::admit(runtime::TrafficRequest request,
       decision.request_too_large = true;
       continue;
     }
-    const auto elapsed_in_window =
-        elapsed - window * quota.period.count();
+    const auto elapsed_in_window = elapsed - window * quota.period.count();
     const auto wait = quota.period - core::Duration{elapsed_in_window};
     decision.retry_after =
         std::max(decision.retry_after.value_or(core::Duration::zero()), wait);
@@ -176,6 +235,71 @@ FixedWindowTrafficGovernor::admit(runtime::TrafficRequest request,
     applicable[index]->counter.used += request.bytes;
   decision.remaining_bytes -= request.bytes;
   return decision;
+}
+
+core::Result<TrafficGrant>
+GovernorTrafficGrantSource::acquire(std::string_view worker,
+                                    runtime::TrafficRequest request,
+                                    core::Timestamp now) {
+  if (worker.empty() || worker.size() > 128 || request.bytes == 0)
+    return std::unexpected(core::Error{
+        core::ErrorCode::InvalidArgument,
+        "Traffic grants require a worker id and a nonzero byte request"});
+  auto decision = governor_->admit(request, now);
+  if (decision.allowed)
+    return TrafficGrant{.bytes = request.bytes};
+  if (decision.remaining_bytes != 0 &&
+      decision.remaining_bytes != std::numeric_limits<std::uint64_t>::max()) {
+    request.bytes = std::min(request.bytes, decision.remaining_bytes);
+    auto partial = governor_->admit(request, now);
+    if (partial.allowed)
+      return TrafficGrant{.bytes = request.bytes};
+    decision.retry_after = partial.retry_after;
+  }
+  return TrafficGrant{.retry_after = decision.retry_after};
+}
+
+core::Result<std::unique_ptr<GrantedTrafficGovernor>>
+GrantedTrafficGovernor::create(TrafficGrantSource &source, std::string worker,
+                               std::uint64_t grant_bytes) {
+  if (worker.empty() || worker.size() > 128 || grant_bytes == 0)
+    return std::unexpected(core::Error{
+        core::ErrorCode::InvalidArgument,
+        "Granted traffic governor requires a worker id and grant size"});
+  return std::unique_ptr<GrantedTrafficGovernor>{
+      new GrantedTrafficGovernor{source, std::move(worker), grant_bytes}};
+}
+
+std::uint32_t
+GrantedTrafficGovernor::key(runtime::TrafficRequest request) noexcept {
+  return (static_cast<std::uint32_t>(request.direction) << 16U) |
+         request.traffic_class;
+}
+
+runtime::TrafficDecision
+GrantedTrafficGovernor::admit(runtime::TrafficRequest request,
+                              core::Timestamp now) {
+  if (request.bytes == 0)
+    return {};
+  std::lock_guard lock{mutex_};
+  auto &balance = balances_[key(request)];
+  if (balance < request.bytes) {
+    const auto needed = request.bytes - balance;
+    auto grant_request = request;
+    grant_request.bytes = std::max(needed, grant_bytes_);
+    auto grant = source_->acquire(worker_, grant_request, now);
+    if (!grant)
+      return {.allowed = false, .retry_after = std::chrono::milliseconds{250}};
+    if (grant->bytes > std::numeric_limits<std::uint64_t>::max() - balance)
+      return {.allowed = false, .request_too_large = true};
+    balance += grant->bytes;
+    if (balance < request.bytes)
+      return {.allowed = false,
+              .remaining_bytes = balance,
+              .retry_after = grant->retry_after};
+  }
+  balance -= request.bytes;
+  return {.remaining_bytes = balance};
 }
 
 } // namespace sakuin::scheduler

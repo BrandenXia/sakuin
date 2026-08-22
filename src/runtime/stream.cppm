@@ -17,6 +17,31 @@ struct StreamEndpoint {
                          const StreamEndpoint &) = default;
 };
 
+// Authentication material established by a secure stream transport. The
+// principal is transport-normalized (for X.509, the certificate subject common
+// name) and the fingerprint is the lowercase SHA-256 digest of the peer leaf
+// certificate. Protocol and service layers never need to depend on OpenSSL.
+struct StreamPeerIdentity {
+  std::string principal;
+  std::string certificate_sha256;
+
+  friend bool operator==(const StreamPeerIdentity &,
+                         const StreamPeerIdentity &) = default;
+};
+
+struct StreamTlsClientOptions {
+  std::filesystem::path trust_anchor_file;
+  std::filesystem::path certificate_chain_file;
+  std::filesystem::path private_key_file;
+  std::string server_name;
+};
+
+struct StreamTlsServerOptions {
+  std::filesystem::path trust_anchor_file;
+  std::filesystem::path certificate_chain_file;
+  std::filesystem::path private_key_file;
+};
+
 struct StreamTransportOptions {
   StreamEndpoint remote;
   core::Duration connect_timeout{std::chrono::seconds{10}};
@@ -46,6 +71,9 @@ public:
   virtual core::Result<void> start(StreamReceiver &receiver) = 0;
   virtual core::Result<void> send(core::ByteBuffer bytes) = 0;
   virtual StreamEndpoint remote_endpoint() const noexcept = 0;
+  virtual std::optional<StreamPeerIdentity> peer_identity() const {
+    return std::nullopt;
+  }
   virtual void stop() noexcept = 0;
 
   // This contract exposes owned byte chunks and lifecycle events rather than
@@ -85,6 +113,9 @@ public:
 
   virtual StreamSessionId id() const noexcept = 0;
   virtual StreamEndpoint remote_endpoint() const noexcept = 0;
+  virtual std::optional<StreamPeerIdentity> peer_identity() const {
+    return std::nullopt;
+  }
   virtual core::Result<void> send(core::ByteBuffer bytes) = 0;
   virtual void close() noexcept = 0;
 

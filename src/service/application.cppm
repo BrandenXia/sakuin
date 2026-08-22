@@ -12,6 +12,7 @@ struct DaemonArguments {
   std::optional<std::filesystem::path> configuration_file;
   std::vector<std::string> configuration_overrides;
   std::optional<AdminCommand> admin_command;
+  bool worker_mode{};
   bool help{};
 };
 
@@ -30,8 +31,17 @@ parse_daemon_arguments(std::span<const std::string_view> arguments) {
   DaemonArguments result;
   for (std::size_t index = 0; index < arguments.size(); ++index) {
     const auto argument = arguments[index];
+    if (argument == "worker") {
+      if (result.worker_mode || result.admin_command)
+        return std::unexpected(core::Error{
+            core::ErrorCode::InvalidArgument,
+            "worker and admin modes are mutually exclusive"});
+      result.worker_mode = true;
+      continue;
+    }
     if (argument == "admin") {
-      if (result.admin_command || ++index == arguments.size())
+      if (result.worker_mode || result.admin_command ||
+          ++index == arguments.size())
         return std::unexpected(
             core::Error{core::ErrorCode::InvalidArgument,
                         "admin requires exactly one of: compact, verify, gc"});
@@ -76,7 +86,8 @@ parse_daemon_arguments(std::span<const std::string_view> arguments) {
     if (!argument.starts_with("--") || !argument.contains('='))
       return std::unexpected(core::Error{
           core::ErrorCode::InvalidArgument,
-          "Daemon arguments must be --config PATH, --help, or --key=value"});
+          "Daemon arguments must be worker, admin, --config PATH, --help, or "
+          "--key=value"});
     result.configuration_overrides.emplace_back(argument);
   }
   return result;

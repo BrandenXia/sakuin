@@ -7,6 +7,7 @@ import sakuin.core.result;
 import sakuin.core.time;
 import sakuin.dht.identity;
 import sakuin.dht.krpc;
+import sakuin.dht.metadata_fetch;
 import sakuin.dht.observation;
 import sakuin.integration.dht_worker;
 import sakuin.runtime.asio_resolver;
@@ -42,8 +43,11 @@ public:
 struct AsioDhtRuntimeDependencies {
   dht::ObservationSink *observations{};
   storage::TorrentDataset *torrents{};
+  dht::MetadataFetchObserver *metadata_results{};
   DhtRuntimeObserver *observer{};
   scheduler::WorkCoordinator *work{};
+  runtime::TrafficGovernor *traffic{};
+  std::string worker_namespace;
   core::Duration worker_heartbeat_interval{std::chrono::seconds{10}};
   std::function<void(std::uint64_t)> on_torrent_committed;
 };
@@ -93,7 +97,8 @@ private:
 
   config::NetworkConfig configuration_;
   AsioDhtRuntimeDependencies dependencies_;
-  std::unique_ptr<runtime::TrafficGovernor> traffic_;
+  std::unique_ptr<runtime::TrafficGovernor> owned_traffic_;
+  runtime::TrafficGovernor *traffic_{};
   std::vector<runtime::DatagramEndpoint> ipv4_bootstrap_;
   std::vector<runtime::DatagramEndpoint> ipv6_bootstrap_;
   std::unique_ptr<FamilyObserver> ipv4_observer_;
@@ -138,7 +143,9 @@ AsioDhtRuntime::AsioDhtRuntime(
     AsioDhtRuntimeDependencies dependencies,
     std::unique_ptr<runtime::TrafficGovernor> traffic)
     : configuration_(std::move(configuration)), dependencies_(dependencies),
-      traffic_(std::move(traffic)) {}
+      owned_traffic_(std::move(traffic)),
+      traffic_(dependencies_.traffic ? dependencies_.traffic
+                                     : owned_traffic_.get()) {}
 
 core::Result<std::unique_ptr<AsioDhtRuntime>>
 AsioDhtRuntime::create(const config::NetworkConfig &configuration,
@@ -148,20 +155,30 @@ AsioDhtRuntime::create(const config::NetworkConfig &configuration,
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
                     "DHT runtime requires observation and runtime observers"});
-  if (configuration.dht.metadata.enabled && !dependencies.torrents)
+  if (configuration.dht.metadata.enabled && !dependencies.torrents &&
+      !dependencies.metadata_results)
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
-                    "Enabled metadata acquisition requires a torrent dataset"});
+                    "Enabled metadata acquisition requires a canonical or "
+                    "remote result sink"});
+  if (dependencies.torrents && dependencies.metadata_results)
+    return std::unexpected(core::Error{
+        core::ErrorCode::InvalidArgument,
+        "Metadata acquisition must use exactly one completion sink"});
   if (!configuration.enable_ipv4 && !configuration.enable_ipv6)
     return std::unexpected(core::Error{
         core::ErrorCode::InvalidArgument,
         "DHT runtime requires at least one enabled address family"});
 
-  auto traffic = create_traffic_governor(configuration.traffic);
-  if (!traffic)
-    return std::unexpected(traffic.error());
+  std::unique_ptr<runtime::TrafficGovernor> traffic;
+  if (!dependencies.traffic) {
+    auto created = create_traffic_governor(configuration.traffic);
+    if (!created)
+      return std::unexpected(created.error());
+    traffic = std::move(*created);
+  }
   auto result = std::unique_ptr<AsioDhtRuntime>{
-      new AsioDhtRuntime{configuration, dependencies, std::move(*traffic)}};
+      new AsioDhtRuntime{configuration, dependencies, std::move(traffic)}};
 
   runtime::AsioDatagramEndpointResolver resolver;
   if (configuration.enable_ipv4) {
@@ -214,9 +231,11 @@ AsioDhtRuntime::create_family(runtime::AddressFamily family,
       configuration_.dht, family, listen_port, bootstrap, std::move(*material),
       {.observations = dependencies_.observations,
        .torrents = dependencies_.torrents,
+       .metadata_results = dependencies_.metadata_results,
        .observer = observer,
-       .traffic = traffic_.get(),
+       .traffic = traffic_,
        .work = dependencies_.work,
+       .worker_namespace = dependencies_.worker_namespace,
        .worker_heartbeat_interval = dependencies_.worker_heartbeat_interval,
        .on_torrent_committed = dependencies_.on_torrent_committed});
 }

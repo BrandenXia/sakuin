@@ -134,17 +134,23 @@ int main() {
       (*enriched_value)->total_size != 42 ||
       (*enriched_value)->files.size() != 1)
     return 17;
+  const auto enriched_generation = (*catalog)->current_id().generation;
+  auto duplicate_enrichment = dataset.enrich(**enriched_value);
+  if (!duplicate_enrichment ||
+      duplicate_enrichment->generation != enriched_generation ||
+      (*catalog)->current_id().generation != enriched_generation)
+    return 18;
 
   auto reopened =
       storage::LocalManifestCatalog::open(directory.path / "catalog", blobs);
   if (!reopened)
-    return 18;
+    return 19;
   storage::TorrentDataset restarted{blobs, **reopened};
   auto restarted_snapshot = restarted.keyed_snapshot();
   auto restarted_value = (*restarted_snapshot)->get(hash(1));
   if (!restarted_value || !*restarted_value ||
       (*restarted_value)->name != "latest-a")
-    return 19;
+    return 20;
 
   auto compacted =
       restarted.compact({.minimum_segment_count = 2,

@@ -42,5 +42,16 @@ int main() {
                                  std::string_view{"repair"}};
   if (service::parse_daemon_arguments(invalid_admin))
     return 5;
+  const std::array worker{std::string_view{"worker"},
+                          std::string_view{"--config=worker.toml"}};
+  parsed = service::parse_daemon_arguments(worker);
+  if (!parsed || !parsed->worker_mode || parsed->admin_command ||
+      parsed->configuration_file != std::filesystem::path{"worker.toml"})
+    return 6;
+  const std::array conflicting{std::string_view{"worker"},
+                               std::string_view{"admin"},
+                               std::string_view{"verify"}};
+  if (service::parse_daemon_arguments(conflicting))
+    return 7;
   return 0;
 }

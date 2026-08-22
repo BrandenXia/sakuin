@@ -15,6 +15,8 @@ import sakuin.core.result;
 import sakuin.core.time;
 import sakuin.dht.observation;
 import sakuin.integration.dht_storage;
+import sakuin.integration.work_results;
+import sakuin.scheduler.work;
 import sakuin.storage.admin;
 import sakuin.storage.admin.compaction;
 import sakuin.storage.admin.retention;
@@ -57,6 +59,13 @@ public:
     return *observations_;
   }
   storage::TorrentDataset &torrents() noexcept { return *torrents_; }
+  scheduler::WorkResultPublisher &work_results() noexcept {
+    return *work_result_router_;
+  }
+  void set_work_result_torrent_callback(
+      std::function<void(std::uint64_t)> callback) {
+    torrent_metadata_results_->set_on_torrent_committed(std::move(callback));
+  }
   std::size_t observation_batch_size() const noexcept {
     return observation_batch_size_;
   }
@@ -69,8 +78,15 @@ private:
   storage::LocalBlobStore blobs_;
   std::unique_ptr<storage::LocalManifestCatalog> observation_catalog_;
   std::unique_ptr<storage::LocalManifestCatalog> torrent_catalog_;
+  std::unique_ptr<storage::LocalManifestCatalog> work_result_catalog_;
   std::unique_ptr<storage::ObservationDataset> observations_;
   std::unique_ptr<storage::TorrentDataset> torrents_;
+  std::unique_ptr<integration::CanonicalWorkResultInbox> work_results_;
+  std::unique_ptr<integration::CanonicalObservationResultPublisher>
+      observation_results_;
+  std::unique_ptr<integration::CanonicalTorrentMetadataResultPublisher>
+      torrent_metadata_results_;
+  std::unique_ptr<integration::CanonicalWorkResultRouter> work_result_router_;
   std::unique_ptr<integration::BufferedObservationSink> observation_sink_;
   std::size_t observation_batch_size_{};
   storage::CompactionPolicy compaction_policy_;
@@ -186,10 +202,29 @@ LocalCanonicalStorage::open(const config::StorageConfig &configuration) {
     return std::unexpected(torrent_catalog.error());
   result->torrent_catalog_ = std::move(*torrent_catalog);
 
+  auto work_result_catalog = storage::LocalManifestCatalog::open(
+      configuration.local_root / "manifests" / "work-results", result->blobs_);
+  if (!work_result_catalog)
+    return std::unexpected(work_result_catalog.error());
+  result->work_result_catalog_ = std::move(*work_result_catalog);
+
   result->observations_ = std::make_unique<storage::ObservationDataset>(
       result->blobs_, *result->observation_catalog_, *header);
   result->torrents_ = std::make_unique<storage::TorrentDataset>(
       result->blobs_, *result->torrent_catalog_, *header);
+  result->work_results_ =
+      std::make_unique<integration::CanonicalWorkResultInbox>(
+          result->blobs_, *result->work_result_catalog_, *header);
+  result->observation_results_ =
+      std::make_unique<integration::CanonicalObservationResultPublisher>(
+          result->blobs_, *result->observation_catalog_, *header);
+  result->torrent_metadata_results_ =
+      std::make_unique<integration::CanonicalTorrentMetadataResultPublisher>(
+          *result->torrents_);
+  result->work_result_router_ =
+      std::make_unique<integration::CanonicalWorkResultRouter>(
+          *result->observation_results_, *result->torrent_metadata_results_,
+          *result->work_results_);
   result->observation_batch_size_ =
       calculated_observation_batch_size(configuration.segment_target_bytes);
   result->compaction_policy_ = {

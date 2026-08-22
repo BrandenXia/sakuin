@@ -21,13 +21,22 @@ and atomic manifest generations under the configured storage root.
 - Incremental observation materialization into keyed torrent metadata
 - Durable, rebuildable local search and duplicate projections
 - API-key authentication, permissions, request limits, and optional TLS
-- Local work coordination plus a TCP coordinator/worker protocol with leases,
-  heartbeats, cancellation, renewal, and retry handling
+- Local work coordination plus a versioned TCP coordinator/worker protocol
+  with leases, heartbeats, cancellation, renewal, bounded durable results,
+  and retry handling
+- Mutually authenticated remote workers whose certificate identity scopes
+  their protocol worker namespace
+- Coordinator-reserved traffic grants that enforce one aggregate periodic DHT
+  byte budget across its local crawler and all remote workers
 - spdlog operational logging
 
-The TCP coordinator currently admits loopback peers only. Secure remote worker
-admission and remote durable result ingestion remain the boundary before a
-multi-machine deployment should be exposed outside a trusted host.
+Plaintext coordination is deliberately loopback-only. With a dedicated worker
+CA and mTLS configured, disposable `sakuin worker` processes can crawl and
+fetch metadata remotely without access to the storage backend. Observation and
+logical torrent-metadata batches are content-ID validated, materialized only by
+the coordinator, and recorded in a durable result receipt log before success is
+acknowledged. Retrying an acknowledged batch does not duplicate canonical
+facts, including after process restart or observation compaction.
 
 ## Build and test
 
@@ -68,6 +77,29 @@ xmake run sakuin --config=sakuin.toml
 Normal settings can also be overridden through `SAKUIN_*` environment variables
 or `--section.key=value` arguments. The example keeps both the API and work
 coordinator on loopback.
+
+For a remote crawler and metadata fetcher, configure both
+`[distributed.coordinator]` and `[distributed.worker]` as shown in the example,
+issue the worker a certificate whose common name exactly matches
+`distributed.worker.id`, then run:
+
+```bash
+xmake run sakuin worker --config=worker.toml
+```
+
+One worker process registers `id:v4` and/or `id:v6` beneath that authenticated
+identity. The worker needs DHT network access and coordinator TCP access, but no
+canonical-storage mount or database credentials. `distributed.maximum_payload_bytes`
+is the encoded-result ceiling; metadata exceeding it is rejected safely, so
+raise it with the coordinator frame and queued-write limits when broader
+metadata coverage is desired.
+
+`network.traffic.inbound_bytes` and `outbound_bytes` are coordinator-wide when
+the distributed listener is enabled. Workers reserve bounded chunks using
+`network.traffic.grant_bytes`, then admit individual datagrams locally; this
+avoids a coordinator round trip per packet. Reservations are conservatively
+charged immediately, so an unused remainder cannot cause the fleet to exceed
+the configured window.
 
 Observation retention is deletion-capable and therefore disabled by default.
 When enabled, only whole segments whose maximum observation time has crossed a

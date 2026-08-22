@@ -19,6 +19,7 @@ import sakuin.service.local;
 import sakuin.service.maintenance;
 import sakuin.service.materialization;
 import sakuin.service.runtime;
+import sakuin.service.remote_worker;
 import sakuin.service.storage;
 
 extern char **environ;
@@ -31,6 +32,7 @@ extern "C" void handle_signal(int signal) { pending_signal = signal; }
 
 constexpr std::string_view usage = R"usage(Usage:
   sakuin [--config PATH] [--key=value ...]
+  sakuin worker [--config PATH] [--key=value ...]
   sakuin admin compact|verify|gc [--config PATH] [--key=value ...]
 
 Configuration precedence: defaults, TOML, SAKUIN_* environment, command line.
@@ -277,6 +279,33 @@ int main(int argc, char **argv) {
       std::signal(SIGTERM, handle_signal) == SIG_ERR ||
       std::signal(SIGHUP, handle_signal) == SIG_ERR)
     return fail("Unable to install process signal handlers");
+  if (arguments->worker_mode) {
+    auto worker =
+        service::RemoteDhtWorkerService::create(*configuration, observer);
+    if (!worker)
+      return fail(worker.error().message);
+    if (auto started = (*worker)->start(); !started)
+      return fail(started.error().message);
+    if (const auto endpoint =
+            (*worker)->local_endpoint(runtime::AddressFamily::IPv4))
+      spdlog::info("Remote DHT worker IPv4 listening on UDP port {}",
+                   endpoint->port);
+    if (const auto endpoint =
+            (*worker)->local_endpoint(runtime::AddressFamily::IPv6))
+      spdlog::info("Remote DHT worker IPv6 listening on UDP port {}",
+                   endpoint->port);
+    spdlog::info("Remote DHT worker {} connected",
+                 configuration->distributed.worker.id);
+    while (pending_signal != SIGINT && pending_signal != SIGTERM) {
+      if (pending_signal == SIGHUP)
+        pending_signal = 0;
+      std::this_thread::sleep_for(std::chrono::milliseconds{100});
+    }
+    if (auto stopped = (*worker)->stop(); !stopped)
+      return fail(stopped.error().message);
+    spdlog::info("Remote DHT worker stopped");
+    return 0;
+  }
   auto service = service::LocalSakuinService::create(
       *configuration, observer, observer, {}, &observer, &observer, &observer,
       &observer);
@@ -290,8 +319,11 @@ int main(int argc, char **argv) {
   else
     spdlog::info("API disabled");
   if (const auto endpoint = (*service)->coordinator_endpoint())
-    spdlog::info("Distributed coordinator listening on loopback port {}",
-                 endpoint->port);
+    spdlog::info("Distributed coordinator listening on port {}{}",
+                 endpoint->port,
+                 configuration->distributed.coordinator.tls_trust_anchor_file
+                     ? " with mutual TLS"
+                     : " on loopback");
   else
     spdlog::info("Distributed coordinator listener disabled");
   spdlog::info("Sakuin started");

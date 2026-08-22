@@ -241,9 +241,10 @@ core::Result<void> parse_dht(const toml::table &table, ConfigOverlay &overlay) {
 
 core::Result<void> parse_traffic(const toml::table &table,
                                  ConfigOverlay &overlay) {
-  if (auto checked =
-          check_keys(table, {"window_ms", "inbound_bytes", "outbound_bytes"},
-                     "network.traffic.");
+  if (auto checked = check_keys(
+          table,
+          {"window_ms", "inbound_bytes", "outbound_bytes", "grant_bytes"},
+          "network.traffic.");
       !checked)
     return checked;
   for (auto result :
@@ -252,7 +253,9 @@ core::Result<void> parse_traffic(const toml::table &table,
         scalar<std::int64_t>(table, "inbound_bytes",
                              "network.traffic.inbound_bytes", overlay),
         scalar<std::int64_t>(table, "outbound_bytes",
-                             "network.traffic.outbound_bytes", overlay)})
+                             "network.traffic.outbound_bytes", overlay),
+        scalar<std::int64_t>(table, "grant_bytes",
+                             "network.traffic.grant_bytes", overlay)})
     if (!result)
       return result;
   return {};
@@ -503,12 +506,14 @@ core::Result<void> parse_indexing(const toml::table &table,
 
 core::Result<void> parse_distributed_coordinator(const toml::table &table,
                                                  ConfigOverlay &overlay) {
-  if (auto checked = check_keys(
-          table,
-          {"enabled", "listen_address", "listen_port", "maximum_connections",
-           "read_buffer_bytes", "maximum_frame_bytes",
-           "maximum_queued_write_bytes", "idle_timeout_ms"},
-          "distributed.coordinator.");
+  if (auto checked =
+          check_keys(table,
+                     {"enabled", "listen_address", "listen_port",
+                      "maximum_connections", "read_buffer_bytes",
+                      "maximum_frame_bytes", "maximum_queued_write_bytes",
+                      "idle_timeout_ms", "tls_trust_anchor_file",
+                      "tls_certificate_chain_file", "tls_private_key_file"},
+                     "distributed.coordinator.");
       !checked)
     return checked;
   for (auto result :
@@ -532,7 +537,65 @@ core::Result<void> parse_distributed_coordinator(const toml::table &table,
             "distributed.coordinator.maximum_queued_write_bytes", overlay),
         scalar<std::int64_t>(table, "idle_timeout_ms",
                              "distributed.coordinator.idle_timeout_ms",
-                             overlay)})
+                             overlay),
+        scalar<std::string>(table, "tls_trust_anchor_file",
+                            "distributed.coordinator.tls_trust_anchor_file",
+                            overlay),
+        scalar<std::string>(
+            table, "tls_certificate_chain_file",
+            "distributed.coordinator.tls_certificate_chain_file", overlay),
+        scalar<std::string>(table, "tls_private_key_file",
+                            "distributed.coordinator.tls_private_key_file",
+                            overlay)})
+    if (!result)
+      return result;
+  return {};
+}
+
+core::Result<void> parse_distributed_worker(const toml::table &table,
+                                            ConfigOverlay &overlay) {
+  if (auto checked = check_keys(
+          table,
+          {"enabled", "id", "coordinator_address", "coordinator_port",
+           "observation_batch_size", "read_buffer_bytes",
+           "maximum_queued_write_bytes", "connect_timeout_ms",
+           "request_timeout_ms", "idle_timeout_ms", "tls_trust_anchor_file",
+           "tls_certificate_chain_file", "tls_private_key_file",
+           "tls_server_name"},
+          "distributed.worker.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<bool>(table, "enabled", "distributed.worker.enabled", overlay),
+        scalar<std::string>(table, "id", "distributed.worker.id", overlay),
+        scalar<std::string>(table, "coordinator_address",
+                            "distributed.worker.coordinator_address", overlay),
+        scalar<std::int64_t>(table, "coordinator_port",
+                             "distributed.worker.coordinator_port", overlay),
+        scalar<std::int64_t>(table, "observation_batch_size",
+                             "distributed.worker.observation_batch_size",
+                             overlay),
+        scalar<std::int64_t>(table, "read_buffer_bytes",
+                             "distributed.worker.read_buffer_bytes", overlay),
+        scalar<std::int64_t>(table, "maximum_queued_write_bytes",
+                             "distributed.worker.maximum_queued_write_bytes",
+                             overlay),
+        scalar<std::int64_t>(table, "connect_timeout_ms",
+                             "distributed.worker.connect_timeout_ms", overlay),
+        scalar<std::int64_t>(table, "request_timeout_ms",
+                             "distributed.worker.request_timeout_ms", overlay),
+        scalar<std::int64_t>(table, "idle_timeout_ms",
+                             "distributed.worker.idle_timeout_ms", overlay),
+        scalar<std::string>(table, "tls_trust_anchor_file",
+                            "distributed.worker.tls_trust_anchor_file",
+                            overlay),
+        scalar<std::string>(table, "tls_certificate_chain_file",
+                            "distributed.worker.tls_certificate_chain_file",
+                            overlay),
+        scalar<std::string>(table, "tls_private_key_file",
+                            "distributed.worker.tls_private_key_file", overlay),
+        scalar<std::string>(table, "tls_server_name",
+                            "distributed.worker.tls_server_name", overlay)})
     if (!result)
       return result;
   return {};
@@ -540,11 +603,12 @@ core::Result<void> parse_distributed_coordinator(const toml::table &table,
 
 core::Result<void> parse_distributed(const toml::table &table,
                                      ConfigOverlay &overlay) {
-  if (auto checked = check_keys(table,
-                                {"maximum_work_items", "maximum_payload_bytes",
-                                 "worker_timeout_ms", "lease_duration_ms",
-                                 "heartbeat_interval_ms", "coordinator"},
-                                "distributed.");
+  if (auto checked =
+          check_keys(table,
+                     {"maximum_work_items", "maximum_payload_bytes",
+                      "worker_timeout_ms", "lease_duration_ms",
+                      "heartbeat_interval_ms", "coordinator", "worker"},
+                     "distributed.");
       !checked)
     return checked;
   for (auto result :
@@ -565,7 +629,14 @@ core::Result<void> parse_distributed(const toml::table &table,
   if (!coordinator)
     return std::unexpected(coordinator.error());
   if (*coordinator)
-    return parse_distributed_coordinator(**coordinator, overlay);
+    if (auto parsed = parse_distributed_coordinator(**coordinator, overlay);
+        !parsed)
+      return parsed;
+  auto worker = optional_table(table, "worker", "distributed.worker");
+  if (!worker)
+    return std::unexpected(worker.error());
+  if (*worker)
+    return parse_distributed_worker(**worker, overlay);
   return {};
 }
 
@@ -690,6 +761,7 @@ core::Result<ConfigOverlay> environment_overlay(
       {"SAKUIN_TRAFFIC_WINDOW_MS", "network.traffic.window_ms"},
       {"SAKUIN_TRAFFIC_INBOUND_BYTES", "network.traffic.inbound_bytes"},
       {"SAKUIN_TRAFFIC_OUTBOUND_BYTES", "network.traffic.outbound_bytes"},
+      {"SAKUIN_TRAFFIC_GRANT_BYTES", "network.traffic.grant_bytes"},
       {"SAKUIN_STORAGE_BACKEND", "storage.backend"},
       {"SAKUIN_STORAGE_LOCAL_ROOT", "storage.local_root"},
       {"SAKUIN_STORAGE_BLOCK_TARGET_BYTES", "storage.block_target_bytes"},
@@ -767,6 +839,38 @@ core::Result<ConfigOverlay> environment_overlay(
        "distributed.coordinator.maximum_queued_write_bytes"},
       {"SAKUIN_DISTRIBUTED_COORDINATOR_IDLE_TIMEOUT_MS",
        "distributed.coordinator.idle_timeout_ms"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_TLS_TRUST_ANCHOR_FILE",
+       "distributed.coordinator.tls_trust_anchor_file"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_TLS_CERTIFICATE_CHAIN_FILE",
+       "distributed.coordinator.tls_certificate_chain_file"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_TLS_PRIVATE_KEY_FILE",
+       "distributed.coordinator.tls_private_key_file"},
+      {"SAKUIN_DISTRIBUTED_WORKER_ENABLED", "distributed.worker.enabled"},
+      {"SAKUIN_DISTRIBUTED_WORKER_ID", "distributed.worker.id"},
+      {"SAKUIN_DISTRIBUTED_WORKER_COORDINATOR_ADDRESS",
+       "distributed.worker.coordinator_address"},
+      {"SAKUIN_DISTRIBUTED_WORKER_COORDINATOR_PORT",
+       "distributed.worker.coordinator_port"},
+      {"SAKUIN_DISTRIBUTED_WORKER_OBSERVATION_BATCH_SIZE",
+       "distributed.worker.observation_batch_size"},
+      {"SAKUIN_DISTRIBUTED_WORKER_READ_BUFFER_BYTES",
+       "distributed.worker.read_buffer_bytes"},
+      {"SAKUIN_DISTRIBUTED_WORKER_MAXIMUM_QUEUED_WRITE_BYTES",
+       "distributed.worker.maximum_queued_write_bytes"},
+      {"SAKUIN_DISTRIBUTED_WORKER_CONNECT_TIMEOUT_MS",
+       "distributed.worker.connect_timeout_ms"},
+      {"SAKUIN_DISTRIBUTED_WORKER_REQUEST_TIMEOUT_MS",
+       "distributed.worker.request_timeout_ms"},
+      {"SAKUIN_DISTRIBUTED_WORKER_IDLE_TIMEOUT_MS",
+       "distributed.worker.idle_timeout_ms"},
+      {"SAKUIN_DISTRIBUTED_WORKER_TLS_TRUST_ANCHOR_FILE",
+       "distributed.worker.tls_trust_anchor_file"},
+      {"SAKUIN_DISTRIBUTED_WORKER_TLS_CERTIFICATE_CHAIN_FILE",
+       "distributed.worker.tls_certificate_chain_file"},
+      {"SAKUIN_DISTRIBUTED_WORKER_TLS_PRIVATE_KEY_FILE",
+       "distributed.worker.tls_private_key_file"},
+      {"SAKUIN_DISTRIBUTED_WORKER_TLS_SERVER_NAME",
+       "distributed.worker.tls_server_name"},
   };
   ConfigOverlay overlay;
   for (const auto &[name, value] : environment) {

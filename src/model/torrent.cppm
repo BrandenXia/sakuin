@@ -11,6 +11,7 @@ struct FileRecord {
   std::string path;
   std::uint64_t size;
 
+  friend bool operator==(const FileRecord &, const FileRecord &) = default;
 };
 
 struct TorrentRecord {
@@ -24,6 +25,8 @@ struct TorrentRecord {
   std::uint64_t total_size;
   std::vector<FileRecord> files;
 
+  friend bool operator==(const TorrentRecord &,
+                         const TorrentRecord &) = default;
 };
 
 } // namespace sakuin::model

@@ -8,6 +8,8 @@ import sakuin.core.result;
 import sakuin.index.duplicates;
 import sakuin.runtime.datagram;
 import sakuin.runtime.stream;
+import sakuin.runtime.traffic;
+import sakuin.scheduler.traffic;
 import sakuin.scheduler.work;
 import sakuin.search.rebuild;
 import sakuin.service.api;
@@ -17,6 +19,7 @@ import sakuin.service.maintenance;
 import sakuin.service.materialization;
 import sakuin.service.runtime;
 import sakuin.service.storage;
+import sakuin.service.traffic;
 
 export namespace sakuin::service {
 
@@ -110,12 +113,18 @@ private:
       std::unique_ptr<DuplicateIndexCoordinator> duplicates,
       std::unique_ptr<StorageMaintenanceCoordinator> maintenance,
       std::unique_ptr<scheduler::LocalWorkCoordinator> work,
+      std::unique_ptr<runtime::TrafficGovernor> aggregate_traffic,
+      std::unique_ptr<scheduler::GovernorTrafficGrantSource> traffic_grants,
+      std::unique_ptr<scheduler::GrantedTrafficGovernor> local_traffic,
       std::unique_ptr<DistributedWorkService> distributed,
       std::unique_ptr<AsioDhtRuntime> runtime)
       : storage_(std::move(storage)), api_(std::move(api)),
         materialization_(std::move(materialization)),
         duplicates_(std::move(duplicates)),
         maintenance_(std::move(maintenance)), work_(std::move(work)),
+        aggregate_traffic_(std::move(aggregate_traffic)),
+        traffic_grants_(std::move(traffic_grants)),
+        local_traffic_(std::move(local_traffic)),
         distributed_(std::move(distributed)), runtime_(std::move(runtime)) {}
 
   std::unique_ptr<LocalCanonicalStorage> storage_;
@@ -124,6 +133,9 @@ private:
   std::unique_ptr<DuplicateIndexCoordinator> duplicates_;
   std::unique_ptr<StorageMaintenanceCoordinator> maintenance_;
   std::unique_ptr<scheduler::LocalWorkCoordinator> work_;
+  std::unique_ptr<runtime::TrafficGovernor> aggregate_traffic_;
+  std::unique_ptr<scheduler::GovernorTrafficGrantSource> traffic_grants_;
+  std::unique_ptr<scheduler::GrantedTrafficGovernor> local_traffic_;
   std::unique_ptr<DistributedWorkService> distributed_;
   std::unique_ptr<AsioDhtRuntime> runtime_;
 };
@@ -220,10 +232,33 @@ core::Result<std::unique_ptr<LocalSakuinService>> LocalSakuinService::create(
     api = std::move(*created);
   }
   auto *api_refresh = api.get();
+  (*storage)->set_work_result_torrent_callback(
+      api_refresh
+          ? std::function<void(std::uint64_t)>{[api_refresh](
+                                                   std::uint64_t generation) {
+              api_refresh->request_search_refresh(generation);
+            }}
+          : std::function<void(std::uint64_t)>{});
+  std::unique_ptr<runtime::TrafficGovernor> aggregate_traffic;
+  std::unique_ptr<scheduler::GovernorTrafficGrantSource> traffic_grants;
+  std::unique_ptr<scheduler::GrantedTrafficGovernor> local_traffic;
   std::unique_ptr<DistributedWorkService> distributed;
   if (configuration.distributed.coordinator.enabled) {
-    auto created = DistributedWorkService::create(configuration.distributed,
-                                                  **work, distributed_observer);
+    auto aggregate = create_traffic_governor(configuration.network.traffic);
+    if (!aggregate)
+      return std::unexpected(aggregate.error());
+    aggregate_traffic = std::move(*aggregate);
+    traffic_grants = std::make_unique<scheduler::GovernorTrafficGrantSource>(
+        *aggregate_traffic);
+    auto granted = scheduler::GrantedTrafficGovernor::create(
+        *traffic_grants, "coordinator-local",
+        configuration.network.traffic.grant_bytes);
+    if (!granted)
+      return std::unexpected(granted.error());
+    local_traffic = std::move(*granted);
+    auto created = DistributedWorkService::create(
+        configuration.distributed, **work, distributed_observer,
+        &(*storage)->work_results(), traffic_grants.get());
     if (!created)
       return std::unexpected(created.error());
     distributed = std::move(*created);
@@ -258,6 +293,7 @@ core::Result<std::unique_ptr<LocalSakuinService>> LocalSakuinService::create(
        .torrents = &(*storage)->torrents(),
        .observer = &dht_observer,
        .work = work->get(),
+       .traffic = local_traffic.get(),
        .worker_heartbeat_interval =
            configuration.distributed.heartbeat_interval,
        .on_torrent_committed =
@@ -273,7 +309,8 @@ core::Result<std::unique_ptr<LocalSakuinService>> LocalSakuinService::create(
   return std::unique_ptr<LocalSakuinService>{new LocalSakuinService{
       std::move(*storage), std::move(api), std::move(materialization),
       std::move(duplicates), std::move(maintenance), std::move(*work),
-      std::move(distributed), std::move(*runtime)}};
+      std::move(aggregate_traffic), std::move(traffic_grants),
+      std::move(local_traffic), std::move(distributed), std::move(*runtime)}};
 }
 
 LocalSakuinService::~LocalSakuinService() { static_cast<void>(stop()); }
