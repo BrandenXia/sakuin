@@ -484,6 +484,8 @@ TorrentDataset::enrich(model::TorrentRecord metadata) {
     metadata.first_seen =
         std::min(metadata.first_seen, (*existing)->first_seen);
     metadata.last_seen = std::max(metadata.last_seen, (*existing)->last_seen);
+    if (metadata == **existing)
+      return CommitResult{.generation = (*base)->manifest().id.generation};
   }
 
   auto writer = RowV1SegmentWriter::create(*blobs_, segment_header_);

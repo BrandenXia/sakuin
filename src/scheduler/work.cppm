@@ -46,6 +46,30 @@ struct WorkLease {
   core::Timestamp expires_at;
 };
 
+enum class WorkResultKind : std::uint8_t {
+  ObservationBatch = 1,
+  TorrentMetadataBatch = 2,
+};
+
+// Idempotent result envelope. The id is derived from the canonical encoded
+// payload, allowing a coordinator to acknowledge a retried batch without
+// publishing duplicate canonical facts.
+struct WorkResultBatch {
+  WorkId id;
+  WorkResultKind kind{};
+  core::ByteBuffer payload;
+
+  friend bool operator==(const WorkResultBatch &,
+                         const WorkResultBatch &) = default;
+};
+
+class WorkResultPublisher {
+public:
+  virtual ~WorkResultPublisher() = default;
+  virtual core::Result<bool> publish_result(std::string_view worker,
+                                            WorkResultBatch batch) = 0;
+};
+
 struct WorkCoordinatorOptions {
   std::size_t maximum_work_items{65'536};
   std::size_t maximum_payload_bytes{1U * 1024U * 1024U};
@@ -62,6 +86,7 @@ struct WorkCoordinatorSnapshot {
 };
 
 WorkId content_work_id(core::ByteView material);
+WorkId content_work_result_id(WorkResultKind kind, core::ByteView payload);
 
 class WorkCoordinator {
 public:
@@ -170,6 +195,12 @@ WorkId content_work_id(core::ByteView material) {
   std::ranges::copy_n(digest.bytes.begin(), result.bytes.size(),
                       result.bytes.begin());
   return result;
+}
+
+WorkId content_work_result_id(WorkResultKind kind, core::ByteView payload) {
+  core::ByteBuffer material{static_cast<core::Byte>(kind)};
+  material.insert(material.end(), payload.begin(), payload.end());
+  return content_work_id(material);
 }
 
 core::Result<std::unique_ptr<LocalWorkCoordinator>>

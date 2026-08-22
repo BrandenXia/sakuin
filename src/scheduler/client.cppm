@@ -6,7 +6,9 @@ import sakuin.core.bytes;
 import sakuin.core.result;
 import sakuin.core.time;
 import sakuin.runtime.stream;
+import sakuin.runtime.traffic;
 import sakuin.scheduler.protocol;
+import sakuin.scheduler.traffic;
 import sakuin.scheduler.work;
 
 export namespace sakuin::scheduler {
@@ -21,6 +23,8 @@ struct StreamWorkCoordinatorOptions {
 // stream abstraction. The implementation supports concurrent callers and does
 // not expose the runtime's execution mechanism to scheduler consumers.
 class StreamWorkCoordinator final : public WorkCoordinator,
+                                    public WorkResultPublisher,
+                                    public TrafficGrantSource,
                                     private runtime::StreamReceiver {
 public:
   static core::Result<std::unique_ptr<StreamWorkCoordinator>>
@@ -47,6 +51,11 @@ public:
   core::Result<void> unregister_worker(std::string_view worker,
                                        core::Timestamp now) override;
   core::Result<WorkCoordinatorSnapshot> snapshot(core::Timestamp now) override;
+  core::Result<bool> publish_result(std::string_view worker,
+                                    WorkResultBatch result) override;
+  core::Result<TrafficGrant> acquire(std::string_view worker,
+                                     runtime::TrafficRequest request,
+                                     core::Timestamp now) override;
 
 private:
   struct Pending {
@@ -334,6 +343,28 @@ StreamWorkCoordinator::snapshot(core::Timestamp) {
   if (!response)
     return std::unexpected(response.error());
   return response_value<WorkCoordinatorSnapshot>(std::move(*response));
+}
+
+core::Result<bool>
+StreamWorkCoordinator::publish_result(std::string_view worker,
+                                      WorkResultBatch result) {
+  auto response =
+      exchange(WorkProtocolOperation::PublishResult,
+               PublishWorkResultRequest{.worker = std::string{worker},
+                                        .result = std::move(result)});
+  if (!response)
+    return std::unexpected(response.error());
+  return response_value<bool>(std::move(*response));
+}
+
+core::Result<TrafficGrant> StreamWorkCoordinator::acquire(
+    std::string_view worker, runtime::TrafficRequest request, core::Timestamp) {
+  auto response = exchange(
+      WorkProtocolOperation::AcquireTraffic,
+      AcquireTrafficRequest{.worker = std::string{worker}, .traffic = request});
+  if (!response)
+    return std::unexpected(response.error());
+  return response_value<TrafficGrant>(std::move(*response));
 }
 
 } // namespace sakuin::scheduler

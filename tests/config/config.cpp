@@ -44,6 +44,7 @@ storage_retry_delay_ms = 250
 [network.traffic]
 window_ms = 3600000
 outbound_bytes = 1000000
+grant_bytes = 32768
 
 [storage]
 backend = "local"
@@ -108,6 +109,25 @@ read_buffer_bytes = 8192
 maximum_frame_bytes = 1048576
 maximum_queued_write_bytes = 2097152
 idle_timeout_ms = 15000
+tls_trust_anchor_file = "/etc/sakuin/workers/ca.pem"
+tls_certificate_chain_file = "/etc/sakuin/workers/coordinator.pem"
+tls_private_key_file = "/etc/sakuin/workers/coordinator-key.pem"
+
+[distributed.worker]
+enabled = true
+id = "crawler-a"
+coordinator_address = "coordinator.internal"
+coordinator_port = 7102
+observation_batch_size = 2048
+read_buffer_bytes = 4096
+maximum_queued_write_bytes = 2097152
+connect_timeout_ms = 8000
+request_timeout_ms = 9000
+idle_timeout_ms = 14000
+tls_trust_anchor_file = "/etc/sakuin/coordinator/ca.pem"
+tls_certificate_chain_file = "/etc/sakuin/workers/crawler-a.pem"
+tls_private_key_file = "/etc/sakuin/workers/crawler-a-key.pem"
+tls_server_name = "coordinator.internal"
 )toml";
 
   auto file = config::parse_toml(source, "test.toml");
@@ -132,6 +152,8 @@ idle_timeout_ms = 15000
                 std::string(40, 'a')},
       std::pair{std::string{"SAKUIN_DHT_IDENTITY_FIXED_IPV6_NODE_ID"},
                 std::string(40, 'b')},
+      std::pair{std::string{"SAKUIN_TRAFFIC_GRANT_BYTES"},
+                std::string{"131072"}},
       std::pair{std::string{"SAKUIN_STORAGE_COMPACTION_MINIMUM_SEGMENTS"},
                 std::string{"8"}},
       std::pair{std::string{"SAKUIN_STORAGE_COMPACTION_MAXIMUM_WARM_SEGMENTS"},
@@ -153,6 +175,8 @@ idle_timeout_ms = 15000
                 std::string{"16384"}},
       std::pair{std::string{"SAKUIN_DISTRIBUTED_COORDINATOR_LISTEN_PORT"},
                 std::string{"7201"}},
+      std::pair{std::string{"SAKUIN_DISTRIBUTED_WORKER_OBSERVATION_BATCH_SIZE"},
+                std::string{"1024"}},
       std::pair{std::string{"UNRELATED"}, std::string{"ignored"}}};
   auto env = config::environment_overlay(environment);
   if (!env)
@@ -197,6 +221,7 @@ idle_timeout_ms = 15000
       loaded.network.dht.identity.fixed_ipv4_node_id != std::string(40, 'a') ||
       loaded.network.dht.identity.fixed_ipv6_node_id != std::string(40, 'b') ||
       loaded.network.dht.bootstrap.size() != 2 ||
+      loaded.network.traffic.grant_bytes != 131072 ||
       loaded.storage.local_root != "/srv/sakuin" ||
       loaded.storage.compression_level != 5 ||
       loaded.storage.compaction_minimum_segments != 8 ||
@@ -238,7 +263,31 @@ idle_timeout_ms = 15000
       loaded.distributed.coordinator.maximum_frame_bytes != 1024U * 1024U ||
       loaded.distributed.coordinator.maximum_queued_write_bytes !=
           2U * 1024U * 1024U ||
-      loaded.distributed.coordinator.idle_timeout != std::chrono::seconds{15})
+      loaded.distributed.coordinator.idle_timeout != std::chrono::seconds{15} ||
+      loaded.distributed.coordinator.tls_trust_anchor_file !=
+          "/etc/sakuin/workers/ca.pem" ||
+      loaded.distributed.coordinator.tls_certificate_chain_file !=
+          "/etc/sakuin/workers/coordinator.pem" ||
+      loaded.distributed.coordinator.tls_private_key_file !=
+          "/etc/sakuin/workers/coordinator-key.pem" ||
+      !loaded.distributed.worker.enabled ||
+      loaded.distributed.worker.id != "crawler-a" ||
+      loaded.distributed.worker.coordinator_address != "coordinator.internal" ||
+      loaded.distributed.worker.coordinator_port != 7102 ||
+      loaded.distributed.worker.observation_batch_size != 1024 ||
+      loaded.distributed.worker.read_buffer_bytes != 4096 ||
+      loaded.distributed.worker.maximum_queued_write_bytes !=
+          2U * 1024U * 1024U ||
+      loaded.distributed.worker.connect_timeout != std::chrono::seconds{8} ||
+      loaded.distributed.worker.request_timeout != std::chrono::seconds{9} ||
+      loaded.distributed.worker.idle_timeout != std::chrono::seconds{14} ||
+      loaded.distributed.worker.tls_trust_anchor_file !=
+          "/etc/sakuin/coordinator/ca.pem" ||
+      loaded.distributed.worker.tls_certificate_chain_file !=
+          "/etc/sakuin/workers/crawler-a.pem" ||
+      loaded.distributed.worker.tls_private_key_file !=
+          "/etc/sakuin/workers/crawler-a-key.pem" ||
+      loaded.distributed.worker.tls_server_name != "coordinator.internal")
     return 6;
 
   if (config::parse_toml("[network]\nlistne_port = 1") ||
@@ -285,5 +334,14 @@ idle_timeout_ms = 15000
   invalid_coordinator.distributed.coordinator.maximum_frame_bytes = 128;
   if (config::validate(invalid_coordinator))
     return 15;
+  auto incomplete_worker_tls = config::defaults();
+  incomplete_worker_tls.distributed.coordinator.tls_trust_anchor_file =
+      "ca.pem";
+  if (config::validate(incomplete_worker_tls))
+    return 16;
+  auto enabled_worker_without_tls = config::defaults();
+  enabled_worker_without_tls.distributed.worker.enabled = true;
+  if (config::validate(enabled_worker_without_tls))
+    return 17;
   return 0;
 }

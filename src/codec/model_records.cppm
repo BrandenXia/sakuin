@@ -16,7 +16,15 @@ export namespace sakuin::storage {
 inline constexpr SchemaId ObservationRecordSchema{1};
 inline constexpr SchemaId TorrentRecordSchema{2};
 
-class ObservationRecordCodec final : public RecordCodec<model::ObservationRecord> {
+struct TorrentRecordDecodeLimits {
+  std::size_t maximum_record_bytes{64U * 1024U * 1024U};
+  std::size_t maximum_files{1'000'000};
+  std::size_t maximum_name_bytes{4U * 1024U * 1024U};
+  std::size_t maximum_path_bytes{4U * 1024U * 1024U};
+};
+
+class ObservationRecordCodec final
+    : public RecordCodec<model::ObservationRecord> {
 public:
   CodecVersion version() const noexcept override { return {1}; }
 
@@ -32,7 +40,10 @@ public:
 
   core::Result<void> encode(const model::TorrentRecord &record,
                             core::ByteBuffer &output) const override;
-  core::Result<model::TorrentRecord> decode(core::ByteView input) const override;
+  core::Result<model::TorrentRecord>
+  decode(core::ByteView input) const override;
+  core::Result<model::TorrentRecord>
+  decode(core::ByteView input, TorrentRecordDecodeLimits limits) const;
 };
 
 } // namespace sakuin::storage
@@ -75,8 +86,7 @@ class Decoder {
 public:
   explicit Decoder(core::ByteView input) : input_(input) {}
 
-  template <std::unsigned_integral Integer>
-  core::Result<Integer> integer() {
+  template <std::unsigned_integral Integer> core::Result<Integer> integer() {
     if (remaining() < sizeof(Integer))
       return std::unexpected(invalid_record("Encoded record is truncated"));
     Integer value{};
@@ -94,17 +104,22 @@ public:
     if (!encoded)
       return std::unexpected(encoded.error());
     const auto ticks = std::bit_cast<std::int64_t>(*encoded);
-    return core::Timestamp{std::chrono::duration_cast<core::Timestamp::duration>(
-        std::chrono::nanoseconds{ticks})};
+    return core::Timestamp{
+        std::chrono::duration_cast<core::Timestamp::duration>(
+            std::chrono::nanoseconds{ticks})};
   }
 
-  core::Result<std::string> string() {
+  core::Result<std::string>
+  string(std::size_t maximum_bytes = std::numeric_limits<std::size_t>::max()) {
     auto length = integer<std::uint32_t>();
     if (!length)
       return std::unexpected(length.error());
+    if (*length > maximum_bytes)
+      return std::unexpected(invalid_record("Encoded string exceeds limit"));
     if (remaining() < *length)
       return std::unexpected(invalid_record("Encoded string is truncated"));
-    const auto *begin = reinterpret_cast<const char *>(input_.data() + position_);
+    const auto *begin =
+        reinterpret_cast<const char *>(input_.data() + position_);
     std::string value{begin, begin + *length};
     position_ += *length;
     return value;
@@ -164,7 +179,8 @@ ObservationRecordCodec::decode(core::ByteView input) const {
   if (!observed_at)
     return std::unexpected(observed_at.error());
   if (!decoder.finished())
-    return std::unexpected(invalid_record("Encoded observation has trailing bytes"));
+    return std::unexpected(
+        invalid_record("Encoded observation has trailing bytes"));
   return model::ObservationRecord{.info_hash = *info_hash,
                                   .observed_at = *observed_at};
 }
@@ -197,19 +213,31 @@ TorrentRecordCodec::encode(const model::TorrentRecord &record,
 
 core::Result<model::TorrentRecord>
 TorrentRecordCodec::decode(core::ByteView input) const {
+  return decode(input, {});
+}
+
+core::Result<model::TorrentRecord>
+TorrentRecordCodec::decode(core::ByteView input,
+                           TorrentRecordDecodeLimits limits) const {
+  if (limits.maximum_record_bytes == 0 || limits.maximum_files == 0 ||
+      limits.maximum_name_bytes == 0 || limits.maximum_path_bytes == 0 ||
+      input.size() > limits.maximum_record_bytes)
+    return std::unexpected(
+        invalid_record("Encoded torrent record exceeds decode limits"));
   Decoder decoder{input};
   auto info_hash = decode_info_hash(decoder);
   auto first_seen = decoder.timestamp();
   auto last_seen = decoder.timestamp();
   auto has_name = decoder.integer<std::uint8_t>();
   if (!info_hash || !first_seen || !last_seen || !has_name)
-    return std::unexpected(invalid_record("Encoded torrent header is truncated"));
+    return std::unexpected(
+        invalid_record("Encoded torrent header is truncated"));
   if (*has_name > 1)
     return std::unexpected(invalid_record("Invalid optional-name marker"));
 
   std::optional<std::string> name;
   if (*has_name == 1) {
-    auto decoded_name = decoder.string();
+    auto decoded_name = decoder.string(limits.maximum_name_bytes);
     if (!decoded_name)
       return std::unexpected(decoded_name.error());
     name = std::move(*decoded_name);
@@ -219,18 +247,21 @@ TorrentRecordCodec::decode(core::ByteView input) const {
   auto file_count = decoder.integer<std::uint32_t>();
   if (!total_size || !file_count)
     return std::unexpected(invalid_record("Encoded torrent body is truncated"));
+  if (*file_count > limits.maximum_files)
+    return std::unexpected(invalid_record("Encoded file count exceeds limit"));
 
   std::vector<model::FileRecord> files;
   files.reserve(*file_count);
   for (std::uint32_t index = 0; index < *file_count; ++index) {
-    auto path = decoder.string();
+    auto path = decoder.string(limits.maximum_path_bytes);
     auto size = decoder.integer<std::uint64_t>();
     if (!path || !size)
       return std::unexpected(invalid_record("Encoded file entry is truncated"));
     files.push_back({.path = std::move(*path), .size = *size});
   }
   if (!decoder.finished())
-    return std::unexpected(invalid_record("Encoded torrent has trailing bytes"));
+    return std::unexpected(
+        invalid_record("Encoded torrent has trailing bytes"));
 
   return model::TorrentRecord{
       .info_hash = *info_hash,

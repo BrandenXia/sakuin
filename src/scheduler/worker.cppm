@@ -9,11 +9,15 @@ import sakuin.scheduler.work;
 export namespace sakuin::scheduler {
 
 struct WorkExecutionOutcome {
+  std::optional<WorkResultBatch> result;
   std::optional<core::Error> error;
   bool retryable{};
   core::Duration retry_after{};
 
   static WorkExecutionOutcome succeeded() { return {}; }
+  static WorkExecutionOutcome succeeded(WorkResultBatch result) {
+    return {.result = std::move(result)};
+  }
   static WorkExecutionOutcome failed(core::Error error) {
     return {.error = std::move(error)};
   }
@@ -52,6 +56,7 @@ struct WorkExecutionRuntimeOptions {
   core::Duration heartbeat_interval{std::chrono::seconds{10}};
   core::Duration lease_renewal_interval{std::chrono::seconds{30}};
   core::Duration default_retry_delay{std::chrono::seconds{5}};
+  WorkResultPublisher *results{};
 };
 
 class WorkExecutionRuntime final {
@@ -310,8 +315,28 @@ void WorkExecutionRuntime::harvest(core::Timestamp current) {
 
     core::Result<void> settled;
     if (!outcome->error) {
-      settled = coordinator_->complete(options_.worker.id, execution->lease.id,
-                                       current);
+      if (outcome->result) {
+        if (!options_.results) {
+          outcome = WorkExecutionOutcome::retry(
+              {core::ErrorCode::Internal,
+               "Work produced a result but no result publisher is configured"},
+              options_.default_retry_delay);
+        } else {
+          auto published = options_.results->publish_result(
+              options_.worker.id, std::move(*outcome->result));
+          if (!published)
+            outcome = WorkExecutionOutcome::retry(published.error(),
+                                                  options_.default_retry_delay);
+        }
+      }
+      if (!outcome->error)
+        settled = coordinator_->complete(options_.worker.id,
+                                         execution->lease.id, current);
+      else
+        settled = coordinator_->fail(
+            options_.worker.id, execution->lease.id, true, current,
+            current + std::chrono::duration_cast<core::Timestamp::duration>(
+                          outcome->retry_after));
     } else {
       const auto delay = outcome->retryable
                              ? (outcome->retry_after == core::Duration::zero()

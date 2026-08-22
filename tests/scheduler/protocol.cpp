@@ -1,6 +1,7 @@
 import std;
 
 import sakuin.core;
+import sakuin.runtime;
 import sakuin.scheduler;
 
 namespace {
@@ -143,7 +144,7 @@ int main() {
   if (corrupt || corrupt.error().code != core::ErrorCode::CorruptSegment)
     return 11;
   auto unsupported = *first;
-  unsupported[5] = core::Byte{2};
+  unsupported[5] = core::Byte{0xff};
   auto version = scheduler::decode_work_request(unsupported);
   if (version || version.error().code != core::ErrorCode::UnsupportedFormat)
     return 12;
@@ -198,5 +199,64 @@ int main() {
   if (excessive_retry ||
       excessive_retry.error().code != core::ErrorCode::InvalidArgument)
     return 19;
+  scheduler::WorkResultBatch result{
+      .id = scheduler::content_work_result_id(
+          scheduler::WorkResultKind::ObservationBatch, bytes("observations")),
+      .kind = scheduler::WorkResultKind::ObservationBatch,
+      .payload = bytes("observations")};
+  auto encoded_result = scheduler::encode_work_request(
+      {.request_id = 13,
+       .operation = scheduler::WorkProtocolOperation::PublishResult,
+       .payload = scheduler::PublishWorkResultRequest{.worker = worker.id,
+                                                      .result = result}});
+  auto decoded_result = encoded_result
+                            ? scheduler::decode_work_request(*encoded_result)
+                            : core::Result<scheduler::WorkProtocolRequest>{
+                                  std::unexpected(encoded_result.error())};
+  if (!decoded_result ||
+      std::get<scheduler::PublishWorkResultRequest>(decoded_result->payload)
+              .result != result)
+    return 20;
+  scheduler::WorkProtocolLimits small_result;
+  small_result.maximum_result_payload_bytes = 4;
+  if (scheduler::encode_work_request(
+          {.request_id = 14,
+           .operation = scheduler::WorkProtocolOperation::PublishResult,
+           .payload = scheduler::PublishWorkResultRequest{.worker = worker.id,
+                                                          .result = result}},
+          small_result))
+    return 21;
+  auto encoded_traffic = scheduler::encode_work_request(
+      {.request_id = 15,
+       .operation = scheduler::WorkProtocolOperation::AcquireTraffic,
+       .payload = scheduler::AcquireTrafficRequest{
+           .worker = worker.id,
+           .traffic = {.direction = runtime::TrafficDirection::Outbound,
+                       .traffic_class = 4,
+                       .bytes = 65'536}}});
+  auto decoded_traffic = encoded_traffic
+                             ? scheduler::decode_work_request(*encoded_traffic)
+                             : core::Result<scheduler::WorkProtocolRequest>{
+                                   std::unexpected(encoded_traffic.error())};
+  if (!decoded_traffic ||
+      std::get<scheduler::AcquireTrafficRequest>(decoded_traffic->payload)
+              .traffic.bytes != 65'536)
+    return 22;
+  scheduler::WorkProtocolResponse traffic_response{
+      .request_id = 15,
+      .operation = scheduler::WorkProtocolOperation::AcquireTraffic,
+      .payload = scheduler::TrafficGrant{
+          .bytes = 32'768, .retry_after = std::chrono::milliseconds{250}}};
+  auto encoded_traffic_response =
+      scheduler::encode_work_response(traffic_response);
+  auto decoded_traffic_response =
+      encoded_traffic_response
+          ? scheduler::decode_work_response(*encoded_traffic_response)
+          : core::Result<scheduler::WorkProtocolResponse>{
+                std::unexpected(encoded_traffic_response.error())};
+  if (!decoded_traffic_response ||
+      std::get<scheduler::TrafficGrant>(decoded_traffic_response->payload) !=
+          std::get<scheduler::TrafficGrant>(traffic_response.payload))
+    return 23;
   return 0;
 }

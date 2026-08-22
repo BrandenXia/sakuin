@@ -11,6 +11,8 @@ import sakuin.dht.bootstrap;
 import sakuin.dht.identity;
 import sakuin.dht.krpc;
 import sakuin.dht.metadata;
+import sakuin.dht.metadata_controller;
+import sakuin.dht.metadata_fetch;
 import sakuin.dht.node;
 import sakuin.dht.observation;
 import sakuin.dht.routing_maintenance;
@@ -50,9 +52,11 @@ resolve_dht_bootstrap(std::span<const std::string> configured,
 struct AsioDhtFamilyRuntimeDependencies {
   dht::ObservationSink *observations{};
   storage::TorrentDataset *torrents{};
+  dht::MetadataFetchObserver *metadata_results{};
   integration::DhtRuntimeWorkerObserver *observer{};
   runtime::TrafficGovernor *traffic{};
   scheduler::WorkCoordinator *work{};
+  std::string_view worker_namespace;
   core::Duration worker_heartbeat_interval{std::chrono::seconds{10}};
   std::function<void(std::uint64_t)> on_torrent_committed;
 };
@@ -100,6 +104,7 @@ private:
   std::unique_ptr<dht::RoutingMaintenancePlanner> routing_;
   integration::DhtRuntimeWakeup wakeup_;
   std::unique_ptr<integration::TorrentMetadataAcquisition> metadata_;
+  std::unique_ptr<dht::MetadataAcquisitionController> external_metadata_;
   std::unique_ptr<integration::DhtRuntimeActionPump> pump_;
   std::unique_ptr<dht::DhtRuntimeDriver> driver_;
   std::unique_ptr<integration::DhtRuntimeWorker> worker_;
@@ -150,7 +155,11 @@ core::Result<BootstrapHost> parse_bootstrap_host(std::string_view configured) {
 }
 
 std::string dht_worker_id(runtime::AddressFamily family,
-                          const dht::krpc::NodeId &node_id) {
+                          const dht::krpc::NodeId &node_id,
+                          std::string_view worker_namespace) {
+  if (!worker_namespace.empty())
+    return std::string{worker_namespace} +
+           (family == runtime::AddressFamily::IPv4 ? ":v4" : ":v6");
   constexpr std::string_view hexadecimal{"0123456789abcdef"};
   std::string result =
       family == runtime::AddressFamily::IPv4 ? "dht-v4-" : "dht-v6-";
@@ -231,10 +240,16 @@ AsioDhtFamilyRuntime::create(
     return std::unexpected(core::Error{
         core::ErrorCode::InvalidArgument,
         "DHT family runtime requires observation and worker observers"});
-  if (configuration.metadata.enabled && (!dependencies.torrents))
+  if (configuration.metadata.enabled && !dependencies.torrents &&
+      !dependencies.metadata_results)
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
-                    "Enabled metadata acquisition requires a torrent dataset"});
+                    "Enabled metadata acquisition requires a canonical or "
+                    "remote result sink"});
+  if (dependencies.torrents && dependencies.metadata_results)
+    return std::unexpected(core::Error{
+        core::ErrorCode::InvalidArgument,
+        "Metadata acquisition must use exactly one completion sink"});
   if (material.current_external &&
       material.current_external->family != address_family)
     return std::unexpected(core::Error{
@@ -292,17 +307,32 @@ AsioDhtFamilyRuntime::create(
 
   const auto wake_owner = [owner = result.get()] { owner->wakeup_.notify(); };
   if (configuration.metadata.enabled) {
-    auto metadata = integration::TorrentMetadataAcquisition::create(
-        material.peer_id, result->streams_, *dependencies.torrents,
-        configuration.metadata, wake_owner, dependencies.on_torrent_committed);
-    if (!metadata)
-      return std::unexpected(metadata.error());
-    result->metadata_ = std::move(*metadata);
+    if (dependencies.metadata_results) {
+      auto runtime =
+          integration::metadata_runtime_config(configuration.metadata);
+      runtime.controller.wake_owner = wake_owner;
+      auto metadata = dht::MetadataAcquisitionController::create(
+          material.peer_id, result->streams_, *dependencies.metadata_results,
+          std::move(runtime.controller));
+      if (!metadata)
+        return std::unexpected(metadata.error());
+      result->external_metadata_ = std::move(*metadata);
+    } else {
+      auto metadata = integration::TorrentMetadataAcquisition::create(
+          material.peer_id, result->streams_, *dependencies.torrents,
+          configuration.metadata, wake_owner,
+          dependencies.on_torrent_committed);
+      if (!metadata)
+        return std::unexpected(metadata.error());
+      result->metadata_ = std::move(*metadata);
+    }
   }
+  auto *metadata_controller = result->metadata_
+                                  ? result->metadata_->controller()
+                                  : result->external_metadata_.get();
   auto pump = integration::DhtRuntimeActionPump::create(
       *dependencies.observations,
-      {.metadata =
-           result->metadata_ ? result->metadata_->controller() : nullptr,
+      {.metadata = metadata_controller,
        .node = result->node_.get(),
        .bootstrap = result->bootstrap_.get(),
        .routing = result->routing_.get(),
@@ -324,7 +354,8 @@ AsioDhtFamilyRuntime::create(
       *result->driver_, *result->pump_, result->wakeup_, *dependencies.observer,
       integration::DhtRuntimeWorkerScheduling{
           .coordinator = dependencies.work,
-          .worker = {.id = dht_worker_id(address_family, material.node_id),
+          .worker = {.id = dht_worker_id(address_family, material.node_id,
+                                         dependencies.worker_namespace),
                      .capabilities = {scheduler::WorkClass::DhtCrawl}},
           .heartbeat_interval = dependencies.worker_heartbeat_interval});
   return result;
@@ -339,6 +370,8 @@ void AsioDhtFamilyRuntime::stop() noexcept {
     worker_->stop();
   if (metadata_)
     metadata_->stop();
+  if (external_metadata_)
+    external_metadata_->stop();
 }
 
 bool AsioDhtFamilyRuntime::running() const noexcept {

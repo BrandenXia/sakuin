@@ -40,6 +40,9 @@ storage_retry_delay_ms = 1000
 
 [network.traffic]
 window_ms = 3600000
+# Remote workers reserve quota in bounded chunks to avoid a coordinator round
+# trip for every DHT datagram. Reserved but unused bytes remain charged.
+grant_bytes = 65536
 # inbound_bytes = 1073741824
 # outbound_bytes = 1073741824
 
@@ -105,13 +108,18 @@ window_ms = 60000
 
 [distributed]
 maximum_work_items = 65536
+# This is also the maximum encoded metadata record a remote worker can return.
+# Raise it together with the frame/queued-write limits below if remote workers
+# should accept torrents near maximum_metadata_bytes.
 maximum_payload_bytes = 1048576
 worker_timeout_ms = 30000
 lease_duration_ms = 120000
 heartbeat_interval_ms = 10000
 
-# The TCP-first coordinator is loopback-only until authenticated remote worker
-# admission is configured. Port 0 requests an ephemeral test port.
+# Without all three mTLS paths, the coordinator deliberately remains
+# loopback-only. With them, it can bind remotely and requires a client
+# certificate signed by the dedicated worker CA. A worker certificate's common
+# name is its protocol worker id. Port 0 requests an ephemeral test port.
 [distributed.coordinator]
 enabled = false
 listen_address = "127.0.0.1"
@@ -121,3 +129,27 @@ read_buffer_bytes = 16384
 maximum_frame_bytes = 2097152
 maximum_queued_write_bytes = 4194304
 idle_timeout_ms = 30000
+# tls_trust_anchor_file = "/etc/sakuin/workers/ca.pem"
+# tls_certificate_chain_file = "/etc/sakuin/workers/coordinator.pem"
+# tls_private_key_file = "/etc/sakuin/workers/coordinator-key.pem"
+
+# Run this configuration as a disposable observation/metadata worker with:
+#   sakuin worker --config /etc/sakuin/worker.toml
+# The certificate common name must equal `id`. One process registers the
+# namespaced protocol workers `id:v4` and/or `id:v6`. Results are acknowledged
+# only after the coordinator publishes canonical data plus a durable receipt.
+[distributed.worker]
+enabled = false
+id = "worker-1"
+coordinator_address = "127.0.0.1"
+coordinator_port = 7100
+observation_batch_size = 4096
+read_buffer_bytes = 16384
+maximum_queued_write_bytes = 4194304
+connect_timeout_ms = 10000
+request_timeout_ms = 10000
+idle_timeout_ms = 30000
+# tls_trust_anchor_file = "/etc/sakuin/coordinator/ca.pem"
+# tls_certificate_chain_file = "/etc/sakuin/worker/worker-1.pem"
+# tls_private_key_file = "/etc/sakuin/worker/worker-1-key.pem"
+# tls_server_name = "coordinator.internal"

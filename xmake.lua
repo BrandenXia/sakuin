@@ -77,7 +77,7 @@ target("sakuin-runtime-asio")
   set_kind("static")
   add_files("src/runtime_asio/**.cppm", {public = true})
   add_deps("sakuin-core", "sakuin-runtime")
-  add_packages("asio")
+  add_packages("asio", "openssl")
 
 target("sakuin-runtime-http")
   set_kind("static")
@@ -104,6 +104,7 @@ target("sakuin-integrations")
 
 target("sakuin-service")
   set_kind("static")
+  add_files("src/service/**.cpp")
   add_files("src/service/**.cppm", {public = true})
   add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
            "sakuin-model-codecs", "sakuin-runtime", "sakuin-dht",
@@ -341,8 +342,18 @@ target("sakuin-distributed-service-tests")
   add_files("tests/service/distributed.cpp")
   add_deps("sakuin-core", "sakuin-config", "sakuin-runtime",
            "sakuin-runtime-asio", "sakuin-scheduler", "sakuin-service")
-  add_packages("asio")
-  add_tests("distributed-service")
+  add_packages("asio", "openssl")
+  add_tests("distributed-service", {
+    runargs = {path.absolute("tests/fixtures/tls")}
+  })
+
+target("sakuin-work-result-inbox-tests")
+  set_kind("binary")
+  add_files("tests/integration/work_results.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs", "sakuin-runtime", "sakuin-dht",
+           "sakuin-scheduler", "sakuin-integrations")
+  add_tests("work-result-inbox")
 
 target("sakuin-storage-service-tests")
   set_kind("binary")

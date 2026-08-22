@@ -59,6 +59,7 @@ struct PeriodicTrafficConfig {
   core::Duration window{std::chrono::hours{1}};
   std::optional<std::uint64_t> inbound_bytes;
   std::optional<std::uint64_t> outbound_bytes;
+  std::uint64_t grant_bytes{64U * 1024U};
 };
 
 struct NetworkConfig {
@@ -148,6 +149,26 @@ struct DistributedConfig {
     std::size_t maximum_frame_bytes{2U * 1024U * 1024U};
     std::size_t maximum_queued_write_bytes{4U * 1024U * 1024U};
     core::Duration idle_timeout{std::chrono::seconds{30}};
+    std::optional<std::filesystem::path> tls_trust_anchor_file;
+    std::optional<std::filesystem::path> tls_certificate_chain_file;
+    std::optional<std::filesystem::path> tls_private_key_file;
+  };
+
+  struct WorkerConfig {
+    bool enabled{};
+    std::string id{"worker-1"};
+    std::string coordinator_address{"127.0.0.1"};
+    std::uint16_t coordinator_port{7100};
+    std::size_t observation_batch_size{4'096};
+    std::size_t read_buffer_bytes{16U * 1024U};
+    std::size_t maximum_queued_write_bytes{4U * 1024U * 1024U};
+    core::Duration connect_timeout{std::chrono::seconds{10}};
+    core::Duration request_timeout{std::chrono::seconds{10}};
+    core::Duration idle_timeout{std::chrono::seconds{30}};
+    std::optional<std::filesystem::path> tls_trust_anchor_file;
+    std::optional<std::filesystem::path> tls_certificate_chain_file;
+    std::optional<std::filesystem::path> tls_private_key_file;
+    std::string tls_server_name;
   };
 
   std::size_t maximum_work_items{65'536};
@@ -156,6 +177,7 @@ struct DistributedConfig {
   core::Duration lease_duration{std::chrono::minutes{2}};
   core::Duration heartbeat_interval{std::chrono::seconds{10}};
   CoordinatorConfig coordinator;
+  WorkerConfig worker;
 };
 
 struct AppConfig {
@@ -406,6 +428,11 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.network.traffic.outbound_bytes = *value;
+    } else if (name == "network.traffic.grant_bytes") {
+      auto value = unsigned_value<std::uint64_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.traffic.grant_bytes = *value;
     } else if (name == "storage.backend") {
       if (text != "local")
         return std::unexpected(
@@ -649,6 +676,64 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.distributed.coordinator.idle_timeout = *value;
+    } else if (name == "distributed.coordinator.tls_trust_anchor_file") {
+      config.distributed.coordinator.tls_trust_anchor_file = text;
+    } else if (name == "distributed.coordinator.tls_certificate_chain_file") {
+      config.distributed.coordinator.tls_certificate_chain_file = text;
+    } else if (name == "distributed.coordinator.tls_private_key_file") {
+      config.distributed.coordinator.tls_private_key_file = text;
+    } else if (name == "distributed.worker.enabled") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.worker.enabled = *value;
+    } else if (name == "distributed.worker.id") {
+      config.distributed.worker.id = text;
+    } else if (name == "distributed.worker.coordinator_address") {
+      config.distributed.worker.coordinator_address = text;
+    } else if (name == "distributed.worker.coordinator_port") {
+      auto value = unsigned_value<std::uint16_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.worker.coordinator_port = *value;
+    } else if (name == "distributed.worker.observation_batch_size") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.worker.observation_batch_size = *value;
+    } else if (name == "distributed.worker.read_buffer_bytes") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.worker.read_buffer_bytes = *value;
+    } else if (name == "distributed.worker.maximum_queued_write_bytes") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.worker.maximum_queued_write_bytes = *value;
+    } else if (name == "distributed.worker.connect_timeout_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.worker.connect_timeout = *value;
+    } else if (name == "distributed.worker.request_timeout_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.worker.request_timeout = *value;
+    } else if (name == "distributed.worker.idle_timeout_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.worker.idle_timeout = *value;
+    } else if (name == "distributed.worker.tls_trust_anchor_file") {
+      config.distributed.worker.tls_trust_anchor_file = text;
+    } else if (name == "distributed.worker.tls_certificate_chain_file") {
+      config.distributed.worker.tls_certificate_chain_file = text;
+    } else if (name == "distributed.worker.tls_private_key_file") {
+      config.distributed.worker.tls_private_key_file = text;
+    } else if (name == "distributed.worker.tls_server_name") {
+      config.distributed.worker.tls_server_name = text;
     } else {
       return std::unexpected(invalid("Unknown configuration key: " + name));
     }
@@ -723,7 +808,9 @@ core::Result<void> validate(const AppConfig &config) {
         invalid("DHT metadata acquisition limits are invalid"));
   if (config.network.traffic.window <= core::Duration::zero() ||
       (config.network.traffic.inbound_bytes == 0) ||
-      (config.network.traffic.outbound_bytes == 0))
+      (config.network.traffic.outbound_bytes == 0) ||
+      config.network.traffic.grant_bytes == 0 ||
+      config.network.traffic.grant_bytes > 16U * 1024U * 1024U)
     return std::unexpected(invalid(
         "Configured traffic budgets and their window must be positive"));
   if (config.storage.local_root.empty() ||
@@ -826,6 +913,64 @@ core::Result<void> validate(const AppConfig &config) {
       coordinator.idle_timeout <= core::Duration::zero())
     return std::unexpected(
         invalid("Distributed coordinator listener limits are invalid"));
+  const auto tls_paths =
+      static_cast<unsigned>(coordinator.tls_trust_anchor_file.has_value()) +
+      static_cast<unsigned>(
+          coordinator.tls_certificate_chain_file.has_value()) +
+      static_cast<unsigned>(coordinator.tls_private_key_file.has_value());
+  if (tls_paths != 0 && tls_paths != 3)
+    return std::unexpected(invalid(
+        "Distributed coordinator mTLS trust anchor, certificate chain, and "
+        "private key must be configured together"));
+  if ((coordinator.tls_trust_anchor_file &&
+       coordinator.tls_trust_anchor_file->empty()) ||
+      (coordinator.tls_certificate_chain_file &&
+       coordinator.tls_certificate_chain_file->empty()) ||
+      (coordinator.tls_private_key_file &&
+       coordinator.tls_private_key_file->empty()))
+    return std::unexpected(
+        invalid("Distributed coordinator mTLS paths must not be empty"));
+  const auto &worker = config.distributed.worker;
+  const auto valid_worker_id =
+      !worker.id.empty() && worker.id.size() <= 128 &&
+      std::ranges::all_of(worker.id, [](unsigned char value) {
+        return std::isalnum(value) || value == '-' || value == '_' ||
+               value == '.' || value == ':';
+      });
+  if (worker.enabled &&
+      (!valid_worker_id || worker.coordinator_address.empty() ||
+       worker.coordinator_port == 0 || worker.observation_batch_size == 0 ||
+       worker.observation_batch_size > 65'536 ||
+       config.distributed.maximum_payload_bytes <= 12 ||
+       worker.observation_batch_size >
+           (config.distributed.maximum_payload_bytes - 12) / 32 ||
+       worker.read_buffer_bytes == 0 ||
+       worker.read_buffer_bytes > 1024U * 1024U ||
+       worker.maximum_queued_write_bytes < coordinator.maximum_frame_bytes ||
+       worker.maximum_queued_write_bytes > 64U * 1024U * 1024U ||
+       worker.connect_timeout <= core::Duration::zero() ||
+       worker.request_timeout <= core::Duration::zero() ||
+       worker.idle_timeout <= core::Duration::zero()))
+    return std::unexpected(invalid("Distributed worker settings are invalid"));
+  const auto worker_tls_paths =
+      static_cast<unsigned>(worker.tls_trust_anchor_file.has_value()) +
+      static_cast<unsigned>(worker.tls_certificate_chain_file.has_value()) +
+      static_cast<unsigned>(worker.tls_private_key_file.has_value());
+  if (worker_tls_paths != 0 && worker_tls_paths != 3)
+    return std::unexpected(
+        invalid("Distributed worker mTLS trust anchor, certificate chain, and "
+                "private key must be configured together"));
+  if (worker.enabled &&
+      (worker_tls_paths != 3 || worker.tls_server_name.empty()))
+    return std::unexpected(invalid(
+        "Enabled distributed worker requires mTLS trust, certificate, key, "
+        "and server name"));
+  if ((worker.tls_trust_anchor_file && worker.tls_trust_anchor_file->empty()) ||
+      (worker.tls_certificate_chain_file &&
+       worker.tls_certificate_chain_file->empty()) ||
+      (worker.tls_private_key_file && worker.tls_private_key_file->empty()))
+    return std::unexpected(
+        invalid("Distributed worker mTLS paths must not be empty"));
   for (const auto &endpoint : config.network.dht.bootstrap) {
     if (endpoint.empty())
       return std::unexpected(

@@ -18,12 +18,14 @@ int main() {
   using namespace sakuin;
 
   scheduler::TrafficBudgetPolicy policy{
-      .global = {.inbound = scheduler::PeriodicByteQuota{
-                     .maximum_bytes = 50,
-                     .period = std::chrono::seconds{10}},
-                 .outbound = scheduler::PeriodicByteQuota{
-                     .maximum_bytes = 100,
-                     .period = std::chrono::seconds{10}}},
+      .global = {.inbound =
+                     scheduler::PeriodicByteQuota{.maximum_bytes = 50,
+                                                  .period =
+                                                      std::chrono::seconds{10}},
+                 .outbound =
+                     scheduler::PeriodicByteQuota{
+                         .maximum_bytes = 100,
+                         .period = std::chrono::seconds{10}}},
       .classes = {{.traffic_class = 7,
                    .limits = {.outbound = scheduler::PeriodicByteQuota{
                                   .maximum_bytes = 60,
@@ -33,10 +35,10 @@ int main() {
     return 1;
 
   const auto outbound = [](std::uint16_t traffic_class, std::uint64_t bytes) {
-    return runtime::TrafficRequest{
-        .direction = runtime::TrafficDirection::Outbound,
-        .traffic_class = traffic_class,
-        .bytes = bytes};
+    return runtime::TrafficRequest{.direction =
+                                       runtime::TrafficDirection::Outbound,
+                                   .traffic_class = traffic_class,
+                                   .bytes = bytes};
   };
   auto first = (*governor)->admit(outbound(7, 40), seconds(0));
   auto class_denied = (*governor)->admit(outbound(7, 30), seconds(0));
@@ -59,11 +61,11 @@ int main() {
       exhausted_global.allowed)
     return 4;
 
-  auto inbound = (*governor)->admit(
-      {.direction = runtime::TrafficDirection::Inbound,
-       .traffic_class = 7,
-       .bytes = 50},
-      seconds(10));
+  auto inbound =
+      (*governor)->admit({.direction = runtime::TrafficDirection::Inbound,
+                          .traffic_class = 7,
+                          .bytes = 50},
+                         seconds(10));
   if (!inbound.allowed || inbound.remaining_bytes != 0)
     return 5;
 
@@ -78,15 +80,14 @@ int main() {
     return 7;
   scheduler::TrafficBudgetPolicy invalid{
       .global = {.outbound = scheduler::PeriodicByteQuota{
-                     .maximum_bytes = 1,
-                     .period = core::Duration::zero()}}};
+                     .maximum_bytes = 1, .period = core::Duration::zero()}}};
   if (scheduler::FixedWindowTrafficGovernor::create(std::move(invalid)))
     return 8;
 
   scheduler::TrafficBudgetPolicy concurrent_policy{
-      .global = {.outbound = scheduler::PeriodicByteQuota{
-                     .maximum_bytes = 1'000,
-                     .period = std::chrono::seconds{1}}}};
+      .global = {
+          .outbound = scheduler::PeriodicByteQuota{
+              .maximum_bytes = 1'000, .period = std::chrono::seconds{1}}}};
   auto concurrent = scheduler::FixedWindowTrafficGovernor::create(
       std::move(concurrent_policy));
   std::atomic<std::uint64_t> accepted{};
@@ -102,5 +103,26 @@ int main() {
   threads.clear();
   if (accepted.load(std::memory_order_relaxed) != 1'000)
     return 9;
+
+  auto aggregate = scheduler::FixedWindowTrafficGovernor::create(
+      {.global = {
+           .outbound = scheduler::PeriodicByteQuota{
+               .maximum_bytes = 100, .period = std::chrono::seconds{10}}}});
+  scheduler::GovernorTrafficGrantSource grants{**aggregate};
+  auto granted =
+      scheduler::GrantedTrafficGovernor::create(grants, "worker-1", 64);
+  if (!granted || !(*granted)->admit(outbound(4, 40), seconds(0)).allowed ||
+      !(*granted)->admit(outbound(4, 20), seconds(0)).allowed)
+    return 10;
+  auto replenished = (*granted)->admit(outbound(4, 10), seconds(0));
+  auto denied = (*granted)->admit(outbound(4, 31), seconds(0));
+  auto remainder = (*granted)->admit(outbound(4, 30), seconds(0));
+  if (!replenished.allowed || replenished.remaining_bytes != 30 ||
+      denied.allowed || denied.remaining_bytes != 30 || !denied.retry_after ||
+      !remainder.allowed || remainder.remaining_bytes != 0)
+    return 11;
+  if (scheduler::GrantedTrafficGovernor::create(grants, "", 64) ||
+      scheduler::GrantedTrafficGovernor::create(grants, "worker", 0))
+    return 12;
   return 0;
 }

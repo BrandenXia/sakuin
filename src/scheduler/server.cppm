@@ -13,8 +13,10 @@ export namespace sakuin::scheduler {
 class WorkProtocolAccessPolicy {
 public:
   virtual ~WorkProtocolAccessPolicy() = default;
-  virtual core::Result<void> authorize(runtime::StreamEndpoint peer,
-                                       const WorkProtocolRequest &request) = 0;
+  virtual core::Result<void>
+  authorize(runtime::StreamEndpoint peer,
+            std::optional<runtime::StreamPeerIdentity> identity,
+            const WorkProtocolRequest &request) = 0;
 };
 
 // Safe default for the initial single-node deployment. Remote deployments must
@@ -22,8 +24,23 @@ public:
 // this policy implicitly.
 class LoopbackWorkProtocolAccessPolicy final : public WorkProtocolAccessPolicy {
 public:
-  core::Result<void> authorize(runtime::StreamEndpoint peer,
-                               const WorkProtocolRequest &request) override;
+  core::Result<void>
+  authorize(runtime::StreamEndpoint peer,
+            std::optional<runtime::StreamPeerIdentity> identity,
+            const WorkProtocolRequest &request) override;
+};
+
+// Remote workers are admitted only over a mutually authenticated transport.
+// The leaf certificate common name is the worker principal. A process may own
+// namespaced workers (principal:v4, principal:v6); it cannot escape that
+// namespace. Worker channels cannot enqueue work or inspect the coordinator.
+class MutualTlsWorkProtocolAccessPolicy final
+    : public WorkProtocolAccessPolicy {
+public:
+  core::Result<void>
+  authorize(runtime::StreamEndpoint peer,
+            std::optional<runtime::StreamPeerIdentity> identity,
+            const WorkProtocolRequest &request) override;
 };
 
 class WorkProtocolServiceObserver {
@@ -54,6 +71,7 @@ public:
 private:
   struct Session {
     runtime::StreamEndpoint peer;
+    std::optional<runtime::StreamPeerIdentity> identity;
     WorkFrameDecoder decoder;
   };
 
@@ -82,13 +100,64 @@ bool loopback(runtime::IpAddress address) {
 
 } // namespace
 
-core::Result<void>
-LoopbackWorkProtocolAccessPolicy::authorize(runtime::StreamEndpoint peer,
-                                            const WorkProtocolRequest &) {
+core::Result<void> LoopbackWorkProtocolAccessPolicy::authorize(
+    runtime::StreamEndpoint peer, std::optional<runtime::StreamPeerIdentity>,
+    const WorkProtocolRequest &) {
   if (!loopback(peer.address))
     return std::unexpected(
         core::Error{core::ErrorCode::PermissionDenied,
                     "Distributed-work access is restricted to loopback peers"});
+  return {};
+}
+
+core::Result<void> MutualTlsWorkProtocolAccessPolicy::authorize(
+    runtime::StreamEndpoint,
+    std::optional<runtime::StreamPeerIdentity> identity,
+    const WorkProtocolRequest &request) {
+  if (!identity || identity->principal.empty() ||
+      identity->certificate_sha256.size() != 64)
+    return std::unexpected(core::Error{
+        core::ErrorCode::PermissionDenied,
+        "Distributed worker requires an authenticated TLS identity"});
+
+  std::string_view worker;
+  switch (request.operation) {
+  case WorkProtocolOperation::RegisterWorker:
+    worker = std::get<RegisterWorkerRequest>(request.payload).worker.id;
+    break;
+  case WorkProtocolOperation::Heartbeat:
+    worker = std::get<WorkerHeartbeatRequest>(request.payload).worker;
+    break;
+  case WorkProtocolOperation::Lease:
+    worker = std::get<LeaseWorkRequest>(request.payload).worker;
+    break;
+  case WorkProtocolOperation::Renew:
+  case WorkProtocolOperation::Complete:
+    worker = std::get<LeaseMutationRequest>(request.payload).worker;
+    break;
+  case WorkProtocolOperation::Fail:
+    worker = std::get<FailWorkRequest>(request.payload).worker;
+    break;
+  case WorkProtocolOperation::UnregisterWorker:
+    worker = std::get<UnregisterWorkerRequest>(request.payload).worker;
+    break;
+  case WorkProtocolOperation::PublishResult:
+    worker = std::get<PublishWorkResultRequest>(request.payload).worker;
+    break;
+  case WorkProtocolOperation::AcquireTraffic:
+    worker = std::get<AcquireTrafficRequest>(request.payload).worker;
+    break;
+  case WorkProtocolOperation::Submit:
+  case WorkProtocolOperation::Snapshot:
+    return std::unexpected(core::Error{
+        core::ErrorCode::PermissionDenied,
+        "Distributed worker is not authorized for coordinator administration"});
+  }
+  const auto namespaced = std::string{identity->principal} + ":";
+  if (worker != identity->principal && !worker.starts_with(namespaced))
+    return std::unexpected(core::Error{
+        core::ErrorCode::PermissionDenied,
+        "Distributed worker id does not match its TLS certificate principal"});
   return {};
 }
 
@@ -113,6 +182,7 @@ void WorkProtocolService::on_stream_session_opened(
     runtime::StreamServerSession &session) {
   auto [_, inserted] = sessions_.try_emplace(
       session.id(), Session{.peer = session.remote_endpoint(),
+                            .identity = session.peer_identity(),
                             .decoder = WorkFrameDecoder{limits_}});
   if (!inserted)
     fail(session, {core::ErrorCode::Conflict,
@@ -140,7 +210,8 @@ void WorkProtocolService::on_stream_session_data(
     }
     WorkProtocolResponse response;
     try {
-      auto authorized = access_->authorize(found->second.peer, *request);
+      auto authorized = access_->authorize(found->second.peer,
+                                           found->second.identity, *request);
       response = authorized
                      ? dispatcher_->dispatch(*request)
                      : WorkProtocolResponse{.request_id = request->request_id,
