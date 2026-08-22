@@ -88,6 +88,8 @@ struct StorageConfig {
   CompressionCodec compression{CompressionCodec::Zstd};
   int compression_level{3};
   std::size_t compaction_minimum_segments{4};
+  std::size_t compaction_maximum_warm_segments{8};
+  std::uint64_t compaction_warm_block_target_bytes{64U * 1024U};
   MaintenanceConfig maintenance;
   MaterializationConfig materialization;
 };
@@ -125,11 +127,23 @@ struct IndexingConfig {
 };
 
 struct DistributedConfig {
+  struct CoordinatorConfig {
+    bool enabled{};
+    std::string listen_address{"127.0.0.1"};
+    std::uint16_t listen_port{7100};
+    std::size_t maximum_connections{256};
+    std::size_t read_buffer_bytes{16U * 1024U};
+    std::size_t maximum_frame_bytes{2U * 1024U * 1024U};
+    std::size_t maximum_queued_write_bytes{4U * 1024U * 1024U};
+    core::Duration idle_timeout{std::chrono::seconds{30}};
+  };
+
   std::size_t maximum_work_items{65'536};
   std::size_t maximum_payload_bytes{1U * 1024U * 1024U};
   core::Duration worker_timeout{std::chrono::seconds{30}};
   core::Duration lease_duration{std::chrono::minutes{2}};
   core::Duration heartbeat_interval{std::chrono::seconds{10}};
+  CoordinatorConfig coordinator;
 };
 
 struct AppConfig {
@@ -415,6 +429,16 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.storage.compaction_minimum_segments = *value;
+    } else if (name == "storage.compaction.maximum_warm_segments") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.compaction_maximum_warm_segments = *value;
+    } else if (name == "storage.compaction.warm_block_target_bytes") {
+      auto value = unsigned_value<std::uint64_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.compaction_warm_block_target_bytes = *value;
     } else if (name == "storage.maintenance.enabled") {
       auto value = boolean_value(text, name);
       if (!value)
@@ -543,6 +567,43 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.distributed.heartbeat_interval = *value;
+    } else if (name == "distributed.coordinator.enabled") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.enabled = *value;
+    } else if (name == "distributed.coordinator.listen_address") {
+      config.distributed.coordinator.listen_address = text;
+    } else if (name == "distributed.coordinator.listen_port") {
+      auto value = unsigned_value<std::uint16_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.listen_port = *value;
+    } else if (name == "distributed.coordinator.maximum_connections") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.maximum_connections = *value;
+    } else if (name == "distributed.coordinator.read_buffer_bytes") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.read_buffer_bytes = *value;
+    } else if (name == "distributed.coordinator.maximum_frame_bytes") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.maximum_frame_bytes = *value;
+    } else if (name == "distributed.coordinator.maximum_queued_write_bytes") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.maximum_queued_write_bytes = *value;
+    } else if (name == "distributed.coordinator.idle_timeout_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.idle_timeout = *value;
     } else {
       return std::unexpected(invalid("Unknown configuration key: " + name));
     }
@@ -629,6 +690,16 @@ core::Result<void> validate(const AppConfig &config) {
   if (config.storage.compaction_minimum_segments < 2)
     return std::unexpected(
         invalid("Compaction requires at least two input segments"));
+  if (config.storage.compaction_maximum_warm_segments == 0)
+    return std::unexpected(
+        invalid("Compaction requires at least one WARM segment slot"));
+  if (config.storage.compaction_warm_block_target_bytes < 4U * 1024U ||
+      config.storage.compaction_warm_block_target_bytes >
+          config.storage.segment_target_bytes ||
+      config.storage.compaction_warm_block_target_bytes >
+          std::numeric_limits<std::uint32_t>::max())
+    return std::unexpected(
+        invalid("WARM compaction block target is outside storage limits"));
   if (config.storage.compression_level < -131'072 ||
       config.storage.compression_level > 22)
     return std::unexpected(
@@ -680,6 +751,22 @@ core::Result<void> validate(const AppConfig &config) {
           config.distributed.worker_timeout)
     return std::unexpected(
         invalid("Distributed work and heartbeat limits are invalid"));
+  const auto &coordinator = config.distributed.coordinator;
+  if (coordinator.listen_address.empty() ||
+      coordinator.maximum_connections == 0 ||
+      coordinator.maximum_connections > 1'000'000 ||
+      coordinator.read_buffer_bytes == 0 ||
+      coordinator.read_buffer_bytes > 1024U * 1024U ||
+      coordinator.maximum_frame_bytes < 64 ||
+      coordinator.maximum_frame_bytes > 64U * 1024U * 1024U ||
+      config.distributed.maximum_payload_bytes >
+          coordinator.maximum_frame_bytes - 64 ||
+      coordinator.maximum_queued_write_bytes <
+          coordinator.maximum_frame_bytes ||
+      coordinator.maximum_queued_write_bytes > 64U * 1024U * 1024U ||
+      coordinator.idle_timeout <= core::Duration::zero())
+    return std::unexpected(
+        invalid("Distributed coordinator listener limits are invalid"));
   for (const auto &endpoint : config.network.dht.bootstrap) {
     if (endpoint.empty())
       return std::unexpected(

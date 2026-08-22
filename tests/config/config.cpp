@@ -57,6 +57,8 @@ level = 5
 
 [storage.compaction]
 minimum_segments = 6
+maximum_warm_segments = 3
+warm_block_target_bytes = 131072
 
 [storage.maintenance]
 enabled = true
@@ -88,6 +90,16 @@ maximum_payload_bytes = 524288
 worker_timeout_ms = 20000
 lease_duration_ms = 60000
 heartbeat_interval_ms = 5000
+
+[distributed.coordinator]
+enabled = true
+listen_address = "127.0.0.1"
+listen_port = 7101
+maximum_connections = 32
+read_buffer_bytes = 8192
+maximum_frame_bytes = 1048576
+maximum_queued_write_bytes = 2097152
+idle_timeout_ms = 15000
 )toml";
 
   auto file = config::parse_toml(source, "test.toml");
@@ -114,6 +126,11 @@ heartbeat_interval_ms = 5000
                 std::string(40, 'b')},
       std::pair{std::string{"SAKUIN_STORAGE_COMPACTION_MINIMUM_SEGMENTS"},
                 std::string{"8"}},
+      std::pair{std::string{"SAKUIN_STORAGE_COMPACTION_MAXIMUM_WARM_SEGMENTS"},
+                std::string{"5"}},
+      std::pair{
+          std::string{"SAKUIN_STORAGE_COMPACTION_WARM_BLOCK_TARGET_BYTES"},
+          std::string{"65536"}},
       std::pair{std::string{"SAKUIN_STORAGE_MAINTENANCE_INTERVAL_MS"},
                 std::string{"300000"}},
       std::pair{std::string{"SAKUIN_STORAGE_MATERIALIZATION_INTERVAL_MS"},
@@ -122,6 +139,8 @@ heartbeat_interval_ms = 5000
                 std::string{"60000"}},
       std::pair{std::string{"SAKUIN_DISTRIBUTED_MAXIMUM_WORK_ITEMS"},
                 std::string{"16384"}},
+      std::pair{std::string{"SAKUIN_DISTRIBUTED_COORDINATOR_LISTEN_PORT"},
+                std::string{"7201"}},
       std::pair{std::string{"UNRELATED"}, std::string{"ignored"}}};
   auto env = config::environment_overlay(environment);
   if (!env)
@@ -169,6 +188,8 @@ heartbeat_interval_ms = 5000
       loaded.storage.local_root != "/srv/sakuin" ||
       loaded.storage.compression_level != 5 ||
       loaded.storage.compaction_minimum_segments != 8 ||
+      loaded.storage.compaction_maximum_warm_segments != 5 ||
+      loaded.storage.compaction_warm_block_target_bytes != 65536 ||
       !loaded.storage.maintenance.enabled ||
       loaded.storage.maintenance.interval != std::chrono::minutes{5} ||
       loaded.storage.maintenance.verification_interval !=
@@ -187,7 +208,16 @@ heartbeat_interval_ms = 5000
       loaded.distributed.maximum_payload_bytes != 512U * 1024U ||
       loaded.distributed.worker_timeout != std::chrono::seconds{20} ||
       loaded.distributed.lease_duration != std::chrono::minutes{1} ||
-      loaded.distributed.heartbeat_interval != std::chrono::seconds{5})
+      loaded.distributed.heartbeat_interval != std::chrono::seconds{5} ||
+      !loaded.distributed.coordinator.enabled ||
+      loaded.distributed.coordinator.listen_address != "127.0.0.1" ||
+      loaded.distributed.coordinator.listen_port != 7201 ||
+      loaded.distributed.coordinator.maximum_connections != 32 ||
+      loaded.distributed.coordinator.read_buffer_bytes != 8192 ||
+      loaded.distributed.coordinator.maximum_frame_bytes != 1024U * 1024U ||
+      loaded.distributed.coordinator.maximum_queued_write_bytes !=
+          2U * 1024U * 1024U ||
+      loaded.distributed.coordinator.idle_timeout != std::chrono::seconds{15})
     return 6;
 
   if (config::parse_toml("[network]\nlistne_port = 1") ||
@@ -216,5 +246,17 @@ heartbeat_interval_ms = 5000
   invalid_compression.storage.compression_level = 23;
   if (config::validate(invalid_compression))
     return 11;
+  auto invalid_tiering = config::defaults();
+  invalid_tiering.storage.compaction_maximum_warm_segments = 0;
+  if (config::validate(invalid_tiering))
+    return 12;
+  invalid_tiering = config::defaults();
+  invalid_tiering.storage.compaction_warm_block_target_bytes = 1024;
+  if (config::validate(invalid_tiering))
+    return 13;
+  auto invalid_coordinator = config::defaults();
+  invalid_coordinator.distributed.coordinator.maximum_frame_bytes = 128;
+  if (config::validate(invalid_coordinator))
+    return 14;
   return 0;
 }

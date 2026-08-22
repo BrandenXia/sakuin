@@ -187,15 +187,56 @@ int main() {
   if (!mixed_latest || !*mixed_latest || (*mixed_latest)->name != "post-warm" ||
       !mixed_warm || !*mixed_warm || (*mixed_warm)->name != "first-b")
     return 25;
-  auto recompacted =
+
+  const auto deferred_generation = (*reopened)->current_id().generation;
+  auto deferred =
       restarted.compact({.minimum_segment_count = 2, .target_block_size = 96});
-  if (!recompacted || recompacted->segments_created != 1 ||
-      recompacted->segments_removed != 2)
+  auto deferred_manifest = (*reopened)->pin_current();
+  if (!deferred || deferred->segments_created != 0 || !deferred_manifest ||
+      (*reopened)->current_id().generation != deferred_generation ||
+      (*deferred_manifest)->manifest().segments.size() != 2)
     return 26;
+
+  auto second_delta = restarted.begin_write();
+  if (!second_delta ||
+      !(*second_delta)->append(torrent(2, "post-warm-b", 100)) ||
+      !(*second_delta)->commit())
+    return 27;
+  auto incremental = restarted.compact({.minimum_segment_count = 2,
+                                        .maximum_warm_segment_count = 3,
+                                        .target_block_size = 96});
+  auto incremental_manifest = (*reopened)->pin_current();
+  if (!incremental || incremental->segments_created != 1 ||
+      incremental->segments_removed != 2 || !incremental_manifest ||
+      (*incremental_manifest)->manifest().segments.size() != 2 ||
+      !std::ranges::all_of((*incremental_manifest)->manifest().segments,
+                           [](const storage::SegmentDescriptor &segment) {
+                             return segment.tier == storage::SegmentTier::Warm;
+                           }))
+    return 28;
+
+  for (const auto &record :
+       {torrent(1, "cap-a", 110), torrent(1, "cap-b", 120)}) {
+    auto write = restarted.begin_write();
+    if (!write || !(*write)->append(record) || !(*write)->commit())
+      return 29;
+  }
+  auto consolidated = restarted.compact({.minimum_segment_count = 2,
+                                         .maximum_warm_segment_count = 2,
+                                         .target_block_size = 96});
+  auto consolidated_manifest = (*reopened)->pin_current();
+  if (!consolidated || consolidated->segments_created != 1 ||
+      consolidated->segments_removed != 4 || !consolidated_manifest ||
+      (*consolidated_manifest)->manifest().segments.size() != 1 ||
+      (*consolidated_manifest)->manifest().segments[0].tier !=
+          storage::SegmentTier::Warm)
+    return 30;
   auto final_snapshot = restarted.keyed_snapshot();
   auto final_latest = (*final_snapshot)->get(hash(1));
-  if (!final_latest || !*final_latest || (*final_latest)->name != "post-warm")
-    return 27;
+  auto final_second = (*final_snapshot)->get(hash(2));
+  if (!final_latest || !*final_latest || (*final_latest)->name != "cap-b" ||
+      !final_second || !*final_second || (*final_second)->name != "post-warm-b")
+    return 31;
 
   return 0;
 }

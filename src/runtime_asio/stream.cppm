@@ -178,12 +178,14 @@ struct AsioTcpStreamTransport::Impl {
     asio::async_write(
         socket, asio::buffer(*bytes),
         [this, bytes](const asio::error_code &error, std::size_t) {
+          if (!active.load(std::memory_order_acquire)) {
+            writing = false;
+            return;
+          }
           queued_bytes.fetch_sub(bytes->size(), std::memory_order_acq_rel);
           if (!writes.empty())
             writes.pop_front();
           writing = false;
-          if (!active.load(std::memory_order_acquire))
-            return;
           if (error) {
             if (error != asio::error::operation_aborted)
               close(network_error("TCP peer write failed", error));
@@ -282,10 +284,8 @@ core::Result<void> AsioTcpStreamTransport::send(core::ByteBuffer bytes) {
   }
   auto owned = std::make_shared<core::ByteBuffer>(std::move(bytes));
   asio::post(impl_->context, [impl = impl_.get(), owned] {
-    if (!impl->active.load(std::memory_order_acquire)) {
-      impl->queued_bytes.fetch_sub(owned->size(), std::memory_order_acq_rel);
+    if (!impl->active.load(std::memory_order_acquire))
       return;
-    }
     impl->writes.push_back(owned);
     impl->write_next();
   });

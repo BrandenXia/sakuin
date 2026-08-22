@@ -102,9 +102,12 @@ int main() {
                   .capabilities = {scheduler::WorkClass::DhtCrawl}},
        .heartbeat_interval = std::chrono::milliseconds{20}}};
 
-  if (!worker.start() || !observer.wait_for(1, 0) || !worker.running() ||
-      !transport.running ||
-      (*coordinator)->snapshot(std::chrono::system_clock::now()).workers != 1)
+  auto started = worker.start();
+  if (!started || !observer.wait_for(1, 0) || !worker.running() ||
+      !transport.running)
+    return 3;
+  auto registered = (*coordinator)->snapshot(std::chrono::system_clock::now());
+  if (!registered || registered->workers != 1)
     return 3;
   auto duplicate = worker.start();
   if (duplicate || duplicate.error().code != core::ErrorCode::Conflict)
@@ -127,8 +130,9 @@ int main() {
     return 8;
 
   worker.stop();
-  if (worker.running() || transport.running || driver.running() ||
-      (*coordinator)->snapshot(std::chrono::system_clock::now()).workers != 0)
+  auto stopped = (*coordinator)->snapshot(std::chrono::system_clock::now());
+  if (worker.running() || transport.running || driver.running() || !stopped ||
+      stopped->workers != 0)
     return 6;
   return 0;
 }

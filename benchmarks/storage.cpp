@@ -79,6 +79,17 @@ int main(int argc, char **argv) {
       return 1;
     }
   }
+  std::uint32_t warm_block_bytes = 64U * 1024U;
+  if (argc > 2) {
+    const std::string_view input{argv[2]};
+    const auto [end, error] = std::from_chars(
+        input.data(), input.data() + input.size(), warm_block_bytes);
+    if (error != std::errc{} || end != input.data() + input.size() ||
+        warm_block_bytes < 4U * 1024U) {
+      std::cerr << "warm block bytes must be at least 4096\n";
+      return 1;
+    }
+  }
 
   const auto nonce = std::to_string(
       std::chrono::steady_clock::now().time_since_epoch().count());
@@ -175,7 +186,8 @@ int main(int argc, char **argv) {
       return 12;
   }
   const auto torrent_compact_start = std::chrono::steady_clock::now();
-  auto torrent_compacted = torrents.compact();
+  auto torrent_compacted =
+      torrents.compact({.warm_target_block_size = warm_block_bytes});
   if (!torrent_compacted)
     return 13;
   const auto torrent_compact_seconds = seconds_since(torrent_compact_start);
@@ -233,6 +245,7 @@ int main(int argc, char **argv) {
             << '\n'
             << "warm_torrent_logical_bytes=" << warm_segment.logical_size
             << '\n'
+            << "warm_block_target_bytes=" << warm_block_bytes << '\n'
             << "warm_torrent_physical_per_logical=" << warm_ratio << '\n'
             << "warm_torrent_compaction_seconds=" << torrent_compact_seconds
             << '\n'

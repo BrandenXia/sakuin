@@ -9,10 +9,12 @@ import sakuin.dht.krpc;
 import sakuin.integration.dht_worker;
 import sakuin.index.materialize;
 import sakuin.runtime.datagram;
+import sakuin.runtime.stream;
 import sakuin.search.rebuild;
 import sakuin.service.api;
 import sakuin.service.application;
 import sakuin.service.duplicates;
+import sakuin.service.distributed;
 import sakuin.service.local;
 import sakuin.service.maintenance;
 import sakuin.service.materialization;
@@ -47,7 +49,8 @@ class Observer final : public sakuin::service::DhtRuntimeObserver,
                        public sakuin::service::ApiServiceObserver,
                        public sakuin::service::StorageMaintenanceObserver,
                        public sakuin::service::MaterializationObserver,
-                       public sakuin::service::DuplicateIndexObserver {
+                       public sakuin::service::DuplicateIndexObserver,
+                       public sakuin::service::DistributedWorkServiceObserver {
 public:
   void on_family_cycle(sakuin::runtime::AddressFamily,
                        sakuin::integration::DhtRuntimeCycle) override {}
@@ -159,6 +162,15 @@ public:
     else
       spdlog::error("Duplicate-index refresh: {}", error.message);
   }
+
+  void on_distributed_work_error(
+      std::optional<sakuin::runtime::StreamSessionId> session,
+      sakuin::core::Error error) override {
+    if (session)
+      spdlog::warn("Distributed work session {}: {}", *session, error.message);
+    else
+      spdlog::error("Distributed coordinator: {}", error.message);
+  }
 };
 
 std::vector<std::pair<std::string, std::string>> environment_values() {
@@ -256,16 +268,23 @@ int main(int argc, char **argv) {
       std::signal(SIGHUP, handle_signal) == SIG_ERR)
     return fail("Unable to install process signal handlers");
   auto service = service::LocalSakuinService::create(
-      *configuration, observer, observer, {}, &observer, &observer, &observer);
+      *configuration, observer, observer, {}, &observer, &observer, &observer,
+      &observer);
   if (!service)
     return fail(service.error().message);
   if (auto started = (*service)->start(); !started)
     return fail(started.error().message);
 
   if (const auto endpoint = (*service)->api_endpoint())
-    spdlog::info("Sakuin started; API port {}", endpoint->port);
+    spdlog::info("API listening on port {}", endpoint->port);
   else
-    spdlog::info("Sakuin started; API disabled");
+    spdlog::info("API disabled");
+  if (const auto endpoint = (*service)->coordinator_endpoint())
+    spdlog::info("Distributed coordinator listening on loopback port {}",
+                 endpoint->port);
+  else
+    spdlog::info("Distributed coordinator listener disabled");
+  spdlog::info("Sakuin started");
 
   while (true) {
     const auto signal = pending_signal;

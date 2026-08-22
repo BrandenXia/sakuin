@@ -325,15 +325,23 @@ core::Result<void> parse_storage(const toml::table &table,
   if (!compaction)
     return std::unexpected(compaction.error());
   if (*compaction) {
-    if (auto checked = check_keys(**compaction, {"minimum_segments"},
+    if (auto checked = check_keys(**compaction,
+                                  {"minimum_segments", "maximum_warm_segments",
+                                   "warm_block_target_bytes"},
                                   "storage.compaction.");
         !checked)
       return checked;
-    if (auto parsed = scalar<std::int64_t>(
-            **compaction, "minimum_segments",
-            "storage.compaction.minimum_segments", overlay);
-        !parsed)
-      return parsed;
+    for (auto parsed :
+         {scalar<std::int64_t>(**compaction, "minimum_segments",
+                               "storage.compaction.minimum_segments", overlay),
+          scalar<std::int64_t>(**compaction, "maximum_warm_segments",
+                               "storage.compaction.maximum_warm_segments",
+                               overlay),
+          scalar<std::int64_t>(**compaction, "warm_block_target_bytes",
+                               "storage.compaction.warm_block_target_bytes",
+                               overlay)})
+      if (!parsed)
+        return parsed;
   }
   auto maintenance =
       optional_table(table, "maintenance", "storage.maintenance");
@@ -460,12 +468,49 @@ core::Result<void> parse_indexing(const toml::table &table,
   return {};
 }
 
+core::Result<void> parse_distributed_coordinator(const toml::table &table,
+                                                 ConfigOverlay &overlay) {
+  if (auto checked = check_keys(
+          table,
+          {"enabled", "listen_address", "listen_port", "maximum_connections",
+           "read_buffer_bytes", "maximum_frame_bytes",
+           "maximum_queued_write_bytes", "idle_timeout_ms"},
+          "distributed.coordinator.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<bool>(table, "enabled", "distributed.coordinator.enabled",
+                     overlay),
+        scalar<std::string>(table, "listen_address",
+                            "distributed.coordinator.listen_address", overlay),
+        scalar<std::int64_t>(table, "listen_port",
+                             "distributed.coordinator.listen_port", overlay),
+        scalar<std::int64_t>(table, "maximum_connections",
+                             "distributed.coordinator.maximum_connections",
+                             overlay),
+        scalar<std::int64_t>(table, "read_buffer_bytes",
+                             "distributed.coordinator.read_buffer_bytes",
+                             overlay),
+        scalar<std::int64_t>(table, "maximum_frame_bytes",
+                             "distributed.coordinator.maximum_frame_bytes",
+                             overlay),
+        scalar<std::int64_t>(
+            table, "maximum_queued_write_bytes",
+            "distributed.coordinator.maximum_queued_write_bytes", overlay),
+        scalar<std::int64_t>(table, "idle_timeout_ms",
+                             "distributed.coordinator.idle_timeout_ms",
+                             overlay)})
+    if (!result)
+      return result;
+  return {};
+}
+
 core::Result<void> parse_distributed(const toml::table &table,
                                      ConfigOverlay &overlay) {
   if (auto checked = check_keys(table,
                                 {"maximum_work_items", "maximum_payload_bytes",
                                  "worker_timeout_ms", "lease_duration_ms",
-                                 "heartbeat_interval_ms"},
+                                 "heartbeat_interval_ms", "coordinator"},
                                 "distributed.");
       !checked)
     return checked;
@@ -482,6 +527,12 @@ core::Result<void> parse_distributed(const toml::table &table,
                              "distributed.heartbeat_interval_ms", overlay)})
     if (!result)
       return result;
+  auto coordinator =
+      optional_table(table, "coordinator", "distributed.coordinator");
+  if (!coordinator)
+    return std::unexpected(coordinator.error());
+  if (*coordinator)
+    return parse_distributed_coordinator(**coordinator, overlay);
   return {};
 }
 
@@ -614,6 +665,10 @@ core::Result<ConfigOverlay> environment_overlay(
       {"SAKUIN_STORAGE_COMPRESSION_LEVEL", "storage.compression.level"},
       {"SAKUIN_STORAGE_COMPACTION_MINIMUM_SEGMENTS",
        "storage.compaction.minimum_segments"},
+      {"SAKUIN_STORAGE_COMPACTION_MAXIMUM_WARM_SEGMENTS",
+       "storage.compaction.maximum_warm_segments"},
+      {"SAKUIN_STORAGE_COMPACTION_WARM_BLOCK_TARGET_BYTES",
+       "storage.compaction.warm_block_target_bytes"},
       {"SAKUIN_STORAGE_MAINTENANCE_ENABLED", "storage.maintenance.enabled"},
       {"SAKUIN_STORAGE_MAINTENANCE_INTERVAL_MS",
        "storage.maintenance.interval_ms"},
@@ -652,6 +707,22 @@ core::Result<ConfigOverlay> environment_overlay(
       {"SAKUIN_DISTRIBUTED_LEASE_DURATION_MS", "distributed.lease_duration_ms"},
       {"SAKUIN_DISTRIBUTED_HEARTBEAT_INTERVAL_MS",
        "distributed.heartbeat_interval_ms"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_ENABLED",
+       "distributed.coordinator.enabled"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_LISTEN_ADDRESS",
+       "distributed.coordinator.listen_address"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_LISTEN_PORT",
+       "distributed.coordinator.listen_port"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_MAXIMUM_CONNECTIONS",
+       "distributed.coordinator.maximum_connections"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_READ_BUFFER_BYTES",
+       "distributed.coordinator.read_buffer_bytes"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_MAXIMUM_FRAME_BYTES",
+       "distributed.coordinator.maximum_frame_bytes"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_MAXIMUM_QUEUED_WRITE_BYTES",
+       "distributed.coordinator.maximum_queued_write_bytes"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_IDLE_TIMEOUT_MS",
+       "distributed.coordinator.idle_timeout_ms"},
   };
   ConfigOverlay overlay;
   for (const auto &[name, value] : environment) {

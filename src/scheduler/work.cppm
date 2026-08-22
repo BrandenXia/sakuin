@@ -83,7 +83,8 @@ public:
                                   core::Timestamp retry_at) = 0;
   virtual core::Result<void> unregister_worker(std::string_view worker,
                                                core::Timestamp now) = 0;
-  virtual WorkCoordinatorSnapshot snapshot(core::Timestamp now) = 0;
+  virtual core::Result<WorkCoordinatorSnapshot>
+  snapshot(core::Timestamp now) = 0;
 };
 
 // Reference operational-state implementation. It is concurrency safe and
@@ -111,7 +112,7 @@ public:
                           core::Timestamp retry_at) override;
   core::Result<void> unregister_worker(std::string_view worker,
                                        core::Timestamp now) override;
-  WorkCoordinatorSnapshot snapshot(core::Timestamp now) override;
+  core::Result<WorkCoordinatorSnapshot> snapshot(core::Timestamp now) override;
 
 private:
   enum class State : std::uint8_t { Pending, Leased, Succeeded, Failed };
@@ -398,7 +399,8 @@ LocalWorkCoordinator::unregister_worker(std::string_view worker,
   return {};
 }
 
-WorkCoordinatorSnapshot LocalWorkCoordinator::snapshot(core::Timestamp now) {
+core::Result<WorkCoordinatorSnapshot>
+LocalWorkCoordinator::snapshot(core::Timestamp now) {
   std::lock_guard lock{mutex_};
   reap(now);
   WorkCoordinatorSnapshot result{.workers = workers_.size()};

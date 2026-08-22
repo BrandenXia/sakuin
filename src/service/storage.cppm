@@ -125,10 +125,14 @@ LocalCanonicalStorage::open(const config::StorageConfig &configuration) {
         core::ErrorCode::InvalidArgument,
         "Local canonical storage requires the local storage backend"});
   if (configuration.local_root.empty() ||
-      configuration.segment_target_bytes == 0)
+      configuration.segment_target_bytes == 0 ||
+      configuration.compaction_warm_block_target_bytes == 0 ||
+      configuration.compaction_warm_block_target_bytes >
+          std::numeric_limits<std::uint32_t>::max())
     return std::unexpected(core::Error{
         core::ErrorCode::InvalidArgument,
-        "Local canonical storage requires a root and segment target"});
+        "Local canonical storage requires valid paths and block/segment "
+        "targets"});
   auto header = segment_header(configuration);
   if (!header)
     return std::unexpected(header.error());
@@ -178,7 +182,11 @@ LocalCanonicalStorage::open(const config::StorageConfig &configuration) {
       calculated_observation_batch_size(configuration.segment_target_bytes);
   result->compaction_policy_ = {
       .minimum_segment_count = configuration.compaction_minimum_segments,
+      .maximum_warm_segment_count =
+          configuration.compaction_maximum_warm_segments,
       .target_block_size = header->target_block_size,
+      .warm_target_block_size = static_cast<std::uint32_t>(
+          configuration.compaction_warm_block_target_bytes),
       .compression = header->compression,
       .compression_level = configuration.compression_level};
   result->observation_sink_ =
