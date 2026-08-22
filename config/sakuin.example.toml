@@ -10,6 +10,10 @@ query_timeout_ms = 15000
 bootstrap_maximum_in_flight = 8
 bootstrap_maximum_attempts = 3
 bootstrap_retry_delay_ms = 5000
+# A fresh public node needs at least one operator-trusted host:port contact to
+# join the DHT proactively. Leaving this empty supports private or passive
+# deployments, but produces a startup warning in public mode.
+# bootstrap = ["dht-bootstrap.example.net:6881"]
 bootstrap = []
 
 [network.dht.identity]
@@ -131,6 +135,12 @@ enabled = false
 recovery_enabled = true
 recovery_maximum_bytes = 536870912
 # recovery_file = "/var/lib/sakuin/operational/work.checkpoint"
+# Completed and failed work remains an operational idempotency window, then is
+# retired by age or oldest-first when this count is exceeded. Durable canonical
+# result receipts are managed separately and are not removed here. Omitting or
+# setting this to zero selects one quarter of maximum_work_items.
+maximum_terminal_work_items = 16384
+terminal_work_retention_ms = 604800000
 listen_address = "127.0.0.1"
 listen_port = 7100
 maximum_connections = 256

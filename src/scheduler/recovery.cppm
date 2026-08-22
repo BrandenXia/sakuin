@@ -98,6 +98,7 @@ private:
 
   core::Result<void> available_locked() const;
   core::Result<void> checkpoint_locked();
+  core::Result<void> checkpoint_if_changed_locked(std::uint64_t revision);
 
   std::unique_ptr<LocalWorkCoordinator> coordinator_;
   std::unique_ptr<WorkRecoveryStore> store_;
@@ -113,9 +114,10 @@ namespace {
 constexpr std::array<core::Byte, 8> CheckpointMagic{
     core::Byte{'S'}, core::Byte{'A'}, core::Byte{'K'}, core::Byte{'W'},
     core::Byte{'C'}, core::Byte{'P'}, core::Byte{'1'}, core::Byte{0}};
-constexpr std::uint32_t CheckpointVersion = 1;
+constexpr std::uint32_t CheckpointVersion = 2;
 constexpr std::size_t ChecksumBytes = 32;
-constexpr std::size_t FixedEntryBytes = 52;
+constexpr std::size_t FixedEntryBytesV1 = 52;
+constexpr std::size_t FixedEntryBytes = 60;
 
 template <std::unsigned_integral Integer>
 void append_integer(core::ByteBuffer &output, Integer value) {
@@ -244,6 +246,9 @@ encode_work_recovery_snapshot(const WorkRecoverySnapshot &snapshot,
     const auto timestamp = encoded_timestamp(entry.item.not_before);
     if (!timestamp)
       return std::unexpected(timestamp.error());
+    const auto terminal_at = encoded_timestamp(entry.terminal_at);
+    if (!terminal_at)
+      return std::unexpected(terminal_at.error());
     for (const auto byte : entry.item.id.bytes)
       output.push_back(static_cast<core::Byte>(byte));
     append_integer(output, static_cast<std::uint8_t>(entry.item.work_class));
@@ -254,6 +259,7 @@ encode_work_recovery_snapshot(const WorkRecoverySnapshot &snapshot,
     append_integer(output, entry.item.maximum_attempts);
     append_integer(output, entry.attempts);
     append_integer(output, entry.sequence);
+    append_integer(output, *terminal_at);
     append_integer(output,
                    static_cast<std::uint32_t>(entry.item.payload.size()));
     output.insert(output.end(), entry.item.payload.begin(),
@@ -292,11 +298,13 @@ decode_work_recovery_snapshot(core::ByteView encoded,
     return std::unexpected(
         !version ? version.error()
                  : (!next_sequence ? next_sequence.error() : count.error()));
-  if (*version != CheckpointVersion)
+  if (*version != 1 && *version != CheckpointVersion)
     return std::unexpected(core::Error{core::ErrorCode::UnsupportedFormat,
                                        "Unsupported work checkpoint version"});
+  const auto fixed_entry_bytes =
+      *version == 1 ? FixedEntryBytesV1 : FixedEntryBytes;
   if (*count > limits.maximum_work_items ||
-      *count > (checksum_offset - position) / FixedEntryBytes)
+      *count > (checksum_offset - position) / fixed_entry_bytes)
     return std::unexpected(
         core::Error{core::ErrorCode::QuotaExceeded,
                     "Work checkpoint item count exceeds configured limits"});
@@ -305,7 +313,7 @@ decode_work_recovery_snapshot(core::ByteView encoded,
   result.entries.reserve(*count);
   for (std::uint32_t index = 0; index < *count; ++index) {
     if (position > checksum_offset ||
-        checksum_offset - position < FixedEntryBytes)
+        checksum_offset - position < fixed_entry_bytes)
       return std::unexpected(core::Error{core::ErrorCode::CorruptSegment,
                                          "Work checkpoint entry is truncated"});
     WorkId id;
@@ -319,9 +327,14 @@ decode_work_recovery_snapshot(core::ByteView encoded,
     auto maximum_attempts = read_integer<std::uint32_t>(encoded, position);
     auto attempts = read_integer<std::uint32_t>(encoded, position);
     auto sequence = read_integer<std::uint64_t>(encoded, position);
+    core::Result<std::uint64_t> terminal_at = std::uint64_t{
+        std::bit_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::min())};
+    if (*version >= 2)
+      terminal_at = read_integer<std::uint64_t>(encoded, position);
     auto payload_size = read_integer<std::uint32_t>(encoded, position);
     if (!work_class || !state || !reserved || !priority || !not_before ||
-        !maximum_attempts || !attempts || !sequence || !payload_size)
+        !maximum_attempts || !attempts || !sequence || !terminal_at ||
+        !payload_size)
       return std::unexpected(core::Error{core::ErrorCode::CorruptSegment,
                                          "Work checkpoint entry is truncated"});
     if (*reserved != 0 ||
@@ -345,7 +358,8 @@ decode_work_recovery_snapshot(core::ByteView encoded,
                   .maximum_attempts = *maximum_attempts},
          .state = static_cast<WorkRecoveryState>(*state),
          .sequence = *sequence,
-         .attempts = *attempts});
+         .attempts = *attempts,
+         .terminal_at = decoded_timestamp(*terminal_at)});
   }
   if (position != checksum_offset)
     return std::unexpected(core::Error{core::ErrorCode::CorruptSegment,
@@ -475,11 +489,27 @@ RecoveringWorkCoordinator::create(WorkCoordinatorOptions options,
   auto recovered = store->load(options);
   if (!recovered)
     return std::unexpected(recovered.error());
+  bool upgraded_legacy_terminal_times = false;
+  if (*recovered) {
+    const auto opened_at = std::chrono::system_clock::now();
+    for (auto &entry : (**recovered).entries) {
+      if (entry.state != WorkRecoveryState::Pending &&
+          entry.terminal_at == core::Timestamp::min()) {
+        entry.terminal_at = opened_at;
+        upgraded_legacy_terminal_times = true;
+      }
+    }
+  }
   auto coordinator =
       *recovered ? LocalWorkCoordinator::create(options, std::move(**recovered))
                  : LocalWorkCoordinator::create(options);
   if (!coordinator)
     return std::unexpected(coordinator.error());
+  if (upgraded_legacy_terminal_times) {
+    auto migrated = store->save((*coordinator)->recovery_snapshot());
+    if (!migrated)
+      return std::unexpected(migrated.error());
+  }
   return std::unique_ptr<RecoveringWorkCoordinator>{
       new RecoveringWorkCoordinator{std::move(*coordinator), std::move(store)}};
 }
@@ -507,16 +537,22 @@ core::Result<void> RecoveringWorkCoordinator::checkpoint_locked() {
   return {};
 }
 
+core::Result<void> RecoveringWorkCoordinator::checkpoint_if_changed_locked(
+    std::uint64_t revision) {
+  if (coordinator_->recovery_revision() == revision)
+    return {};
+  return checkpoint_locked();
+}
+
 core::Result<bool> RecoveringWorkCoordinator::submit(WorkItem item) {
   std::lock_guard lock{mutex_};
   if (auto ready = available_locked(); !ready)
     return std::unexpected(ready.error());
+  const auto revision = coordinator_->recovery_revision();
   auto result = coordinator_->submit(std::move(item));
-  if (!result || !*result)
-    return result;
-  if (auto saved = checkpoint_locked(); !saved)
+  if (auto saved = checkpoint_if_changed_locked(revision); !saved)
     return std::unexpected(saved.error());
-  return true;
+  return result;
 }
 
 core::Result<bool>
@@ -525,7 +561,11 @@ RecoveringWorkCoordinator::register_worker(WorkerDescriptor worker,
   std::lock_guard lock{mutex_};
   if (auto ready = available_locked(); !ready)
     return std::unexpected(ready.error());
-  return coordinator_->register_worker(std::move(worker), now);
+  const auto revision = coordinator_->recovery_revision();
+  auto result = coordinator_->register_worker(std::move(worker), now);
+  if (auto saved = checkpoint_if_changed_locked(revision); !saved)
+    return std::unexpected(saved.error());
+  return result;
 }
 
 core::Result<void> RecoveringWorkCoordinator::heartbeat(std::string_view worker,
@@ -533,7 +573,11 @@ core::Result<void> RecoveringWorkCoordinator::heartbeat(std::string_view worker,
   std::lock_guard lock{mutex_};
   if (auto ready = available_locked(); !ready)
     return ready;
-  return coordinator_->heartbeat(worker, now);
+  const auto revision = coordinator_->recovery_revision();
+  auto result = coordinator_->heartbeat(worker, now);
+  if (auto saved = checkpoint_if_changed_locked(revision); !saved)
+    return saved;
+  return result;
 }
 
 core::Result<std::vector<WorkLease>>
@@ -542,10 +586,9 @@ RecoveringWorkCoordinator::lease(std::string_view worker, std::size_t maximum,
   std::lock_guard lock{mutex_};
   if (auto ready = available_locked(); !ready)
     return std::unexpected(ready.error());
+  const auto revision = coordinator_->recovery_revision();
   auto result = coordinator_->lease(worker, maximum, now);
-  if (!result || result->empty())
-    return result;
-  if (auto saved = checkpoint_locked(); !saved)
+  if (auto saved = checkpoint_if_changed_locked(revision); !saved)
     return std::unexpected(saved.error());
   return result;
 }
@@ -556,7 +599,11 @@ core::Result<void> RecoveringWorkCoordinator::renew(std::string_view worker,
   std::lock_guard lock{mutex_};
   if (auto ready = available_locked(); !ready)
     return ready;
-  return coordinator_->renew(worker, lease, now);
+  const auto revision = coordinator_->recovery_revision();
+  auto result = coordinator_->renew(worker, lease, now);
+  if (auto saved = checkpoint_if_changed_locked(revision); !saved)
+    return saved;
+  return result;
 }
 
 core::Result<void> RecoveringWorkCoordinator::complete(std::string_view worker,
@@ -565,10 +612,11 @@ core::Result<void> RecoveringWorkCoordinator::complete(std::string_view worker,
   std::lock_guard lock{mutex_};
   if (auto ready = available_locked(); !ready)
     return ready;
+  const auto revision = coordinator_->recovery_revision();
   auto result = coordinator_->complete(worker, lease, now);
-  if (!result)
-    return result;
-  return checkpoint_locked();
+  if (auto saved = checkpoint_if_changed_locked(revision); !saved)
+    return saved;
+  return result;
 }
 
 core::Result<void> RecoveringWorkCoordinator::fail(std::string_view worker,
@@ -579,10 +627,11 @@ core::Result<void> RecoveringWorkCoordinator::fail(std::string_view worker,
   std::lock_guard lock{mutex_};
   if (auto ready = available_locked(); !ready)
     return ready;
+  const auto revision = coordinator_->recovery_revision();
   auto result = coordinator_->fail(worker, lease, retryable, now, retry_at);
-  if (!result)
-    return result;
-  return checkpoint_locked();
+  if (auto saved = checkpoint_if_changed_locked(revision); !saved)
+    return saved;
+  return result;
 }
 
 core::Result<void>
@@ -591,10 +640,11 @@ RecoveringWorkCoordinator::unregister_worker(std::string_view worker,
   std::lock_guard lock{mutex_};
   if (auto ready = available_locked(); !ready)
     return ready;
+  const auto revision = coordinator_->recovery_revision();
   auto result = coordinator_->unregister_worker(worker, now);
-  if (!result)
-    return result;
-  return checkpoint_locked();
+  if (auto saved = checkpoint_if_changed_locked(revision); !saved)
+    return saved;
+  return result;
 }
 
 core::Result<WorkCoordinatorSnapshot>
@@ -602,7 +652,11 @@ RecoveringWorkCoordinator::snapshot(core::Timestamp now) {
   std::lock_guard lock{mutex_};
   if (auto ready = available_locked(); !ready)
     return std::unexpected(ready.error());
-  return coordinator_->snapshot(now);
+  const auto revision = coordinator_->recovery_revision();
+  auto result = coordinator_->snapshot(now);
+  if (auto saved = checkpoint_if_changed_locked(revision); !saved)
+    return std::unexpected(saved.error());
+  return result;
 }
 
 bool RecoveringWorkCoordinator::healthy() const noexcept {

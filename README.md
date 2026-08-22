@@ -86,12 +86,29 @@ Start with [config/sakuin.example.toml](config/sakuin.example.toml):
 
 ```bash
 cp config/sakuin.example.toml sakuin.toml
+# Set network.dht.bootstrap to one or more operator-trusted host:port contacts
+# before the first public-DHT start.
+xmake run sakuin-api-key --state-dir=./data/operational/api init
+xmake run sakuin-api-key --state-dir=./data/operational/api \
+  create --id reader --permissions search
 xmake run sakuin --config=sakuin.toml
 ```
 
 Normal settings can also be overridden through `SAKUIN_*` environment variables
 or `--section.key=value` arguments. The example keeps both the API and work
-coordinator on loopback.
+coordinator on loopback. A fresh public node needs at least one trusted DHT
+bootstrap contact to join proactively. An empty list remains supported for
+private or passive deployments and emits a startup warning in public mode.
+
+Allow inbound and outbound UDP on the configured DHT port (6881 in the
+example). Keep the HTTP API on loopback unless it is protected by a TLS reverse
+proxy or by the configured API TLS certificate and private key. After startup,
+verify the process and storage with:
+
+```bash
+curl http://127.0.0.1:8080/v1/health
+xmake run sakuin admin verify --config=sakuin.toml
+```
 
 For a remote crawler and metadata fetcher, configure both
 `[distributed.coordinator]` and `[distributed.worker]` as shown in the example,
@@ -110,6 +127,11 @@ is the per-frame payload ceiling. Results up to
 then content-ID verified and published atomically by the coordinator. Global
 reassembly byte/count limits and expiration prevent abandoned transfers from
 becoming an unbounded operational-state sink.
+
+Coordinator checkpoints retain completed and failed work only for the
+configured terminal-work time/count window. This bounds long-running local
+state without deleting canonical observations, torrent records, or durable
+result receipts; a retired work identity may be scheduled again safely.
 
 `network.traffic.inbound_bytes` and `outbound_bytes` are coordinator-wide when
 the distributed listener is enabled. Workers reserve bounded chunks using
@@ -136,7 +158,9 @@ xmake run sakuin-api-key --state-dir=./data/operational/api \
 
 The creation command prints the bearer credential once. The store persists
 salted verifier material rather than plaintext secrets. Use the same CLI to
-list, disable, enable, rotate, and remove keys.
+list or disable keys. To rotate a credential, create a new key ID, reload the
+daemon with `SIGHUP`, move clients to the new bearer token, and then disable the
+old key.
 
 Authenticated endpoints include:
 

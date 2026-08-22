@@ -152,7 +152,11 @@ create_local_work_coordinator(const config::AppConfig &configuration) {
       .maximum_work_items = configuration.distributed.maximum_work_items,
       .maximum_payload_bytes = configuration.distributed.maximum_payload_bytes,
       .worker_timeout = configuration.distributed.worker_timeout,
-      .lease_duration = configuration.distributed.lease_duration};
+      .lease_duration = configuration.distributed.lease_duration,
+      .maximum_terminal_work_items =
+          configuration.distributed.coordinator.maximum_terminal_work_items,
+      .terminal_work_retention =
+          configuration.distributed.coordinator.terminal_work_retention};
   const auto &recovery = configuration.distributed.coordinator;
   if (!recovery.recovery_enabled) {
     auto created = scheduler::LocalWorkCoordinator::create(options);

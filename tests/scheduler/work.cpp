@@ -137,5 +137,42 @@ int main() {
   auto concurrent_snapshot = (*concurrent)->snapshot(seconds(0));
   if (accepted != 1 || !concurrent_snapshot || concurrent_snapshot->leased != 1)
     return 19;
+
+  auto lifecycle = scheduler::LocalWorkCoordinator::create(
+      {.maximum_work_items = 8,
+       .maximum_payload_bytes = 128,
+       .worker_timeout = std::chrono::minutes{1},
+       .lease_duration = std::chrono::seconds{10},
+       .maximum_terminal_work_items = 2,
+       .terminal_work_retention = std::chrono::seconds{10}});
+  const scheduler::WorkerDescriptor lifecycle_worker{
+      .id = "lifecycle", .capabilities = {scheduler::WorkClass::MetadataFetch}};
+  const auto first = item("first-terminal", 3);
+  const auto second = item("second-terminal", 2);
+  const auto third = item("third-terminal", 1);
+  if (!lifecycle ||
+      !(*lifecycle)->register_worker(lifecycle_worker, seconds(0)) ||
+      !(*lifecycle)->submit(first).value_or(false) ||
+      !(*lifecycle)->submit(second).value_or(false) ||
+      !(*lifecycle)->submit(third).value_or(false))
+    return 20;
+  auto lifecycle_leases =
+      (*lifecycle)->lease(lifecycle_worker.id, 3, seconds(0));
+  if (!lifecycle_leases || lifecycle_leases->size() != 3)
+    return 21;
+  for (std::size_t index = 0; index < lifecycle_leases->size(); ++index)
+    if (!(*lifecycle)
+             ->complete(lifecycle_worker.id, (*lifecycle_leases)[index].id,
+                        seconds(static_cast<std::int64_t>(index + 1))))
+      return 22;
+  auto bounded = (*lifecycle)->snapshot(seconds(3));
+  if (!bounded || bounded->succeeded != 2 ||
+      !(*lifecycle)->submit(first).value_or(false) ||
+      (*lifecycle)->submit(third).value_or(true))
+    return 23;
+  auto expired = (*lifecycle)->snapshot(seconds(13));
+  if (!expired || expired->succeeded != 0 || expired->failed != 0 ||
+      expired->pending != 1 || !(*lifecycle)->submit(third).value_or(false))
+    return 24;
   return 0;
 }

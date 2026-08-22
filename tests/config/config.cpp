@@ -106,6 +106,8 @@ enabled = true
 recovery_enabled = true
 recovery_file = "/srv/sakuin/operational/custom-work.checkpoint"
 recovery_maximum_bytes = 268435456
+maximum_terminal_work_items = 4096
+terminal_work_retention_ms = 259200000
 listen_address = "127.0.0.1"
 listen_port = 7101
 maximum_connections = 32
@@ -185,6 +187,14 @@ tls_server_name = "coordinator.internal"
       std::pair{
           std::string{"SAKUIN_DISTRIBUTED_COORDINATOR_RECOVERY_MAXIMUM_BYTES"},
           std::string{"134217728"}},
+      std::pair{
+          std::string{
+              "SAKUIN_DISTRIBUTED_COORDINATOR_MAXIMUM_TERMINAL_WORK_ITEMS"},
+          std::string{"8192"}},
+      std::pair{
+          std::string{
+              "SAKUIN_DISTRIBUTED_COORDINATOR_TERMINAL_WORK_RETENTION_MS"},
+          std::string{"345600000"}},
       std::pair{
           std::string{
               "SAKUIN_DISTRIBUTED_COORDINATOR_MAXIMUM_RESULT_REASSEMBLY_BYTES"},
@@ -276,6 +286,9 @@ tls_server_name = "coordinator.internal"
           "/srv/sakuin/operational/custom-work.checkpoint" ||
       loaded.distributed.coordinator.recovery_maximum_bytes !=
           128U * 1024U * 1024U ||
+      loaded.distributed.coordinator.maximum_terminal_work_items != 8192 ||
+      loaded.distributed.coordinator.terminal_work_retention !=
+          std::chrono::hours{24 * 4} ||
       loaded.distributed.coordinator.listen_address != "127.0.0.1" ||
       loaded.distributed.coordinator.listen_port != 7201 ||
       loaded.distributed.coordinator.maximum_connections != 32 ||
@@ -368,6 +381,11 @@ tls_server_name = "coordinator.internal"
       1024;
   if (config::validate(invalid_coordinator))
     return 19;
+  invalid_coordinator = config::defaults();
+  invalid_coordinator.distributed.coordinator.maximum_terminal_work_items =
+      invalid_coordinator.distributed.maximum_work_items + 1;
+  if (config::validate(invalid_coordinator))
+    return 20;
   auto incomplete_worker_tls = config::defaults();
   incomplete_worker_tls.distributed.coordinator.tls_trust_anchor_file =
       "ca.pem";

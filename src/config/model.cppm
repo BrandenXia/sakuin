@@ -145,6 +145,9 @@ struct DistributedConfig {
     bool recovery_enabled{true};
     std::optional<std::filesystem::path> recovery_file;
     std::size_t recovery_maximum_bytes{512U * 1024U * 1024U};
+    // Zero selects one quarter of distributed.maximum_work_items.
+    std::size_t maximum_terminal_work_items{};
+    core::Duration terminal_work_retention{std::chrono::hours{24 * 7}};
     std::string listen_address{"127.0.0.1"};
     std::uint16_t listen_port{7100};
     std::size_t maximum_connections{256};
@@ -668,6 +671,16 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.distributed.coordinator.recovery_maximum_bytes = *value;
+    } else if (name == "distributed.coordinator.maximum_terminal_work_items") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.maximum_terminal_work_items = *value;
+    } else if (name == "distributed.coordinator.terminal_work_retention_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.terminal_work_retention = *value;
     } else if (name == "distributed.coordinator.listen_address") {
       config.distributed.coordinator.listen_address = text;
     } else if (name == "distributed.coordinator.listen_port") {
@@ -946,6 +959,11 @@ core::Result<void> validate(const AppConfig &config) {
        (coordinator.recovery_maximum_bytes < 4U * 1024U ||
         coordinator.recovery_maximum_bytes > 16ULL * 1024U * 1024U * 1024U ||
         (coordinator.recovery_file && coordinator.recovery_file->empty()))) ||
+      (coordinator.maximum_terminal_work_items != 0 &&
+       coordinator.maximum_terminal_work_items >
+           config.distributed.maximum_work_items) ||
+      coordinator.terminal_work_retention < std::chrono::seconds{1} ||
+      coordinator.terminal_work_retention > std::chrono::hours{24 * 365} ||
       coordinator.maximum_connections == 0 ||
       coordinator.maximum_connections > 1'000'000 ||
       coordinator.read_buffer_bytes == 0 ||

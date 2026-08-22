@@ -75,6 +75,11 @@ struct WorkCoordinatorOptions {
   std::size_t maximum_payload_bytes{1U * 1024U * 1024U};
   core::Duration worker_timeout{std::chrono::seconds{30}};
   core::Duration lease_duration{std::chrono::minutes{2}};
+  // Zero selects one quarter of maximum_work_items. Terminal entries provide
+  // a bounded operational idempotency window; canonical result receipts live
+  // independently of this coordinator state.
+  std::size_t maximum_terminal_work_items{};
+  core::Duration terminal_work_retention{std::chrono::hours{24 * 7}};
 };
 
 struct WorkCoordinatorSnapshot {
@@ -96,6 +101,7 @@ struct WorkRecoveryEntry {
   WorkRecoveryState state{WorkRecoveryState::Pending};
   std::uint64_t sequence{};
   std::uint32_t attempts{};
+  core::Timestamp terminal_at{core::Timestamp::min()};
 
   friend bool operator==(const WorkRecoveryEntry &,
                          const WorkRecoveryEntry &) = default;
@@ -165,6 +171,7 @@ public:
                                        core::Timestamp now) override;
   core::Result<WorkCoordinatorSnapshot> snapshot(core::Timestamp now) override;
   WorkRecoverySnapshot recovery_snapshot() const;
+  std::uint64_t recovery_revision() const;
 
 private:
   enum class State : std::uint8_t { Pending, Leased, Succeeded, Failed };
@@ -176,6 +183,7 @@ private:
     LeaseId lease{};
     std::string worker;
     core::Timestamp lease_expires{};
+    core::Timestamp terminal_at{core::Timestamp::min()};
   };
   struct Worker {
     std::vector<WorkClass> capabilities;
@@ -186,7 +194,8 @@ private:
       : options_(options) {}
 
   void reap(core::Timestamp now);
-  void release(Entry &entry, core::Timestamp retry_at);
+  void release(Entry &entry, core::Timestamp now, core::Timestamp retry_at);
+  void prune_terminal(core::Timestamp now);
   core::Result<Entry *> active_lease(std::string_view worker, LeaseId lease);
 
   WorkCoordinatorOptions options_;
@@ -195,6 +204,7 @@ private:
   std::map<std::string, Worker, std::less<>> workers_;
   std::uint64_t next_sequence_{};
   LeaseId next_lease_{};
+  std::uint64_t recovery_revision_{};
 };
 
 } // namespace sakuin::scheduler
@@ -234,10 +244,18 @@ core::Result<std::unique_ptr<LocalWorkCoordinator>>
 LocalWorkCoordinator::create(WorkCoordinatorOptions options) {
   if (options.maximum_work_items == 0 || options.maximum_payload_bytes == 0 ||
       options.worker_timeout <= core::Duration::zero() ||
-      options.lease_duration <= core::Duration::zero())
+      options.lease_duration <= core::Duration::zero() ||
+      options.terminal_work_retention <= core::Duration::zero())
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
                     "Work coordinator limits and durations must be positive"});
+  if (options.maximum_terminal_work_items == 0)
+    options.maximum_terminal_work_items =
+        std::max<std::size_t>(1, options.maximum_work_items / 4);
+  if (options.maximum_terminal_work_items > options.maximum_work_items)
+    return std::unexpected(core::Error{
+        core::ErrorCode::InvalidArgument,
+        "Terminal work limit must not exceed the coordinator item limit"});
   return std::unique_ptr<LocalWorkCoordinator>{
       new LocalWorkCoordinator{options}};
 }
@@ -269,10 +287,11 @@ LocalWorkCoordinator::create(WorkCoordinatorOptions options,
           core::Error{core::ErrorCode::InvalidArgument,
                       "Recovered work entry violates coordinator invariants"});
     if (recovered.state == WorkRecoveryState::Pending &&
-        recovered.attempts >= recovered.item.maximum_attempts)
-      return std::unexpected(core::Error{
-          core::ErrorCode::InvalidArgument,
-          "Recovered pending work has exhausted its attempt budget"});
+        (recovered.attempts >= recovered.item.maximum_attempts ||
+         recovered.terminal_at != core::Timestamp::min()))
+      return std::unexpected(
+          core::Error{core::ErrorCode::InvalidArgument,
+                      "Recovered pending work violates lifecycle invariants"});
 
     State internal = State::Pending;
     switch (recovered.state) {
@@ -292,7 +311,8 @@ LocalWorkCoordinator::create(WorkCoordinatorOptions options,
             ->work_.emplace(id, Entry{.item = std::move(recovered.item),
                                       .state = internal,
                                       .sequence = recovered.sequence,
-                                      .attempts = recovered.attempts});
+                                      .attempts = recovered.attempts,
+                                      .terminal_at = recovered.terminal_at});
     if (!inserted)
       return std::unexpected(
           core::Error{core::ErrorCode::Conflict,
@@ -327,6 +347,7 @@ core::Result<bool> LocalWorkCoordinator::submit(WorkItem item) {
                     "Work coordinator item limit would be exceeded"});
   work_.emplace(item.id,
                 Entry{.item = std::move(item), .sequence = ++next_sequence_});
+  ++recovery_revision_;
   return true;
 }
 
@@ -370,16 +391,53 @@ core::Result<void> LocalWorkCoordinator::heartbeat(std::string_view worker,
   return {};
 }
 
-void LocalWorkCoordinator::release(Entry &entry, core::Timestamp retry_at) {
+void LocalWorkCoordinator::release(Entry &entry, core::Timestamp now,
+                                   core::Timestamp retry_at) {
   entry.lease = 0;
   entry.worker.clear();
   entry.lease_expires = {};
   if (entry.attempts >= entry.item.maximum_attempts) {
     entry.state = State::Failed;
+    entry.terminal_at = now;
   } else {
     entry.state = State::Pending;
     entry.item.not_before = retry_at;
+    entry.terminal_at = core::Timestamp::min();
   }
+  ++recovery_revision_;
+}
+
+void LocalWorkCoordinator::prune_terminal(core::Timestamp now) {
+  std::vector<std::pair<core::Timestamp, WorkId>> terminal;
+  terminal.reserve(work_.size());
+  for (auto current = work_.begin(); current != work_.end();) {
+    const auto &entry = current->second;
+    const bool is_terminal =
+        entry.state == State::Succeeded || entry.state == State::Failed;
+    const bool expired =
+        is_terminal && entry.terminal_at != core::Timestamp::min() &&
+        entry.terminal_at <= now &&
+        after(entry.terminal_at, options_.terminal_work_retention) <= now;
+    if (expired) {
+      current = work_.erase(current);
+      ++recovery_revision_;
+      continue;
+    }
+    if (is_terminal)
+      terminal.emplace_back(entry.terminal_at, current->first);
+    ++current;
+  }
+  if (terminal.size() <= options_.maximum_terminal_work_items)
+    return;
+  std::ranges::sort(terminal, [&](const auto &left, const auto &right) {
+    if (left.first != right.first)
+      return left.first < right.first;
+    return work_.at(left.second).sequence < work_.at(right.second).sequence;
+  });
+  const auto remove = terminal.size() - options_.maximum_terminal_work_items;
+  for (const auto &[_, id] : terminal | std::views::take(remove))
+    work_.erase(id);
+  ++recovery_revision_;
 }
 
 void LocalWorkCoordinator::reap(core::Timestamp now) {
@@ -391,12 +449,13 @@ void LocalWorkCoordinator::reap(core::Timestamp now) {
     const auto id = worker->first;
     for (auto &[_, entry] : work_)
       if (entry.state == State::Leased && entry.worker == id)
-        release(entry, now);
+        release(entry, now, now);
     worker = workers_.erase(worker);
   }
   for (auto &[_, entry] : work_)
     if (entry.state == State::Leased && entry.lease_expires <= now)
-      release(entry, now);
+      release(entry, now, now);
+  prune_terminal(now);
 }
 
 core::Result<std::vector<WorkLease>>
@@ -435,6 +494,7 @@ LocalWorkCoordinator::lease(std::string_view worker, std::size_t maximum,
     entry->worker = worker;
     entry->lease_expires = after(now, options_.lease_duration);
     ++entry->attempts;
+    ++recovery_revision_;
     result.push_back({.id = entry->lease,
                       .item = entry->item,
                       .attempt = entry->attempts,
@@ -469,6 +529,11 @@ core::Result<void> LocalWorkCoordinator::renew(std::string_view worker,
   if (!entry)
     return std::unexpected(entry.error());
   (*entry)->lease_expires = after(now, options_.lease_duration);
+  // A final-attempt lease is projected as failed in the crash-recovery
+  // snapshot, with its expiry as the terminal timestamp. Persist renewals so
+  // that bounded terminal retention cannot begin before the renewed lease ends.
+  if ((*entry)->attempts >= (*entry)->item.maximum_attempts)
+    ++recovery_revision_;
   return {};
 }
 
@@ -484,6 +549,9 @@ core::Result<void> LocalWorkCoordinator::complete(std::string_view worker,
   (*entry)->lease = 0;
   (*entry)->lease_expires = {};
   (*entry)->worker.clear();
+  (*entry)->terminal_at = now;
+  ++recovery_revision_;
+  prune_terminal(now);
   return {};
 }
 
@@ -497,13 +565,16 @@ core::Result<void> LocalWorkCoordinator::fail(std::string_view worker,
   if (!entry)
     return std::unexpected(entry.error());
   if (retryable)
-    release(**entry, retry_at);
+    release(**entry, now, retry_at);
   else {
     (*entry)->state = State::Failed;
     (*entry)->lease = 0;
     (*entry)->lease_expires = {};
     (*entry)->worker.clear();
+    (*entry)->terminal_at = now;
+    ++recovery_revision_;
   }
+  prune_terminal(now);
   return {};
 }
 
@@ -518,7 +589,8 @@ LocalWorkCoordinator::unregister_worker(std::string_view worker,
   workers_.erase(found);
   for (auto &[_, entry] : work_)
     if (entry.state == State::Leased && entry.worker == worker)
-      release(entry, now);
+      release(entry, now, now);
+  prune_terminal(now);
   return {};
 }
 
@@ -570,12 +642,22 @@ WorkRecoverySnapshot LocalWorkCoordinator::recovery_snapshot() const {
       state = WorkRecoveryState::Failed;
       break;
     }
+    auto terminal_at = core::Timestamp::min();
+    if (state != WorkRecoveryState::Pending)
+      terminal_at = entry.state == State::Leased ? entry.lease_expires
+                                                 : entry.terminal_at;
     result.entries.push_back({.item = entry.item,
                               .state = state,
                               .sequence = entry.sequence,
-                              .attempts = entry.attempts});
+                              .attempts = entry.attempts,
+                              .terminal_at = terminal_at});
   }
   return result;
+}
+
+std::uint64_t LocalWorkCoordinator::recovery_revision() const {
+  std::lock_guard lock{mutex_};
+  return recovery_revision_;
 }
 
 } // namespace sakuin::scheduler

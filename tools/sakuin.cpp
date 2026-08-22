@@ -274,6 +274,12 @@ int main(int argc, char **argv) {
   if (arguments->admin_command)
     return run_admin(configuration->storage, *arguments->admin_command);
 
+  if (!configuration->network.dht.private_network &&
+      configuration->network.dht.bootstrap.empty())
+    spdlog::warn(
+        "No public DHT bootstrap contacts are configured; a fresh node may "
+        "remain isolated until it learns a contact from inbound traffic");
+
   Observer observer;
   if (std::signal(SIGINT, handle_signal) == SIG_ERR ||
       std::signal(SIGTERM, handle_signal) == SIG_ERR ||

@@ -144,7 +144,8 @@ int main() {
                             .maximum_attempts = completed.maximum_attempts},
                    .state = scheduler::WorkRecoveryState::Succeeded,
                    .sequence = 1,
-                   .attempts = 1}}};
+                   .attempts = 1,
+                   .terminal_at = seconds(3)}}};
   auto encoded = scheduler::encode_work_recovery_snapshot(codec_snapshot);
   auto decoded =
       encoded ? scheduler::decode_work_recovery_snapshot(*encoded, options)
@@ -153,6 +154,26 @@ int main() {
   if (!decoded || *decoded != codec_snapshot ||
       scheduler::encode_work_recovery_snapshot(codec_snapshot, 64))
     return 10;
+
+  // Version 1 checkpoints had no terminal timestamp. They remain readable so
+  // an existing local server can upgrade in place.
+  auto legacy = *encoded;
+  constexpr std::size_t ChecksumBytes = 32;
+  constexpr std::size_t TerminalTimestampOffset = 72;
+  legacy.resize(legacy.size() - ChecksumBytes);
+  legacy.erase(legacy.begin() + TerminalTimestampOffset,
+               legacy.begin() + TerminalTimestampOffset +
+                   sizeof(std::uint64_t));
+  legacy[8] = std::byte{1};
+  legacy[9] = legacy[10] = legacy[11] = std::byte{};
+  const auto legacy_checksum = core::sha256(legacy);
+  for (const auto byte : legacy_checksum.bytes)
+    legacy.push_back(static_cast<core::Byte>(byte));
+  auto legacy_decoded =
+      scheduler::decode_work_recovery_snapshot(legacy, options);
+  if (!legacy_decoded || legacy_decoded->entries.size() != 1 ||
+      legacy_decoded->entries.front().terminal_at != core::Timestamp::min())
+    return 14;
 
   auto failing = scheduler::RecoveringWorkCoordinator::create(
       options, std::make_unique<FailingStore>());
@@ -167,6 +188,79 @@ int main() {
       !failing || (*failing)->healthy() || faulted_snapshot ||
       faulted_snapshot.error().code != core::ErrorCode::IoError)
     return 11;
+
+  const auto lifecycle_checkpoint = directory.path / "lifecycle.checkpoint";
+  const scheduler::WorkCoordinatorOptions lifecycle_options{
+      .maximum_work_items = 8,
+      .maximum_payload_bytes = 128,
+      .worker_timeout = std::chrono::seconds{100},
+      .lease_duration = std::chrono::seconds{5},
+      .maximum_terminal_work_items = 1,
+      .terminal_work_retention = std::chrono::seconds{5}};
+  const auto lifecycle_first = item("lifecycle-first", 2);
+  const auto lifecycle_second = item("lifecycle-second", 1);
+  {
+    auto lifecycle = scheduler::RecoveringWorkCoordinator::open_local(
+        lifecycle_options, lifecycle_checkpoint);
+    if (!lifecycle || !(*lifecycle)->submit(lifecycle_first).value_or(false) ||
+        !(*lifecycle)->submit(lifecycle_second).value_or(false) ||
+        !(*lifecycle)->register_worker(worker, seconds(0)))
+      return 15;
+    auto leases = (*lifecycle)->lease(worker.id, 2, seconds(0));
+    if (!leases || leases->size() != 2 ||
+        !(*lifecycle)->complete(worker.id, leases->front().id, seconds(1)) ||
+        !(*lifecycle)->complete(worker.id, leases->back().id, seconds(2)))
+      return 16;
+  }
+  {
+    auto lifecycle = scheduler::RecoveringWorkCoordinator::open_local(
+        lifecycle_options, lifecycle_checkpoint);
+    auto retained = lifecycle
+                        ? (*lifecycle)->snapshot(seconds(3))
+                        : core::Result<scheduler::WorkCoordinatorSnapshot>{
+                              std::unexpected(lifecycle.error())};
+    if (!retained || retained->succeeded != 1 ||
+        !(*lifecycle)->submit(lifecycle_first).value_or(false))
+      return 17;
+    auto expired = (*lifecycle)->snapshot(seconds(7));
+    if (!expired || expired->succeeded != 0 || expired->pending != 1 ||
+        !(*lifecycle)->submit(lifecycle_second).value_or(false))
+      return 18;
+  }
+  auto lifecycle_reopened = scheduler::RecoveringWorkCoordinator::open_local(
+      lifecycle_options, lifecycle_checkpoint);
+  auto lifecycle_state = lifecycle_reopened
+                             ? (*lifecycle_reopened)->snapshot(seconds(8))
+                             : core::Result<scheduler::WorkCoordinatorSnapshot>{
+                                   std::unexpected(lifecycle_reopened.error())};
+  if (!lifecycle_state || lifecycle_state->pending != 2 ||
+      lifecycle_state->succeeded != 0 || lifecycle_state->failed != 0)
+    return 19;
+
+  // Renewing a final-attempt lease updates the terminal timestamp projected
+  // into crash recovery. Otherwise a restarted coordinator could retire the
+  // work before the renewed lease's retention window has elapsed.
+  const auto renewed_checkpoint = directory.path / "renewed.checkpoint";
+  const auto renewed_item = item("renewed-final-attempt", 1, 1);
+  {
+    auto renewed = scheduler::RecoveringWorkCoordinator::open_local(
+        lifecycle_options, renewed_checkpoint);
+    if (!renewed || !(*renewed)->submit(renewed_item).value_or(false) ||
+        !(*renewed)->register_worker(worker, seconds(0)))
+      return 20;
+    auto lease = (*renewed)->lease(worker.id, 1, seconds(0));
+    if (!lease || lease->size() != 1 ||
+        !(*renewed)->renew(worker.id, lease->front().id, seconds(4)))
+      return 21;
+  }
+  auto renewed = scheduler::RecoveringWorkCoordinator::open_local(
+      lifecycle_options, renewed_checkpoint);
+  auto renewed_state = renewed
+                           ? (*renewed)->snapshot(seconds(11))
+                           : core::Result<scheduler::WorkCoordinatorSnapshot>{
+                                 std::unexpected(renewed.error())};
+  if (!renewed_state || renewed_state->failed != 1)
+    return 22;
 
   std::ifstream input{checkpoint, std::ios::binary | std::ios::ate};
   if (!input)
