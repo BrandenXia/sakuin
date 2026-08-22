@@ -54,7 +54,8 @@ jobs:
       - name: Build release binaries
         run: |
           xmake f --yes --mode=release --toolchain=clang --runtimes=c++_shared
-          xmake build --yes --jobs=2 sakuin sakuin-api-key
+          xmake build --yes --jobs=2 sakuin
+          xmake build --yes --jobs=2 sakuin-api-key
 
       - name: Smoke-test the command line
         run: |
