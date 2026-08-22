@@ -8,13 +8,21 @@ import sakuin.service.storage;
 
 export namespace sakuin::service {
 
-enum class MaintenanceOperation { Compaction, Verification, GarbageCollection };
+enum class MaintenanceOperation {
+  Retention,
+  Compaction,
+  Verification,
+  GarbageCollection
+};
 
 struct MaintenanceEvent {
   LocalDataset dataset;
   MaintenanceOperation operation;
   std::uint64_t segments_affected{};
   std::uint64_t records_checked{};
+  std::uint64_t records_expired{};
+  std::uint64_t segments_archived{};
+  std::uint64_t segments_expired{};
   std::uint64_t objects_deleted{};
   std::uint64_t bytes_before{};
   std::uint64_t bytes_after{};
@@ -135,6 +143,35 @@ void StorageMaintenanceCoordinator::run_once(bool perform_verification) {
   constexpr std::array datasets{LocalDataset::Observations,
                                 LocalDataset::Torrents};
   for (const auto dataset : datasets) {
+    if (dataset == LocalDataset::Observations) {
+      auto retained =
+          storage_.retain_observations(std::chrono::system_clock::now());
+      if (!retained)
+        notify_error(dataset, MaintenanceOperation::Retention,
+                     retained.error());
+      else
+        notify({.dataset = dataset,
+                .operation = MaintenanceOperation::Retention,
+                .segments_affected =
+                    retained->segments_archived + retained->segments_expired,
+                .records_expired = retained->records_expired,
+                .segments_archived = retained->segments_archived,
+                .segments_expired = retained->segments_expired,
+                .bytes_before = retained->bytes_before,
+                .bytes_after = retained->bytes_after});
+      if (retained &&
+          (retained->segments_archived != 0 ||
+           retained->segments_expired != 0) &&
+          on_dataset_committed_) {
+        try {
+          on_dataset_committed_(dataset, retained->source_generation);
+        } catch (...) {
+          // The canonical commit is durable; derived views recover from a
+          // missed notification on their next canonical update.
+        }
+      }
+    }
+
     auto compacted = storage_.compact(dataset);
     if (!compacted)
       notify_error(dataset, MaintenanceOperation::Compaction,

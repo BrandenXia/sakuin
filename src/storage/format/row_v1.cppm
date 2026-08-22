@@ -55,7 +55,6 @@ public:
   core::Result<core::ByteBuffer> read(RecordLocation location) const override;
   std::uint64_t record_count() const noexcept override;
   core::Result<RecordLocation> location(std::uint64_t ordinal) const override;
-
   // Fully decompresses and validates every block. Opening a reader validates
   // framing and metadata; publishing callers use this stronger check before
   // making a segment reachable.
@@ -173,7 +172,7 @@ core::Result<SegmentHeader> decode_header(core::ByteView input) {
   if (!major || !minor || !schema_id || !schema || !encoding || !tier ||
       !compression || !reserved || !block_size)
     return std::unexpected(corrupt("Truncated RowV1 segment header"));
-  if (*major != 1 || *minor > 2 ||
+  if (*major != 1 || *minor > 3 ||
       (*minor == 0 && input.size() != LegacyHeaderSize) ||
       (*minor >= 1 && input.size() != HeaderSize) ||
       *encoding != static_cast<std::uint8_t>(SegmentEncoding::RowV1))
@@ -535,14 +534,16 @@ RowV1SegmentWriter::create(BlobStore &store, SegmentHeader header,
                    header.format_version == StorageFormatVersion{1, 1};
   const bool warm = header.tier == SegmentTier::Warm &&
                     header.format_version == StorageFormatVersion{1, 2};
-  if (header.encoding != SegmentEncoding::RowV1 || (!hot && !warm) ||
+  const bool cold = header.tier == SegmentTier::Cold &&
+                    header.format_version == StorageFormatVersion{1, 3};
+  if (header.encoding != SegmentEncoding::RowV1 || (!hot && !warm && !cold) ||
       header.target_block_size == 0 ||
       options.compression_level < ZSTD_minCLevel() ||
       options.compression_level > ZSTD_maxCLevel())
     return std::unexpected(core::Error{
         core::ErrorCode::InvalidArgument,
-        "RowV1 writer requires HOT format 1.1 or WARM format 1.2 and valid "
-        "compression settings"});
+        "RowV1 writer requires HOT format 1.1, WARM format 1.2, or COLD "
+        "format 1.3 and valid compression settings"});
   auto blob = store.create();
   if (!blob)
     return std::unexpected(blob.error());
@@ -574,7 +575,8 @@ core::Result<void> RowV1SegmentWriter::append(core::ByteView record) {
           std::numeric_limits<std::uint64_t>::max() - impl_->logical_size)
     return std::unexpected(core::Error{core::ErrorCode::InvalidArgument,
                                        "RowV1 segment statistics overflow"});
-  if (impl_->header.tier != SegmentTier::Hot)
+  if (impl_->header.tier != SegmentTier::Hot &&
+      impl_->header.tier != SegmentTier::Cold)
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
                     "WARM RowV1 records must be appended with a physical key"});
@@ -790,7 +792,7 @@ RowV1SegmentReader::open(BlobStore &store, core::ObjectId object) {
   std::size_t prefix_position = HeaderMagic.size();
   auto major = read_integer<std::uint16_t>(prefix, prefix_position);
   auto minor = read_integer<std::uint16_t>(prefix, prefix_position);
-  if (!major || !minor || *major != 1 || *minor > 2)
+  if (!major || !minor || *major != 1 || *minor > 3)
     return std::unexpected(core::Error{core::ErrorCode::UnsupportedFormat,
                                        "Unsupported segment format"});
   const auto header_size = *minor == 0 ? LegacyHeaderSize : HeaderSize;
@@ -863,8 +865,12 @@ RowV1SegmentReader::open(BlobStore &store, core::ObjectId object) {
           corrupt("RowV1 Bloom-filter record count does not match footer"));
     bloom = std::move(*decoded_bloom);
   } else {
-    return std::unexpected(core::Error{core::ErrorCode::UnsupportedFormat,
-                                       "COLD RowV1 format is reserved"});
+    if (header->format_version != StorageFormatVersion{1, 3})
+      return std::unexpected(core::Error{core::ErrorCode::UnsupportedFormat,
+                                         "Unsupported COLD RowV1 format"});
+    if (footer->sparse_index_offset != 0 || footer->sparse_index_size != 0 ||
+        footer->bloom_filter_offset != 0 || footer->bloom_filter_size != 0)
+      return std::unexpected(corrupt("COLD RowV1 segment contains an index"));
   }
 
   std::vector<BlockInfo> blocks;

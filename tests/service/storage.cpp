@@ -57,6 +57,11 @@ int main() {
   configuration.block_target_bytes = 64;
   configuration.segment_target_bytes = 64;
   configuration.compression = config::CompressionCodec::None;
+  configuration.retention.enabled = true;
+  configuration.retention.observation_cold_age = std::chrono::seconds{50};
+  configuration.retention.observation_max_age = std::chrono::seconds{100};
+  configuration.retention.cold_block_target_bytes = 64;
+  configuration.retention.cold_compression = config::CompressionCodec::None;
 
   auto local = service::LocalCanonicalStorage::open(configuration);
   if (!local || (*local)->observation_batch_size() != 2)
@@ -91,19 +96,32 @@ int main() {
   if (!compacted || compacted->segments_removed < 2 || !verified ||
       verified->records_checked != ThreadCount * RecordsPerThread || !collected)
     return 5;
+  auto archived =
+      (*local)->retain_observations(core::Timestamp{std::chrono::seconds{90}});
+  if (!archived || archived->segments_archived != 1 ||
+      archived->segments_expired != 0)
+    return 6;
 
   (*local).reset();
   auto reopened = service::LocalCanonicalStorage::open(configuration);
   if (!reopened)
-    return 6;
+    return 7;
   count = observation_count((*reopened)->observation_dataset());
   if (!count || *count != ThreadCount * RecordsPerThread)
-    return 7;
-
+    return 8;
+  auto expired = (*reopened)->retain_observations(
+      core::Timestamp{std::chrono::seconds{200}});
+  if (!expired || expired->segments_archived != 0 ||
+      expired->segments_expired != 1 ||
+      expired->records_expired != ThreadCount * RecordsPerThread)
+    return 9;
+  count = observation_count((*reopened)->observation_dataset());
+  if (!count || *count != 0)
+    return 10;
   configuration.block_target_bytes =
       static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1;
   auto invalid = service::LocalCanonicalStorage::open(configuration);
   if (invalid || invalid.error().code != core::ErrorCode::InvalidArgument)
-    return 8;
+    return 11;
   return 0;
 }

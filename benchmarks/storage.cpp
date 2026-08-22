@@ -167,10 +167,43 @@ int main(int argc, char **argv) {
     return 8;
   const auto verify_seconds = seconds_since(verify_start);
 
+  const auto cold_start = std::chrono::steady_clock::now();
+  auto retained = storage::RowV1DatasetMaintenance::retain_unkeyed(
+      blobs, **catalog,
+      storage::RetentionPolicy{.cold_before = core::Timestamp::max(),
+                               .expire_before = core::Timestamp::min(),
+                               .cold_target_block_size = 8U * 1024U * 1024U,
+                               .cold_compression =
+                                   storage::CompressionCodec::Zstd,
+                               .cold_compression_level = 9});
+  if (!retained || retained->segments_archived != 1 ||
+      retained->segments_expired != 0)
+    return 9;
+  const auto cold_seconds = seconds_since(cold_start);
+  const auto cold_scan_start = std::chrono::steady_clock::now();
+  auto cold_snapshot = dataset.snapshot();
+  auto cold_stream =
+      cold_snapshot ? (*cold_snapshot)->scan({})
+                    : core::Result<std::unique_ptr<
+                          storage::RecordStream<model::ObservationRecord>>>{
+                          std::unexpected(cold_snapshot.error())};
+  if (!cold_stream)
+    return 10;
+  std::uint64_t cold_scanned{};
+  while (true) {
+    auto next = (*cold_stream)->next();
+    if (!next)
+      return 11;
+    if (!*next)
+      break;
+    ++cold_scanned;
+  }
+  const auto cold_scan_seconds = seconds_since(cold_scan_start);
+
   auto torrent_catalog = storage::LocalManifestCatalog::open(
       directory.path / "torrent-catalog", blobs);
   if (!torrent_catalog)
-    return 9;
+    return 12;
   storage::TorrentDataset torrents{blobs, **torrent_catalog};
   for (std::size_t segment = 0; segment < segment_count; ++segment) {
     const auto begin = record_count * segment / segment_count;
@@ -200,6 +233,17 @@ int main(int argc, char **argv) {
           ? 0.0
           : static_cast<double>(warm_segment.physical_size) /
                 static_cast<double>(warm_segment.logical_size);
+  const auto observation_logical_bytes = record_count * 28U;
+  const auto hot_physical_per_logical =
+      observation_logical_bytes == 0
+          ? 0.0
+          : static_cast<double>(compacted->bytes_after) /
+                static_cast<double>(observation_logical_bytes);
+  const auto cold_physical_per_logical =
+      observation_logical_bytes == 0
+          ? 0.0
+          : static_cast<double>(retained->bytes_after) /
+                static_cast<double>(observation_logical_bytes);
   warm_manifest->reset();
 
   auto warm_snapshot = torrents.keyed_snapshot();
@@ -229,34 +273,48 @@ int main(int argc, char **argv) {
   }
   const auto warm_scan_seconds = seconds_since(warm_scan_start);
 
-  std::cout << std::fixed << std::setprecision(3) << "records=" << record_count
-            << '\n'
-            << "segments_before=" << segment_count << '\n'
-            << "physical_bytes_before=" << bytes_before << '\n'
-            << "physical_bytes_after=" << compacted->bytes_after << '\n'
-            << "append_seconds=" << append_seconds << '\n'
-            << "append_records_per_second=" << record_count / append_seconds
-            << '\n'
-            << "scan_seconds=" << scan_seconds << '\n'
-            << "scan_records_per_second=" << scanned / scan_seconds << '\n'
-            << "compaction_seconds=" << compact_seconds << '\n'
-            << "verify_seconds=" << verify_seconds << '\n'
-            << "warm_torrent_physical_bytes=" << warm_segment.physical_size
-            << '\n'
-            << "warm_torrent_logical_bytes=" << warm_segment.logical_size
-            << '\n'
-            << "warm_block_target_bytes=" << warm_block_bytes << '\n'
-            << "warm_torrent_physical_per_logical=" << warm_ratio << '\n'
-            << "warm_torrent_compaction_seconds=" << torrent_compact_seconds
-            << '\n'
-            << "warm_lookup_seconds=" << lookup_seconds << '\n'
-            << "warm_lookups_per_second=" << lookup_count / lookup_seconds
-            << '\n'
-            << "warm_scan_seconds=" << warm_scan_seconds << '\n'
-            << "warm_scan_records_per_second="
-            << warm_scanned / warm_scan_seconds << '\n';
-  return scanned == record_count && verified->records_checked == record_count &&
+  std::cout
+      << std::fixed << std::setprecision(3) << "records=" << record_count
+      << '\n'
+      << "segments_before=" << segment_count << '\n'
+      << "physical_bytes_before=" << bytes_before << '\n'
+      << "physical_bytes_after=" << compacted->bytes_after << '\n'
+      << "append_seconds=" << append_seconds << '\n'
+      << "append_records_per_second=" << record_count / append_seconds << '\n'
+      << "append_logical_bytes_per_second="
+      << observation_logical_bytes / append_seconds << '\n'
+      << "scan_seconds=" << scan_seconds << '\n'
+      << "scan_records_per_second=" << scanned / scan_seconds << '\n'
+      << "compaction_seconds=" << compact_seconds << '\n'
+      << "compaction_records_per_second=" << record_count / compact_seconds
+      << '\n'
+      << "hot_physical_per_logical=" << hot_physical_per_logical << '\n'
+      << "hot_compaction_write_amplification="
+      << static_cast<double>(compacted->bytes_after) /
+             static_cast<double>(bytes_before)
+      << '\n'
+      << "verify_seconds=" << verify_seconds << '\n'
+      << "cold_physical_bytes=" << retained->bytes_after << '\n'
+      << "cold_physical_per_logical=" << cold_physical_per_logical << '\n'
+      << "cold_archive_seconds=" << cold_seconds << '\n'
+      << "cold_archive_records_per_second=" << record_count / cold_seconds
+      << '\n'
+      << "cold_scan_seconds=" << cold_scan_seconds << '\n'
+      << "cold_scan_records_per_second=" << cold_scanned / cold_scan_seconds
+      << '\n'
+      << "warm_torrent_physical_bytes=" << warm_segment.physical_size << '\n'
+      << "warm_torrent_logical_bytes=" << warm_segment.logical_size << '\n'
+      << "warm_block_target_bytes=" << warm_block_bytes << '\n'
+      << "warm_torrent_physical_per_logical=" << warm_ratio << '\n'
+      << "warm_torrent_compaction_seconds=" << torrent_compact_seconds << '\n'
+      << "warm_lookup_seconds=" << lookup_seconds << '\n'
+      << "warm_lookups_per_second=" << lookup_count / lookup_seconds << '\n'
+      << "warm_scan_seconds=" << warm_scan_seconds << '\n'
+      << "warm_scan_records_per_second=" << warm_scanned / warm_scan_seconds
+      << '\n';
+  return scanned == record_count && cold_scanned == record_count &&
+                 verified->records_checked == record_count &&
                  warm_scanned == record_count
              ? 0
-             : 19;
+             : 22;
 }

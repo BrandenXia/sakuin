@@ -85,7 +85,8 @@ int main() {
 
   api::HttpRequest query{
       .method = api::HttpMethod::Get,
-      .target = "/v1/search?q=linux&min_size=1000&limit=10",
+      .target =
+          "/v1/search?q=linux&min_size=1000&min_files=1&max_files=1&limit=10",
       .headers = {{"authorization", credential("reader", secret)}}};
   auto found = handler.handle(std::move(query));
   if (!found || found->status != 200 ||

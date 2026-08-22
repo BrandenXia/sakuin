@@ -81,6 +81,17 @@ struct StorageConfig {
     core::Duration interval{std::chrono::minutes{1}};
   };
 
+  struct RetentionConfig {
+    // Deletion is opt-in. When enabled, only observation history is eligible;
+    // canonical torrent metadata remains retained indefinitely.
+    bool enabled{};
+    core::Duration observation_cold_age{std::chrono::hours{24 * 30}};
+    core::Duration observation_max_age{std::chrono::hours{24 * 365}};
+    std::uint64_t cold_block_target_bytes{8U * 1024U * 1024U};
+    CompressionCodec cold_compression{CompressionCodec::Zstd};
+    int cold_compression_level{9};
+  };
+
   StorageBackend backend{StorageBackend::Local};
   std::filesystem::path local_root{"./data"};
   std::uint64_t block_target_bytes{2U * 1024U * 1024U};
@@ -92,6 +103,7 @@ struct StorageConfig {
   std::uint64_t compaction_warm_block_target_bytes{64U * 1024U};
   MaintenanceConfig maintenance;
   MaterializationConfig materialization;
+  RetentionConfig retention;
 };
 
 struct ApiRateLimitConfig {
@@ -439,6 +451,39 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.storage.compaction_warm_block_target_bytes = *value;
+    } else if (name == "storage.retention.enabled") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.retention.enabled = *value;
+    } else if (name == "storage.retention.observation_cold_age_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.retention.observation_cold_age = *value;
+    } else if (name == "storage.retention.observation_max_age_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.retention.observation_max_age = *value;
+    } else if (name == "storage.retention.cold_block_target_bytes") {
+      auto value = unsigned_value<std::uint64_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.retention.cold_block_target_bytes = *value;
+    } else if (name == "storage.retention.cold_compression_codec") {
+      if (text == "none")
+        config.storage.retention.cold_compression = CompressionCodec::None;
+      else if (text == "zstd")
+        config.storage.retention.cold_compression = CompressionCodec::Zstd;
+      else
+        return std::unexpected(invalid(
+            "storage.retention.cold_compression_codec must be none or zstd"));
+    } else if (name == "storage.retention.cold_compression_level") {
+      auto value = integer_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.retention.cold_compression_level = *value;
     } else if (name == "storage.maintenance.enabled") {
       auto value = boolean_value(text, name);
       if (!value)
@@ -704,6 +749,20 @@ core::Result<void> validate(const AppConfig &config) {
       config.storage.compression_level > 22)
     return std::unexpected(
         invalid("storage.compression.level is outside the Zstandard range"));
+  if (config.storage.retention.enabled &&
+      (config.storage.retention.observation_cold_age <=
+           core::Duration::zero() ||
+       config.storage.retention.observation_max_age <=
+           config.storage.retention.observation_cold_age ||
+       config.storage.retention.cold_block_target_bytes < 4U * 1024U ||
+       config.storage.retention.cold_block_target_bytes >
+           config.storage.segment_target_bytes ||
+       config.storage.retention.cold_block_target_bytes >
+           std::numeric_limits<std::uint32_t>::max() ||
+       config.storage.retention.cold_compression_level < -131'072 ||
+       config.storage.retention.cold_compression_level > 22))
+    return std::unexpected(
+        invalid("Observation retention and COLD storage settings are invalid"));
   if (config.storage.maintenance.interval <= core::Duration::zero() ||
       config.storage.maintenance.verification_interval <=
           core::Duration::zero())

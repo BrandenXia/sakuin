@@ -12,10 +12,12 @@ import std;
 
 import sakuin.config.model;
 import sakuin.core.result;
+import sakuin.core.time;
 import sakuin.dht.observation;
 import sakuin.integration.dht_storage;
 import sakuin.storage.admin;
 import sakuin.storage.admin.compaction;
+import sakuin.storage.admin.retention;
 import sakuin.storage.admin.row_v1;
 import sakuin.storage.blob.local;
 import sakuin.storage.catalog.manifest;
@@ -31,7 +33,6 @@ enum class LocalDataset { Observations, Torrents };
 
 // Owns the canonical local storage graph. Both DHT address-family runtimes may
 // share observations(); the buffered sink serializes publication to its
-// manifest. Call flush() after stopping producers to durably publish a partial
 // final observation segment.
 class LocalCanonicalStorage final {
 public:
@@ -46,6 +47,8 @@ public:
   core::Result<void> flush();
 
   core::Result<storage::CompactionResult> compact(LocalDataset dataset);
+  core::Result<storage::RetentionResult>
+  retain_observations(core::Timestamp now);
   core::Result<storage::VerifyResult> verify(LocalDataset dataset);
   core::Result<storage::GcResult> garbage_collect(LocalDataset dataset);
 
@@ -71,6 +74,7 @@ private:
   std::unique_ptr<integration::BufferedObservationSink> observation_sink_;
   std::size_t observation_batch_size_{};
   storage::CompactionPolicy compaction_policy_;
+  config::StorageConfig::RetentionConfig retention_configuration_;
   int lock_file_{-1};
 };
 
@@ -128,7 +132,15 @@ LocalCanonicalStorage::open(const config::StorageConfig &configuration) {
       configuration.segment_target_bytes == 0 ||
       configuration.compaction_warm_block_target_bytes == 0 ||
       configuration.compaction_warm_block_target_bytes >
-          std::numeric_limits<std::uint32_t>::max())
+          std::numeric_limits<std::uint32_t>::max() ||
+      (configuration.retention.enabled &&
+       (configuration.retention.observation_cold_age <=
+            core::Duration::zero() ||
+        configuration.retention.observation_max_age <=
+            configuration.retention.observation_cold_age ||
+        configuration.retention.cold_block_target_bytes == 0 ||
+        configuration.retention.cold_block_target_bytes >
+            std::numeric_limits<std::uint32_t>::max())))
     return std::unexpected(core::Error{
         core::ErrorCode::InvalidArgument,
         "Local canonical storage requires valid paths and block/segment "
@@ -189,6 +201,7 @@ LocalCanonicalStorage::open(const config::StorageConfig &configuration) {
           configuration.compaction_warm_block_target_bytes),
       .compression = header->compression,
       .compression_level = configuration.compression_level};
+  result->retention_configuration_ = configuration.retention;
   result->observation_sink_ =
       std::make_unique<integration::BufferedObservationSink>(
           *result->observations_, result->observation_batch_size_);
@@ -212,6 +225,29 @@ LocalCanonicalStorage::compact(LocalDataset dataset) {
     return torrents_->compact(compaction_policy_);
   return storage::RowV1DatasetMaintenance::compact(
       blobs_, *observation_catalog_, compaction_policy_);
+}
+
+core::Result<storage::RetentionResult>
+LocalCanonicalStorage::retain_observations(core::Timestamp now) {
+  if (!retention_configuration_.enabled)
+    return storage::RetentionResult{
+        .source_generation = observation_catalog_->current_id().generation};
+  const auto cold_age = std::chrono::duration_cast<core::Timestamp::duration>(
+      retention_configuration_.observation_cold_age);
+  const auto maximum_age =
+      std::chrono::duration_cast<core::Timestamp::duration>(
+          retention_configuration_.observation_max_age);
+  return storage::RowV1DatasetMaintenance::retain_unkeyed(
+      blobs_, *observation_catalog_,
+      storage::RetentionPolicy{
+          .cold_before = now - cold_age,
+          .expire_before = now - maximum_age,
+          .cold_target_block_size = static_cast<std::uint32_t>(
+              retention_configuration_.cold_block_target_bytes),
+          .cold_compression =
+              storage_compression(retention_configuration_.cold_compression),
+          .cold_compression_level =
+              retention_configuration_.cold_compression_level});
 }
 
 core::Result<storage::VerifyResult>

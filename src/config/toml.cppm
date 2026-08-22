@@ -291,7 +291,7 @@ core::Result<void> parse_storage(const toml::table &table,
           check_keys(table,
                      {"backend", "local_root", "block_target_bytes",
                       "segment_target_bytes", "compression", "compaction",
-                      "maintenance", "materialization"},
+                      "retention", "maintenance", "materialization"},
                      "storage.");
       !checked)
     return checked;
@@ -339,6 +339,39 @@ core::Result<void> parse_storage(const toml::table &table,
                                overlay),
           scalar<std::int64_t>(**compaction, "warm_block_target_bytes",
                                "storage.compaction.warm_block_target_bytes",
+                               overlay)})
+      if (!parsed)
+        return parsed;
+  }
+  auto retention = optional_table(table, "retention", "storage.retention");
+  if (!retention)
+    return std::unexpected(retention.error());
+  if (*retention) {
+    if (auto checked =
+            check_keys(**retention,
+                       {"enabled", "observation_cold_age_ms",
+                        "observation_max_age_ms", "cold_block_target_bytes",
+                        "cold_compression_codec", "cold_compression_level"},
+                       "storage.retention.");
+        !checked)
+      return checked;
+    for (auto parsed :
+         {scalar<bool>(**retention, "enabled", "storage.retention.enabled",
+                       overlay),
+          scalar<std::int64_t>(**retention, "observation_cold_age_ms",
+                               "storage.retention.observation_cold_age_ms",
+                               overlay),
+          scalar<std::int64_t>(**retention, "observation_max_age_ms",
+                               "storage.retention.observation_max_age_ms",
+                               overlay),
+          scalar<std::int64_t>(**retention, "cold_block_target_bytes",
+                               "storage.retention.cold_block_target_bytes",
+                               overlay),
+          scalar<std::string>(**retention, "cold_compression_codec",
+                              "storage.retention.cold_compression_codec",
+                              overlay),
+          scalar<std::int64_t>(**retention, "cold_compression_level",
+                               "storage.retention.cold_compression_level",
                                overlay)})
       if (!parsed)
         return parsed;
@@ -669,6 +702,17 @@ core::Result<ConfigOverlay> environment_overlay(
        "storage.compaction.maximum_warm_segments"},
       {"SAKUIN_STORAGE_COMPACTION_WARM_BLOCK_TARGET_BYTES",
        "storage.compaction.warm_block_target_bytes"},
+      {"SAKUIN_STORAGE_RETENTION_ENABLED", "storage.retention.enabled"},
+      {"SAKUIN_STORAGE_RETENTION_OBSERVATION_COLD_AGE_MS",
+       "storage.retention.observation_cold_age_ms"},
+      {"SAKUIN_STORAGE_RETENTION_OBSERVATION_MAX_AGE_MS",
+       "storage.retention.observation_max_age_ms"},
+      {"SAKUIN_STORAGE_RETENTION_COLD_BLOCK_TARGET_BYTES",
+       "storage.retention.cold_block_target_bytes"},
+      {"SAKUIN_STORAGE_RETENTION_COLD_COMPRESSION_CODEC",
+       "storage.retention.cold_compression_codec"},
+      {"SAKUIN_STORAGE_RETENTION_COLD_COMPRESSION_LEVEL",
+       "storage.retention.cold_compression_level"},
       {"SAKUIN_STORAGE_MAINTENANCE_ENABLED", "storage.maintenance.enabled"},
       {"SAKUIN_STORAGE_MAINTENANCE_INTERVAL_MS",
        "storage.maintenance.interval_ms"},
