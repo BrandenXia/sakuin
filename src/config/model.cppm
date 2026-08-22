@@ -142,6 +142,9 @@ struct IndexingConfig {
 struct DistributedConfig {
   struct CoordinatorConfig {
     bool enabled{};
+    bool recovery_enabled{true};
+    std::optional<std::filesystem::path> recovery_file;
+    std::size_t recovery_maximum_bytes{512U * 1024U * 1024U};
     std::string listen_address{"127.0.0.1"};
     std::uint16_t listen_port{7100};
     std::size_t maximum_connections{256};
@@ -644,6 +647,18 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.distributed.coordinator.enabled = *value;
+    } else if (name == "distributed.coordinator.recovery_enabled") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.recovery_enabled = *value;
+    } else if (name == "distributed.coordinator.recovery_file") {
+      config.distributed.coordinator.recovery_file = text;
+    } else if (name == "distributed.coordinator.recovery_maximum_bytes") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.distributed.coordinator.recovery_maximum_bytes = *value;
     } else if (name == "distributed.coordinator.listen_address") {
       config.distributed.coordinator.listen_address = text;
     } else if (name == "distributed.coordinator.listen_port") {
@@ -899,6 +914,10 @@ core::Result<void> validate(const AppConfig &config) {
         invalid("Distributed work and heartbeat limits are invalid"));
   const auto &coordinator = config.distributed.coordinator;
   if (coordinator.listen_address.empty() ||
+      (coordinator.recovery_enabled &&
+       (coordinator.recovery_maximum_bytes < 4U * 1024U ||
+        coordinator.recovery_maximum_bytes > 16ULL * 1024U * 1024U * 1024U ||
+        (coordinator.recovery_file && coordinator.recovery_file->empty()))) ||
       coordinator.maximum_connections == 0 ||
       coordinator.maximum_connections > 1'000'000 ||
       coordinator.read_buffer_bytes == 0 ||

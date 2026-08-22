@@ -102,6 +102,9 @@ heartbeat_interval_ms = 5000
 
 [distributed.coordinator]
 enabled = true
+recovery_enabled = true
+recovery_file = "/srv/sakuin/operational/custom-work.checkpoint"
+recovery_maximum_bytes = 268435456
 listen_address = "127.0.0.1"
 listen_port = 7101
 maximum_connections = 32
@@ -175,6 +178,9 @@ tls_server_name = "coordinator.internal"
                 std::string{"16384"}},
       std::pair{std::string{"SAKUIN_DISTRIBUTED_COORDINATOR_LISTEN_PORT"},
                 std::string{"7201"}},
+      std::pair{
+          std::string{"SAKUIN_DISTRIBUTED_COORDINATOR_RECOVERY_MAXIMUM_BYTES"},
+          std::string{"134217728"}},
       std::pair{std::string{"SAKUIN_DISTRIBUTED_WORKER_OBSERVATION_BATCH_SIZE"},
                 std::string{"1024"}},
       std::pair{std::string{"UNRELATED"}, std::string{"ignored"}}};
@@ -256,6 +262,11 @@ tls_server_name = "coordinator.internal"
       loaded.distributed.lease_duration != std::chrono::minutes{1} ||
       loaded.distributed.heartbeat_interval != std::chrono::seconds{5} ||
       !loaded.distributed.coordinator.enabled ||
+      !loaded.distributed.coordinator.recovery_enabled ||
+      loaded.distributed.coordinator.recovery_file !=
+          "/srv/sakuin/operational/custom-work.checkpoint" ||
+      loaded.distributed.coordinator.recovery_maximum_bytes !=
+          128U * 1024U * 1024U ||
       loaded.distributed.coordinator.listen_address != "127.0.0.1" ||
       loaded.distributed.coordinator.listen_port != 7201 ||
       loaded.distributed.coordinator.maximum_connections != 32 ||
@@ -334,6 +345,10 @@ tls_server_name = "coordinator.internal"
   invalid_coordinator.distributed.coordinator.maximum_frame_bytes = 128;
   if (config::validate(invalid_coordinator))
     return 15;
+  invalid_coordinator = config::defaults();
+  invalid_coordinator.distributed.coordinator.recovery_maximum_bytes = 1024;
+  if (config::validate(invalid_coordinator))
+    return 18;
   auto incomplete_worker_tls = config::defaults();
   incomplete_worker_tls.distributed.coordinator.tls_trust_anchor_file =
       "ca.pem";

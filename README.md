@@ -24,6 +24,9 @@ and atomic manifest generations under the configured storage root.
 - Local work coordination plus a versioned TCP coordinator/worker protocol
   with leases, heartbeats, cancellation, renewal, bounded durable results,
   and retry handling
+- Crash-safe, checksummed coordinator work checkpoints with bounded recovery;
+  interrupted leases return to the pending queue without restoring stale
+  worker sessions or lease ownership
 - Mutually authenticated remote workers whose certificate identity scopes
   their protocol worker namespace
 - Coordinator-reserved traffic grants that enforce one aggregate periodic DHT
@@ -42,6 +45,13 @@ the result payload. Normal storage maintenance deduplicates them into compact
 RowV1 segments and garbage-collects replaced objects. Receipt identities do
 not expire: without a bounded delivery lifetime, deleting one could make a
 late acknowledged retry unsafe after canonical compaction.
+
+Coordinator work state is atomically checkpointed under
+`<storage.local_root>/operational/scheduler` by default. A checkpoint failure
+puts the coordinator into a fail-stop state before it acknowledges the
+mutation, preserving at-least-once recovery. This is a local durable baseline,
+not replicated coordinator high availability; the storage abstraction leaves
+room for a distributed implementation later.
 
 ## Build and test
 

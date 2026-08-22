@@ -122,6 +122,13 @@ heartbeat_interval_ms = 10000
 # name is its protocol worker id. Port 0 requests an ephemeral test port.
 [distributed.coordinator]
 enabled = false
+# Recoverable work is checkpointed beneath storage.local_root by default.
+# Live workers and leases are deliberately not restored; interrupted leases
+# become pending work after restart. Set recovery_file only to override the
+# default operational/scheduler/work.checkpoint location.
+recovery_enabled = true
+recovery_maximum_bytes = 536870912
+# recovery_file = "/var/lib/sakuin/operational/work.checkpoint"
 listen_address = "127.0.0.1"
 listen_port = 7100
 maximum_connections = 256
