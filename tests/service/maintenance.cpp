@@ -107,6 +107,12 @@ int main() {
                        service::MaintenanceOperation::Compaction &&
                    event.segments_affected >= 2;
           }) ||
+      !std::ranges::any_of(
+          observer.events,
+          [](const auto &event) {
+            return event.dataset == service::LocalDataset::Observations &&
+                   event.operation == service::MaintenanceOperation::Retention;
+          }) ||
       !std::ranges::any_of(observer.events, [](const auto &event) {
         return event.dataset == service::LocalDataset::Observations &&
                event.operation ==

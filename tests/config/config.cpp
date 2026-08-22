@@ -60,6 +60,14 @@ minimum_segments = 6
 maximum_warm_segments = 3
 warm_block_target_bytes = 131072
 
+[storage.retention]
+enabled = true
+observation_cold_age_ms = 2592000000
+observation_max_age_ms = 31536000000
+cold_block_target_bytes = 4194304
+cold_compression_codec = "zstd"
+cold_compression_level = 10
+
 [storage.maintenance]
 enabled = true
 interval_ms = 600000
@@ -131,6 +139,10 @@ idle_timeout_ms = 15000
       std::pair{
           std::string{"SAKUIN_STORAGE_COMPACTION_WARM_BLOCK_TARGET_BYTES"},
           std::string{"65536"}},
+      std::pair{std::string{"SAKUIN_STORAGE_RETENTION_OBSERVATION_COLD_AGE_MS"},
+                std::string{"1209600000"}},
+      std::pair{std::string{"SAKUIN_STORAGE_RETENTION_COLD_BLOCK_TARGET_BYTES"},
+                std::string{"2097152"}},
       std::pair{std::string{"SAKUIN_STORAGE_MAINTENANCE_INTERVAL_MS"},
                 std::string{"300000"}},
       std::pair{std::string{"SAKUIN_STORAGE_MATERIALIZATION_INTERVAL_MS"},
@@ -190,6 +202,15 @@ idle_timeout_ms = 15000
       loaded.storage.compaction_minimum_segments != 8 ||
       loaded.storage.compaction_maximum_warm_segments != 5 ||
       loaded.storage.compaction_warm_block_target_bytes != 65536 ||
+      !loaded.storage.retention.enabled ||
+      loaded.storage.retention.observation_cold_age !=
+          std::chrono::hours{24 * 14} ||
+      loaded.storage.retention.observation_max_age !=
+          std::chrono::hours{24 * 365} ||
+      loaded.storage.retention.cold_block_target_bytes != 2U * 1024U * 1024U ||
+      loaded.storage.retention.cold_compression !=
+          config::CompressionCodec::Zstd ||
+      loaded.storage.retention.cold_compression_level != 10 ||
       !loaded.storage.maintenance.enabled ||
       loaded.storage.maintenance.interval != std::chrono::minutes{5} ||
       loaded.storage.maintenance.verification_interval !=
@@ -254,9 +275,15 @@ idle_timeout_ms = 15000
   invalid_tiering.storage.compaction_warm_block_target_bytes = 1024;
   if (config::validate(invalid_tiering))
     return 13;
+  auto invalid_retention = config::defaults();
+  invalid_retention.storage.retention.enabled = true;
+  invalid_retention.storage.retention.observation_max_age =
+      invalid_retention.storage.retention.observation_cold_age;
+  if (config::validate(invalid_retention))
+    return 14;
   auto invalid_coordinator = config::defaults();
   invalid_coordinator.distributed.coordinator.maximum_frame_bytes = 128;
   if (config::validate(invalid_coordinator))
-    return 14;
+    return 15;
   return 0;
 }

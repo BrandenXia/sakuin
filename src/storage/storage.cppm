@@ -24,5 +24,7 @@ export import sakuin.storage.dataset.write_session;
 export import sakuin.storage.dataset.dataset;
 
 export import sakuin.storage.admin.compaction;
+export import sakuin.storage.admin.retention;
+export import sakuin.storage.admin.migration;
 export import sakuin.storage.admin;
 export import sakuin.storage.admin.row_v1;

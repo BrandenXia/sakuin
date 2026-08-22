@@ -214,5 +214,39 @@ int main() {
       corrupt_bloom.error().code != core::ErrorCode::ChecksumMismatch)
     return 33;
 
+  storage::SegmentHeader cold_header{
+      .format_version = {1, 3},
+      .tier = storage::SegmentTier::Cold,
+      .compression = storage::CompressionCodec::Zstd,
+      .target_block_size = 24,
+  };
+  auto cold_writer = storage::RowV1SegmentWriter::create(
+      store, cold_header, storage::RowV1WriterOptions{.compression_level = 9});
+  if (!cold_writer || (*cold_writer)->append_keyed(keys[0], records[0]))
+    return 34;
+  for (const auto &record : records)
+    if (!(*cold_writer)->append(record))
+      return 35;
+  auto cold = (*cold_writer)->finalize();
+  if (!cold || cold->tier != storage::SegmentTier::Cold ||
+      cold->format_version != storage::StorageFormatVersion{1, 3})
+    return 36;
+  auto cold_reader = storage::RowV1SegmentReader::open(store, cold->object);
+  if (!cold_reader || (*cold_reader)->footer().sparse_index_size != 0 ||
+      (*cold_reader)->footer().bloom_filter_size != 0 ||
+      !(*cold_reader)->verify())
+    return 37;
+  for (std::uint64_t ordinal = 0; ordinal < records.size(); ++ordinal) {
+    auto cold_location = (*cold_reader)->location(ordinal);
+    if (!cold_location)
+      return 38;
+    auto record = (*cold_reader)->read(*cold_location);
+    if (!record || *record != records[ordinal])
+      return 39;
+  }
+  auto cold_lookup = (*cold_reader)->locate(keys[0]);
+  if (!cold_lookup || cold_lookup->has_value())
+    return 40;
+
   return 0;
 }

@@ -254,6 +254,7 @@ core::Result<search::SearchQuery> search_query(std::string_view encoded) {
     return std::unexpected(parameters.error());
   for (const auto &[name, _] : *parameters) {
     if (name != "q" && name != "min_size" && name != "max_size" &&
+        name != "min_files" && name != "max_files" &&
         name != "first_seen_at_or_after_ms" &&
         name != "last_seen_at_or_before_ms" && name != "offset" &&
         name != "limit")
@@ -262,23 +263,30 @@ core::Result<search::SearchQuery> search_query(std::string_view encoded) {
   }
   auto minimum = optional_number<std::uint64_t>(*parameters, "min_size");
   auto maximum = optional_number<std::uint64_t>(*parameters, "max_size");
+  auto minimum_files = optional_number<std::size_t>(*parameters, "min_files");
+  auto maximum_files = optional_number<std::size_t>(*parameters, "max_files");
   auto first_seen =
       optional_timestamp(*parameters, "first_seen_at_or_after_ms");
   auto last_seen = optional_timestamp(*parameters, "last_seen_at_or_before_ms");
   auto offset = optional_number<std::size_t>(*parameters, "offset");
   auto limit = optional_number<std::size_t>(*parameters, "limit");
-  if (!minimum || !maximum || !first_seen || !last_seen || !offset || !limit)
-    return std::unexpected(!minimum      ? minimum.error()
-                           : !maximum    ? maximum.error()
-                           : !first_seen ? first_seen.error()
-                           : !last_seen  ? last_seen.error()
-                           : !offset     ? offset.error()
-                                         : limit.error());
+  if (!minimum || !maximum || !minimum_files || !maximum_files || !first_seen ||
+      !last_seen || !offset || !limit)
+    return std::unexpected(!minimum         ? minimum.error()
+                           : !maximum       ? maximum.error()
+                           : !minimum_files ? minimum_files.error()
+                           : !maximum_files ? maximum_files.error()
+                           : !first_seen    ? first_seen.error()
+                           : !last_seen     ? last_seen.error()
+                           : !offset        ? offset.error()
+                                            : limit.error());
   const auto text = parameters->find("q");
   return search::SearchQuery{.text = text == parameters->end() ? std::string{}
                                                                : text->second,
                              .minimum_size = *minimum,
                              .maximum_size = *maximum,
+                             .minimum_file_count = *minimum_files,
+                             .maximum_file_count = *maximum_files,
                              .first_seen_at_or_after = *first_seen,
                              .last_seen_at_or_before = *last_seen,
                              .offset = offset->value_or(0),

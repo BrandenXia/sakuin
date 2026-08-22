@@ -87,6 +87,14 @@ public:
             ? "observations"
             : "torrents";
     switch (event.operation) {
+    case sakuin::service::MaintenanceOperation::Retention:
+      if (event.segments_affected != 0)
+        spdlog::info(
+            "Storage observations archived {} segments, expired {} segments "
+            "and {} records ({} bytes to {} bytes)",
+            event.segments_archived, event.segments_expired,
+            event.records_expired, event.bytes_before, event.bytes_after);
+      break;
     case sakuin::service::MaintenanceOperation::Compaction:
       if (event.segments_affected != 0)
         spdlog::info("Storage {} compacted {} segments ({} bytes to {} bytes)",
@@ -113,6 +121,8 @@ public:
                                                                : "torrents";
     const auto operation_name = [&] {
       switch (operation) {
+      case sakuin::service::MaintenanceOperation::Retention:
+        return "retention";
       case sakuin::service::MaintenanceOperation::Compaction:
         return "compaction";
       case sakuin::service::MaintenanceOperation::Verification:

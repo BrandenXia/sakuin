@@ -90,6 +90,10 @@ int main() {
   if (!filtered || filtered->hits.size() != 1 ||
       filtered->hits.front().file_count != 2)
     return 5;
+  auto file_filtered = index.search(
+      {.minimum_file_count = 2, .maximum_file_count = 2, .limit = 10});
+  if (!file_filtered || file_filtered->total_matches != 2)
+    return 15;
   auto paged = index.search({.text = "", .offset = 1, .limit = 1});
   if (!paged || paged->total_matches != 3 || paged->hits.size() != 1)
     return 6;
@@ -102,6 +106,7 @@ int main() {
     return 14;
   if (index.search({.limit = 0}) ||
       index.search({.minimum_size = 10, .maximum_size = 1}) ||
+      index.search({.minimum_file_count = 3, .maximum_file_count = 1}) ||
       index.search({.first_seen_at_or_after =
                         core::Timestamp{core::Timestamp::duration{30}},
                     .last_seen_at_or_before =

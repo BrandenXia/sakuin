@@ -250,6 +250,20 @@ target("sakuin-compaction-tests")
            "sakuin-model-codecs")
   add_tests("compaction")
 
+target("sakuin-retention-tests")
+  set_kind("binary")
+  add_files("tests/storage/retention.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs")
+  add_tests("retention")
+
+target("sakuin-migration-tests")
+  set_kind("binary")
+  add_files("tests/storage/migration.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs")
+  add_tests("migration")
+
 target("sakuin-dht-observation-tests")
   set_kind("binary")
   add_files("tests/dht/observation_ingestion.cpp")

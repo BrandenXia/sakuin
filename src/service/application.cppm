@@ -32,9 +32,9 @@ parse_daemon_arguments(std::span<const std::string_view> arguments) {
     const auto argument = arguments[index];
     if (argument == "admin") {
       if (result.admin_command || ++index == arguments.size())
-        return std::unexpected(core::Error{
-            core::ErrorCode::InvalidArgument,
-            "admin requires exactly one of: compact, verify, gc"});
+        return std::unexpected(
+            core::Error{core::ErrorCode::InvalidArgument,
+                        "admin requires exactly one of: compact, verify, gc"});
       const auto command = arguments[index];
       if (command == "compact")
         result.admin_command = AdminCommand::Compact;

@@ -265,6 +265,10 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
   if (query.minimum_size && query.maximum_size &&
       *query.minimum_size > *query.maximum_size)
     return std::unexpected(invalid("Search minimum size exceeds maximum size"));
+  if (query.minimum_file_count && query.maximum_file_count &&
+      *query.minimum_file_count > *query.maximum_file_count)
+    return std::unexpected(
+        invalid("Search minimum file count exceeds maximum file count"));
   if (query.first_seen_at_or_after && query.last_seen_at_or_before &&
       *query.first_seen_at_or_after > *query.last_seen_at_or_before)
     return std::unexpected(
@@ -280,6 +284,10 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
   for (const auto &record : state->records) {
     if ((query.minimum_size && record.total_size < *query.minimum_size) ||
         (query.maximum_size && record.total_size > *query.maximum_size) ||
+        (query.minimum_file_count &&
+         record.files.size() < *query.minimum_file_count) ||
+        (query.maximum_file_count &&
+         record.files.size() > *query.maximum_file_count) ||
         (query.first_seen_at_or_after &&
          record.first_seen < *query.first_seen_at_or_after) ||
         (query.last_seen_at_or_before &&

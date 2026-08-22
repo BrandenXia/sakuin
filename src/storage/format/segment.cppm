@@ -36,12 +36,13 @@ struct SchemaId {
 struct SchemaVersion {
   std::uint32_t value{1};
 
-  friend bool operator==(const SchemaVersion &, const SchemaVersion &) = default;
+  friend bool operator==(const SchemaVersion &,
+                         const SchemaVersion &) = default;
 };
 
 // HOT is append-oriented and unsorted. WARM is physically key-sorted, indexed,
-// and normally uses stronger compression. COLD remains a compatibility tier;
-// its columnar representation is intentionally not defined yet.
+// and normally uses stronger compression. COLD RowV1 is scan-oriented and
+// unindexed; a future columnar encoding can be introduced independently.
 struct SegmentHeader {
   StorageFormatVersion format_version{};
   SchemaId schema_id{};

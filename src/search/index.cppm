@@ -13,6 +13,8 @@ struct SearchQuery {
   std::string text;
   std::optional<std::uint64_t> minimum_size;
   std::optional<std::uint64_t> maximum_size;
+  std::optional<std::size_t> minimum_file_count;
+  std::optional<std::size_t> maximum_file_count;
   std::optional<core::Timestamp> first_seen_at_or_after;
   std::optional<core::Timestamp> last_seen_at_or_before;
   std::size_t offset{};

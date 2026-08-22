@@ -58,6 +58,16 @@ minimum_segments = 4
 maximum_warm_segments = 8
 warm_block_target_bytes = 65536
 
+# Canonical torrent metadata is retained indefinitely. Observation deletion is
+# intentionally opt-in because it permanently reduces historical resolution.
+[storage.retention]
+enabled = false
+observation_cold_age_ms = 2592000000
+observation_max_age_ms = 31536000000
+cold_block_target_bytes = 8388608
+cold_compression_codec = "zstd"
+cold_compression_level = 9
+
 [storage.maintenance]
 enabled = true
 interval_ms = 900000
@@ -99,3 +109,15 @@ maximum_payload_bytes = 1048576
 worker_timeout_ms = 30000
 lease_duration_ms = 120000
 heartbeat_interval_ms = 10000
+
+# The TCP-first coordinator is loopback-only until authenticated remote worker
+# admission is configured. Port 0 requests an ephemeral test port.
+[distributed.coordinator]
+enabled = false
+listen_address = "127.0.0.1"
+listen_port = 7100
+maximum_connections = 256
+read_buffer_bytes = 16384
+maximum_frame_bytes = 2097152
+maximum_queued_write_bytes = 4194304
+idle_timeout_ms = 30000
