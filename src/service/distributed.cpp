@@ -27,7 +27,7 @@ struct DistributedWorkService::Impl final
        scheduler::TrafficGrantSource *traffic)
       : dispatcher(
             coordinator, [] { return std::chrono::system_clock::now(); },
-            results, traffic),
+            results, traffic, limits),
         access(std::move(configured_access)),
         protocol(dispatcher, *access, limits, this),
         server(std::move(configured_server)), observer(configured_observer) {}
@@ -117,7 +117,12 @@ DistributedWorkService::create(const config::DistributedConfig &configuration,
   scheduler::WorkProtocolLimits limits{
       .maximum_frame_bytes = listener.maximum_frame_bytes,
       .maximum_work_payload_bytes = configuration.maximum_payload_bytes,
-      .maximum_result_payload_bytes = configuration.maximum_payload_bytes};
+      .maximum_result_payload_bytes = configuration.maximum_payload_bytes,
+      .maximum_chunked_result_bytes = configuration.maximum_result_bytes,
+      .maximum_result_reassembly_bytes =
+          listener.maximum_result_reassembly_bytes,
+      .maximum_result_transfers = listener.maximum_result_transfers,
+      .result_transfer_timeout = listener.result_transfer_timeout};
   runtime::StreamServerOptions transport{
       .bind_to = *endpoint,
       .idle_timeout = listener.idle_timeout,

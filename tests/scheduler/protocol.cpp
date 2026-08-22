@@ -29,15 +29,34 @@ sakuin::scheduler::WorkItem item(std::string_view payload) {
 
 sakuin::core::Result<sakuin::scheduler::WorkProtocolResponse>
 exchange(sakuin::scheduler::WorkProtocolDispatcher &dispatcher,
-         const sakuin::scheduler::WorkProtocolRequest &request) {
-  auto encoded = sakuin::scheduler::encode_work_request(request);
+         const sakuin::scheduler::WorkProtocolRequest &request,
+         sakuin::scheduler::WorkProtocolLimits limits = {}) {
+  auto encoded = sakuin::scheduler::encode_work_request(request, limits);
   if (!encoded)
     return std::unexpected(encoded.error());
-  auto response = dispatcher.handle(*encoded);
+  auto response = dispatcher.handle(*encoded, limits);
   if (!response)
     return std::unexpected(response.error());
-  return sakuin::scheduler::decode_work_response(*response);
+  return sakuin::scheduler::decode_work_response(*response, limits);
 }
+
+class ResultPublisher final : public sakuin::scheduler::WorkResultPublisher {
+public:
+  sakuin::core::Result<bool>
+  publish_result(std::string_view worker,
+                 sakuin::scheduler::WorkResultBatch batch) override {
+    if (worker.empty())
+      return std::unexpected(sakuin::core::Error{
+          sakuin::core::ErrorCode::InvalidArgument, "worker is empty"});
+    const auto inserted = ids.insert(batch.id).second;
+    if (inserted)
+      batches.push_back(std::move(batch));
+    return inserted;
+  }
+
+  std::set<sakuin::scheduler::WorkId> ids;
+  std::vector<sakuin::scheduler::WorkResultBatch> batches;
+};
 
 } // namespace
 
@@ -258,5 +277,106 @@ int main() {
       std::get<scheduler::TrafficGrant>(decoded_traffic_response->payload) !=
           std::get<scheduler::TrafficGrant>(traffic_response.payload))
     return 23;
+
+  scheduler::WorkProtocolLimits chunk_limits{
+      .maximum_frame_bytes = 256,
+      .maximum_work_payload_bytes = 64,
+      .maximum_result_payload_bytes = 64,
+      .maximum_chunked_result_bytes = 256,
+      .maximum_result_reassembly_bytes = 512,
+      .maximum_result_transfers = 2,
+      .result_transfer_timeout = std::chrono::seconds{1}};
+  ResultPublisher publisher;
+  now = seconds(100);
+  scheduler::WorkProtocolDispatcher chunk_dispatcher{
+      **coordinator, [&] { return now; }, &publisher, nullptr, chunk_limits};
+  core::ByteBuffer large(150, core::Byte{0x5a});
+  const auto large_id = scheduler::content_work_result_id(
+      scheduler::WorkResultKind::ObservationBatch, large);
+  const auto chunk_request = [&](std::uint64_t request_id, scheduler::WorkId id,
+                                 std::size_t offset, std::size_t count) {
+    return scheduler::WorkProtocolRequest{
+        .request_id = request_id,
+        .operation = scheduler::WorkProtocolOperation::PublishResultChunk,
+        .payload = scheduler::PublishWorkResultChunkRequest{
+            .worker = worker.id,
+            .id = id,
+            .kind = scheduler::WorkResultKind::ObservationBatch,
+            .total_bytes = large.size(),
+            .offset = offset,
+            .chunk = {large.begin() + offset, large.begin() + offset + count}}};
+  };
+  auto first_chunk = exchange(chunk_dispatcher,
+                              chunk_request(16, large_id, 0, 64), chunk_limits);
+  auto second_chunk = exchange(
+      chunk_dispatcher, chunk_request(17, large_id, 64, 64), chunk_limits);
+  auto final_chunk = exchange(
+      chunk_dispatcher, chunk_request(18, large_id, 128, 22), chunk_limits);
+  if (!first_chunk || !std::get<bool>(first_chunk->payload) || !second_chunk ||
+      !std::get<bool>(second_chunk->payload) || !final_chunk ||
+      !std::get<bool>(final_chunk->payload) || publisher.batches.size() != 1 ||
+      publisher.batches.front().payload != large)
+    return 24;
+
+  auto retry_first = exchange(chunk_dispatcher,
+                              chunk_request(19, large_id, 0, 64), chunk_limits);
+  auto retry_second = exchange(
+      chunk_dispatcher, chunk_request(20, large_id, 64, 64), chunk_limits);
+  auto retry_final = exchange(
+      chunk_dispatcher, chunk_request(21, large_id, 128, 22), chunk_limits);
+  if (!retry_first || !retry_second || !retry_final ||
+      std::get<bool>(retry_final->payload) || publisher.batches.size() != 1)
+    return 25;
+
+  auto out_of_order = exchange(
+      chunk_dispatcher, chunk_request(22, large_id, 64, 64), chunk_limits);
+  if (!out_of_order || out_of_order->succeeded() ||
+      std::get<core::Error>(out_of_order->payload).code !=
+          core::ErrorCode::Conflict)
+    return 26;
+
+  auto invalid_first =
+      exchange(chunk_dispatcher, chunk_request(23, {}, 0, 64), chunk_limits);
+  auto invalid_second =
+      exchange(chunk_dispatcher, chunk_request(24, {}, 64, 64), chunk_limits);
+  auto invalid_final =
+      exchange(chunk_dispatcher, chunk_request(25, {}, 128, 22), chunk_limits);
+  if (!invalid_first || !invalid_second || !invalid_final ||
+      invalid_final->succeeded() ||
+      std::get<core::Error>(invalid_final->payload).code !=
+          core::ErrorCode::InvalidArgument ||
+      publisher.batches.size() != 1)
+    return 27;
+
+  auto expiring_payload = large;
+  expiring_payload.front() = core::Byte{0x33};
+  const auto expiring_id = scheduler::content_work_result_id(
+      scheduler::WorkResultKind::ObservationBatch, expiring_payload);
+  auto expiring_start = exchange(
+      chunk_dispatcher, chunk_request(26, expiring_id, 0, 64), chunk_limits);
+  now = seconds(102);
+  auto expired_continuation = exchange(
+      chunk_dispatcher, chunk_request(27, expiring_id, 64, 64), chunk_limits);
+  if (!expiring_start || !expired_continuation ||
+      expired_continuation->succeeded() ||
+      std::get<core::Error>(expired_continuation->payload).code !=
+          core::ErrorCode::Conflict)
+    return 28;
+  auto transfer_a = large_id;
+  auto transfer_b = large_id;
+  auto transfer_c = large_id;
+  transfer_a.bytes[0] ^= 0x11;
+  transfer_b.bytes[0] ^= 0x22;
+  transfer_c.bytes[0] ^= 0x33;
+  auto active_a = exchange(chunk_dispatcher,
+                           chunk_request(28, transfer_a, 0, 64), chunk_limits);
+  auto active_b = exchange(chunk_dispatcher,
+                           chunk_request(29, transfer_b, 0, 64), chunk_limits);
+  auto over_limit = exchange(
+      chunk_dispatcher, chunk_request(30, transfer_c, 0, 64), chunk_limits);
+  if (!active_a || !active_b || !over_limit || over_limit->succeeded() ||
+      std::get<core::Error>(over_limit->payload).code !=
+          core::ErrorCode::QuotaExceeded)
+    return 29;
   return 0;
 }

@@ -105,9 +105,11 @@ xmake run sakuin worker --config=worker.toml
 One worker process registers `id:v4` and/or `id:v6` beneath that authenticated
 identity. The worker needs DHT network access and coordinator TCP access, but no
 canonical-storage mount or database credentials. `distributed.maximum_payload_bytes`
-is the encoded-result ceiling; metadata exceeding it is rejected safely, so
-raise it with the coordinator frame and queued-write limits when broader
-metadata coverage is desired.
+is the per-frame payload ceiling. Results up to
+`distributed.maximum_result_bytes` are transferred as ordered bounded chunks,
+then content-ID verified and published atomically by the coordinator. Global
+reassembly byte/count limits and expiration prevent abandoned transfers from
+becoming an unbounded operational-state sink.
 
 `network.traffic.inbound_bytes` and `outbound_bytes` are coordinator-wide when
 the distributed listener is enabled. Workers reserve bounded chunks using

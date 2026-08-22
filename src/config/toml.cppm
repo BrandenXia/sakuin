@@ -506,15 +506,16 @@ core::Result<void> parse_indexing(const toml::table &table,
 
 core::Result<void> parse_distributed_coordinator(const toml::table &table,
                                                  ConfigOverlay &overlay) {
-  if (auto checked =
-          check_keys(table,
-                     {"enabled", "recovery_enabled", "recovery_file",
-                      "recovery_maximum_bytes", "listen_address", "listen_port",
-                      "maximum_connections", "read_buffer_bytes",
-                      "maximum_frame_bytes", "maximum_queued_write_bytes",
-                      "idle_timeout_ms", "tls_trust_anchor_file",
-                      "tls_certificate_chain_file", "tls_private_key_file"},
-                     "distributed.coordinator.");
+  if (auto checked = check_keys(
+          table,
+          {"enabled", "recovery_enabled", "recovery_file",
+           "recovery_maximum_bytes", "listen_address", "listen_port",
+           "maximum_connections", "read_buffer_bytes", "maximum_frame_bytes",
+           "maximum_queued_write_bytes", "maximum_result_reassembly_bytes",
+           "maximum_result_transfers", "result_transfer_timeout_ms",
+           "idle_timeout_ms", "tls_trust_anchor_file",
+           "tls_certificate_chain_file", "tls_private_key_file"},
+          "distributed.coordinator.");
       !checked)
     return checked;
   for (auto result :
@@ -543,6 +544,15 @@ core::Result<void> parse_distributed_coordinator(const toml::table &table,
         scalar<std::int64_t>(
             table, "maximum_queued_write_bytes",
             "distributed.coordinator.maximum_queued_write_bytes", overlay),
+        scalar<std::int64_t>(
+            table, "maximum_result_reassembly_bytes",
+            "distributed.coordinator.maximum_result_reassembly_bytes", overlay),
+        scalar<std::int64_t>(table, "maximum_result_transfers",
+                             "distributed.coordinator.maximum_result_transfers",
+                             overlay),
+        scalar<std::int64_t>(
+            table, "result_transfer_timeout_ms",
+            "distributed.coordinator.result_transfer_timeout_ms", overlay),
         scalar<std::int64_t>(table, "idle_timeout_ms",
                              "distributed.coordinator.idle_timeout_ms",
                              overlay),
@@ -611,12 +621,12 @@ core::Result<void> parse_distributed_worker(const toml::table &table,
 
 core::Result<void> parse_distributed(const toml::table &table,
                                      ConfigOverlay &overlay) {
-  if (auto checked =
-          check_keys(table,
-                     {"maximum_work_items", "maximum_payload_bytes",
-                      "worker_timeout_ms", "lease_duration_ms",
-                      "heartbeat_interval_ms", "coordinator", "worker"},
-                     "distributed.");
+  if (auto checked = check_keys(table,
+                                {"maximum_work_items", "maximum_payload_bytes",
+                                 "maximum_result_bytes", "worker_timeout_ms",
+                                 "lease_duration_ms", "heartbeat_interval_ms",
+                                 "coordinator", "worker"},
+                                "distributed.");
       !checked)
     return checked;
   for (auto result :
@@ -624,6 +634,8 @@ core::Result<void> parse_distributed(const toml::table &table,
                              "distributed.maximum_work_items", overlay),
         scalar<std::int64_t>(table, "maximum_payload_bytes",
                              "distributed.maximum_payload_bytes", overlay),
+        scalar<std::int64_t>(table, "maximum_result_bytes",
+                             "distributed.maximum_result_bytes", overlay),
         scalar<std::int64_t>(table, "worker_timeout_ms",
                              "distributed.worker_timeout_ms", overlay),
         scalar<std::int64_t>(table, "lease_duration_ms",
@@ -827,6 +839,8 @@ core::Result<ConfigOverlay> environment_overlay(
        "distributed.maximum_work_items"},
       {"SAKUIN_DISTRIBUTED_MAXIMUM_PAYLOAD_BYTES",
        "distributed.maximum_payload_bytes"},
+      {"SAKUIN_DISTRIBUTED_MAXIMUM_RESULT_BYTES",
+       "distributed.maximum_result_bytes"},
       {"SAKUIN_DISTRIBUTED_WORKER_TIMEOUT_MS", "distributed.worker_timeout_ms"},
       {"SAKUIN_DISTRIBUTED_LEASE_DURATION_MS", "distributed.lease_duration_ms"},
       {"SAKUIN_DISTRIBUTED_HEARTBEAT_INTERVAL_MS",
@@ -851,6 +865,12 @@ core::Result<ConfigOverlay> environment_overlay(
        "distributed.coordinator.maximum_frame_bytes"},
       {"SAKUIN_DISTRIBUTED_COORDINATOR_MAXIMUM_QUEUED_WRITE_BYTES",
        "distributed.coordinator.maximum_queued_write_bytes"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_MAXIMUM_RESULT_REASSEMBLY_BYTES",
+       "distributed.coordinator.maximum_result_reassembly_bytes"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_MAXIMUM_RESULT_TRANSFERS",
+       "distributed.coordinator.maximum_result_transfers"},
+      {"SAKUIN_DISTRIBUTED_COORDINATOR_RESULT_TRANSFER_TIMEOUT_MS",
+       "distributed.coordinator.result_transfer_timeout_ms"},
       {"SAKUIN_DISTRIBUTED_COORDINATOR_IDLE_TIMEOUT_MS",
        "distributed.coordinator.idle_timeout_ms"},
       {"SAKUIN_DISTRIBUTED_COORDINATOR_TLS_TRUST_ANCHOR_FILE",

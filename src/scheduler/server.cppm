@@ -144,6 +144,9 @@ core::Result<void> MutualTlsWorkProtocolAccessPolicy::authorize(
   case WorkProtocolOperation::PublishResult:
     worker = std::get<PublishWorkResultRequest>(request.payload).worker;
     break;
+  case WorkProtocolOperation::PublishResultChunk:
+    worker = std::get<PublishWorkResultChunkRequest>(request.payload).worker;
+    break;
   case WorkProtocolOperation::AcquireTraffic:
     worker = std::get<AcquireTrafficRequest>(request.payload).worker;
     break;

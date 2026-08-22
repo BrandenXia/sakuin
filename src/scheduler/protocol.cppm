@@ -11,7 +11,7 @@ import sakuin.scheduler.work;
 
 export namespace sakuin::scheduler {
 
-inline constexpr std::uint16_t WorkProtocolVersion = 3;
+inline constexpr std::uint16_t WorkProtocolVersion = 4;
 
 enum class WorkProtocolOperation : std::uint8_t {
   Submit = 1,
@@ -25,12 +25,17 @@ enum class WorkProtocolOperation : std::uint8_t {
   Snapshot = 9,
   PublishResult = 10,
   AcquireTraffic = 11,
+  PublishResultChunk = 12,
 };
 
 struct WorkProtocolLimits {
   std::size_t maximum_frame_bytes{2U * 1024U * 1024U};
   std::size_t maximum_work_payload_bytes{1U * 1024U * 1024U};
   std::size_t maximum_result_payload_bytes{1U * 1024U * 1024U};
+  std::size_t maximum_chunked_result_bytes{8U * 1024U * 1024U};
+  std::size_t maximum_result_reassembly_bytes{128U * 1024U * 1024U};
+  std::size_t maximum_result_transfers{64};
+  core::Duration result_transfer_timeout{std::chrono::minutes{2}};
   std::uint64_t maximum_traffic_grant_bytes{16U * 1024U * 1024U};
   std::size_t maximum_leases_per_response{1'024};
   std::size_t maximum_error_message_bytes{4U * 1024U};
@@ -77,6 +82,18 @@ struct PublishWorkResultRequest {
   WorkResultBatch result;
 };
 
+// Ordered chunks retain the content-derived final id on every request. The
+// coordinator publishes nothing until the exact declared byte count has been
+// reassembled and its id verified.
+struct PublishWorkResultChunkRequest {
+  std::string worker;
+  WorkId id;
+  WorkResultKind kind{};
+  std::uint64_t total_bytes{};
+  std::uint64_t offset{};
+  core::ByteBuffer chunk;
+};
+
 struct AcquireTrafficRequest {
   std::string worker;
   runtime::TrafficRequest traffic;
@@ -86,7 +103,8 @@ using WorkProtocolRequestPayload =
     std::variant<SubmitWorkRequest, RegisterWorkerRequest,
                  WorkerHeartbeatRequest, LeaseWorkRequest, LeaseMutationRequest,
                  FailWorkRequest, UnregisterWorkerRequest, WorkSnapshotRequest,
-                 PublishWorkResultRequest, AcquireTrafficRequest>;
+                 PublishWorkResultRequest, AcquireTrafficRequest,
+                 PublishWorkResultChunkRequest>;
 
 struct WorkProtocolRequest {
   std::uint64_t request_id{};
@@ -145,19 +163,36 @@ public:
       WorkCoordinator &coordinator,
       Clock clock = [] { return std::chrono::system_clock::now(); },
       WorkResultPublisher *results = nullptr,
-      TrafficGrantSource *traffic = nullptr)
+      TrafficGrantSource *traffic = nullptr, WorkProtocolLimits limits = {})
       : coordinator_(&coordinator), results_(results), traffic_(traffic),
-        clock_(std::move(clock)) {}
+        clock_(std::move(clock)), limits_(limits) {}
 
   WorkProtocolResponse dispatch(const WorkProtocolRequest &request);
   core::Result<core::ByteBuffer> handle(core::ByteView frame,
                                         WorkProtocolLimits limits = {});
 
 private:
+  struct ResultTransfer {
+    WorkResultKind kind{};
+    std::uint64_t total_bytes{};
+    core::ByteBuffer payload;
+    core::Timestamp expires_at;
+  };
+
+  WorkProtocolResponse
+  publish_result_chunk(const WorkProtocolRequest &request,
+                       const PublishWorkResultChunkRequest &chunk,
+                       core::Timestamp now);
+  void reap_result_transfers_locked(core::Timestamp now);
+
   WorkCoordinator *coordinator_;
   WorkResultPublisher *results_{};
   TrafficGrantSource *traffic_{};
   Clock clock_;
+  WorkProtocolLimits limits_;
+  std::mutex result_transfers_mutex_;
+  std::map<std::pair<std::string, WorkId>, ResultTransfer> result_transfers_;
+  std::size_t result_transfer_bytes_{};
 };
 
 } // namespace sakuin::scheduler
@@ -181,8 +216,8 @@ core::Error corrupt(std::string message) {
 
 bool valid_operation(std::uint8_t value) {
   return value >= static_cast<std::uint8_t>(WorkProtocolOperation::Submit) &&
-         value <=
-             static_cast<std::uint8_t>(WorkProtocolOperation::AcquireTraffic);
+         value <= static_cast<std::uint8_t>(
+                      WorkProtocolOperation::PublishResultChunk);
 }
 
 bool valid_limits(const WorkProtocolLimits &limits) {
@@ -192,6 +227,17 @@ bool valid_limits(const WorkProtocolLimits &limits) {
          limits.maximum_work_payload_bytes <= limits.maximum_frame_bytes &&
          limits.maximum_result_payload_bytes > 0 &&
          limits.maximum_result_payload_bytes <= limits.maximum_frame_bytes &&
+         limits.maximum_chunked_result_bytes >=
+             limits.maximum_result_payload_bytes &&
+         limits.maximum_chunked_result_bytes <= 64U * 1024U * 1024U &&
+         limits.maximum_result_reassembly_bytes >=
+             limits.maximum_chunked_result_bytes &&
+         limits.maximum_result_reassembly_bytes <=
+             4ULL * 1024U * 1024U * 1024U &&
+         limits.maximum_result_transfers > 0 &&
+         limits.maximum_result_transfers <= 65'536 &&
+         limits.result_transfer_timeout >= std::chrono::seconds{1} &&
+         limits.result_transfer_timeout <= std::chrono::hours{24} &&
          limits.maximum_traffic_grant_bytes > 0 &&
          limits.maximum_traffic_grant_bytes <= 64U * 1024U * 1024U &&
          limits.maximum_leases_per_response > 0 &&
@@ -601,6 +647,61 @@ core::Result<WorkResultBatch> read_result(Reader &reader,
   return result;
 }
 
+core::Result<void>
+write_result_chunk(Writer &writer, const PublishWorkResultChunkRequest &result,
+                   const WorkProtocolLimits &limits) {
+  if (result.total_bytes == 0 ||
+      result.total_bytes > limits.maximum_chunked_result_bytes ||
+      result.chunk.empty() ||
+      result.chunk.size() > limits.maximum_result_payload_bytes ||
+      result.chunk.size() > std::numeric_limits<std::uint32_t>::max() ||
+      result.offset >= result.total_bytes ||
+      result.chunk.size() > result.total_bytes - result.offset)
+    return std::unexpected(
+        invalid("Work result chunk exceeds protocol limits"));
+  auto kind = result_kind_value(result.kind);
+  if (!kind)
+    return std::unexpected(kind.error());
+  writer.raw(std::as_bytes(std::span{result.id.bytes}));
+  writer.u8(*kind);
+  writer.u64(result.total_bytes);
+  writer.u64(result.offset);
+  writer.u32(static_cast<std::uint32_t>(result.chunk.size()));
+  writer.raw(result.chunk);
+  return {};
+}
+
+core::Result<PublishWorkResultChunkRequest>
+read_result_chunk(Reader &reader, const WorkProtocolLimits &limits) {
+  auto id = reader.raw(WorkId{}.bytes.size());
+  auto encoded_kind = reader.u8();
+  auto total_bytes = reader.u64();
+  auto offset = reader.u64();
+  auto chunk_size = reader.u32();
+  if (!id || !encoded_kind || !total_bytes || !offset || !chunk_size)
+    return std::unexpected(!id             ? id.error()
+                           : !encoded_kind ? encoded_kind.error()
+                           : !total_bytes  ? total_bytes.error()
+                           : !offset       ? offset.error()
+                                           : chunk_size.error());
+  if (*total_bytes == 0 || *total_bytes > limits.maximum_chunked_result_bytes ||
+      *chunk_size == 0 || *chunk_size > limits.maximum_result_payload_bytes ||
+      *offset >= *total_bytes || *chunk_size > *total_bytes - *offset)
+    return std::unexpected(
+        corrupt("Work result chunk exceeds protocol limits"));
+  auto kind = result_kind(*encoded_kind);
+  auto chunk = reader.raw(*chunk_size);
+  if (!kind || !chunk)
+    return std::unexpected(kind ? chunk.error() : kind.error());
+  PublishWorkResultChunkRequest result{.kind = *kind,
+                                       .total_bytes = *total_bytes,
+                                       .offset = *offset,
+                                       .chunk = {chunk->begin(), chunk->end()}};
+  for (std::size_t index = 0; index < result.id.bytes.size(); ++index)
+    result.id.bytes[index] = std::to_integer<std::uint8_t>((*id)[index]);
+  return result;
+}
+
 core::Result<void> write_lease(Writer &writer, const WorkLease &lease,
                                const WorkProtocolLimits &limits) {
   auto expires = milliseconds(lease.expires_at);
@@ -761,6 +862,9 @@ bool operation_matches(const WorkProtocolRequest &request) {
     return std::holds_alternative<PublishWorkResultRequest>(request.payload);
   case WorkProtocolOperation::AcquireTraffic:
     return std::holds_alternative<AcquireTrafficRequest>(request.payload);
+  case WorkProtocolOperation::PublishResultChunk:
+    return std::holds_alternative<PublishWorkResultChunkRequest>(
+        request.payload);
   }
   return false;
 }
@@ -772,6 +876,7 @@ bool response_matches(const WorkProtocolResponse &response) {
   case WorkProtocolOperation::Submit:
   case WorkProtocolOperation::RegisterWorker:
   case WorkProtocolOperation::PublishResult:
+  case WorkProtocolOperation::PublishResultChunk:
     return std::holds_alternative<bool>(response.payload);
   case WorkProtocolOperation::AcquireTraffic:
     return std::holds_alternative<TrafficGrant>(response.payload);
@@ -881,6 +986,14 @@ encode_work_request(const WorkProtocolRequest &request,
         payload.u64(value.traffic.bytes);
       }
     }
+    break;
+  }
+  case WorkProtocolOperation::PublishResultChunk: {
+    const auto &value =
+        std::get<PublishWorkResultChunkRequest>(request.payload);
+    written = write_worker_id(payload, value.worker);
+    if (written)
+      written = write_result_chunk(payload, value, limits);
     break;
   }
   }
@@ -1007,6 +1120,17 @@ decode_work_request(core::ByteView encoded, WorkProtocolLimits limits) {
                     .bytes = *bytes}};
     break;
   }
+  case WorkProtocolOperation::PublishResultChunk: {
+    auto worker = payload.string(128);
+    if (!worker)
+      return std::unexpected(worker.error());
+    auto chunk = read_result_chunk(payload, limits);
+    if (!chunk)
+      return std::unexpected(chunk.error());
+    chunk->worker = std::move(*worker);
+    result.payload = std::move(*chunk);
+    break;
+  }
   }
   if (auto complete = finish(payload); !complete)
     return std::unexpected(complete.error());
@@ -1036,6 +1160,7 @@ encode_work_response(const WorkProtocolResponse &response,
     case WorkProtocolOperation::Submit:
     case WorkProtocolOperation::RegisterWorker:
     case WorkProtocolOperation::PublishResult:
+    case WorkProtocolOperation::PublishResultChunk:
       payload.u8(std::get<bool>(response.payload) ? 1 : 0);
       break;
     case WorkProtocolOperation::Heartbeat:
@@ -1111,7 +1236,8 @@ decode_work_response(core::ByteView encoded, WorkProtocolLimits limits) {
     switch (parsed->operation) {
     case WorkProtocolOperation::Submit:
     case WorkProtocolOperation::RegisterWorker:
-    case WorkProtocolOperation::PublishResult: {
+    case WorkProtocolOperation::PublishResult:
+    case WorkProtocolOperation::PublishResultChunk: {
       auto value = payload.u8();
       if (!value || *value > 1)
         return std::unexpected(value ? corrupt("Invalid boolean response")
@@ -1253,6 +1379,116 @@ void WorkFrameDecoder::reset() noexcept {
   failed_ = false;
 }
 
+void WorkProtocolDispatcher::reap_result_transfers_locked(core::Timestamp now) {
+  for (auto entry = result_transfers_.begin();
+       entry != result_transfers_.end();) {
+    if (entry->second.expires_at > now) {
+      ++entry;
+      continue;
+    }
+    result_transfer_bytes_ -= entry->second.payload.size();
+    entry = result_transfers_.erase(entry);
+  }
+}
+
+WorkProtocolResponse WorkProtocolDispatcher::publish_result_chunk(
+    const WorkProtocolRequest &request,
+    const PublishWorkResultChunkRequest &chunk, core::Timestamp now) {
+  WorkProtocolResponse response{.request_id = request.request_id,
+                                .operation = request.operation};
+  const auto fail = [&](core::Error error) {
+    response.payload = std::move(error);
+    return response;
+  };
+  if (!results_)
+    return fail({core::ErrorCode::UnsupportedFormat,
+                 "Coordinator does not accept remote work results"});
+  if (chunk.worker.empty() || chunk.worker.size() > 128 ||
+      chunk.total_bytes == 0 ||
+      chunk.total_bytes > limits_.maximum_chunked_result_bytes ||
+      chunk.chunk.empty() ||
+      chunk.chunk.size() > limits_.maximum_result_payload_bytes ||
+      chunk.offset >= chunk.total_bytes ||
+      chunk.chunk.size() > chunk.total_bytes - chunk.offset ||
+      !result_kind_value(chunk.kind))
+    return fail(
+        {core::ErrorCode::InvalidArgument, "Work result chunk is invalid"});
+  auto expires = add_duration(now, limits_.result_transfer_timeout);
+  if (!expires)
+    return fail(expires.error());
+
+  std::optional<WorkResultBatch> completed;
+  {
+    std::lock_guard lock{result_transfers_mutex_};
+    reap_result_transfers_locked(now);
+    const auto key = std::pair{chunk.worker, chunk.id};
+    auto found = result_transfers_.find(key);
+    if (chunk.offset == 0 && found != result_transfers_.end()) {
+      result_transfer_bytes_ -= found->second.payload.size();
+      result_transfers_.erase(found);
+      found = result_transfers_.end();
+    }
+    if (found == result_transfers_.end()) {
+      if (chunk.offset != 0)
+        return fail({core::ErrorCode::Conflict,
+                     "Work result transfer must begin at offset zero"});
+      if (result_transfers_.size() >= limits_.maximum_result_transfers)
+        return fail({core::ErrorCode::QuotaExceeded,
+                     "Too many work result transfers are active"});
+      if (chunk.chunk.size() >
+          limits_.maximum_result_reassembly_bytes - result_transfer_bytes_)
+        return fail({core::ErrorCode::QuotaExceeded,
+                     "Work result reassembly byte limit is exhausted"});
+      ResultTransfer transfer{.kind = chunk.kind,
+                              .total_bytes = chunk.total_bytes,
+                              .payload = chunk.chunk,
+                              .expires_at = *expires};
+      result_transfer_bytes_ += transfer.payload.size();
+      found = result_transfers_.emplace(key, std::move(transfer)).first;
+    } else {
+      auto &transfer = found->second;
+      if (transfer.kind != chunk.kind ||
+          transfer.total_bytes != chunk.total_bytes)
+        return fail({core::ErrorCode::Conflict,
+                     "Work result transfer metadata changed"});
+      if (chunk.offset != transfer.payload.size())
+        return fail({core::ErrorCode::Conflict,
+                     "Work result chunk offset is not contiguous"});
+      if (chunk.chunk.size() >
+          limits_.maximum_result_reassembly_bytes - result_transfer_bytes_)
+        return fail({core::ErrorCode::QuotaExceeded,
+                     "Work result reassembly byte limit is exhausted"});
+      transfer.payload.insert(transfer.payload.end(), chunk.chunk.begin(),
+                              chunk.chunk.end());
+      result_transfer_bytes_ += chunk.chunk.size();
+      transfer.expires_at = *expires;
+    }
+
+    if (found->second.payload.size() == found->second.total_bytes) {
+      completed = WorkResultBatch{.id = chunk.id,
+                                  .kind = found->second.kind,
+                                  .payload = std::move(found->second.payload)};
+      result_transfer_bytes_ -= completed->payload.size();
+      result_transfers_.erase(found);
+    }
+  }
+
+  if (!completed) {
+    response.payload = true;
+    return response;
+  }
+  if (completed->id !=
+      content_work_result_id(completed->kind, completed->payload))
+    return fail({core::ErrorCode::InvalidArgument,
+                 "Reassembled work result content id is invalid"});
+  auto published =
+      results_->publish_result(chunk.worker, std::move(*completed));
+  if (!published)
+    return fail(published.error());
+  response.payload = *published;
+  return response;
+}
+
 WorkProtocolResponse
 WorkProtocolDispatcher::dispatch(const WorkProtocolRequest &request) {
   WorkProtocolResponse response{.request_id = request.request_id,
@@ -1263,6 +1499,13 @@ WorkProtocolDispatcher::dispatch(const WorkProtocolRequest &request) {
   };
   try {
     const auto now = protocol_now(clock_());
+    if (!valid_limits(limits_))
+      return fail({core::ErrorCode::InvalidArgument,
+                   "Work-protocol dispatcher limits are invalid"});
+    {
+      std::lock_guard lock{result_transfers_mutex_};
+      reap_result_transfers_locked(now);
+    }
     switch (request.operation) {
     case WorkProtocolOperation::Submit: {
       auto result = coordinator_->submit(
@@ -1325,10 +1568,23 @@ WorkProtocolDispatcher::dispatch(const WorkProtocolRequest &request) {
       break;
     }
     case WorkProtocolOperation::UnregisterWorker: {
-      auto result = coordinator_->unregister_worker(
-          std::get<UnregisterWorkerRequest>(request.payload).worker, now);
+      const auto &worker =
+          std::get<UnregisterWorkerRequest>(request.payload).worker;
+      auto result = coordinator_->unregister_worker(worker, now);
       if (!result)
         return fail(result.error());
+      {
+        std::lock_guard lock{result_transfers_mutex_};
+        for (auto entry = result_transfers_.begin();
+             entry != result_transfers_.end();) {
+          if (entry->first.first != worker) {
+            ++entry;
+            continue;
+          }
+          result_transfer_bytes_ -= entry->second.payload.size();
+          entry = result_transfers_.erase(entry);
+        }
+      }
       response.payload = std::monostate{};
       break;
     }
@@ -1361,6 +1617,10 @@ WorkProtocolDispatcher::dispatch(const WorkProtocolRequest &request) {
       response.payload = *result;
       break;
     }
+    case WorkProtocolOperation::PublishResultChunk:
+      return publish_result_chunk(
+          request, std::get<PublishWorkResultChunkRequest>(request.payload),
+          now);
     }
   } catch (const std::exception &error) {
     return fail(

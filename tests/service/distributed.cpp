@@ -176,7 +176,15 @@ int main(int argc, char **argv) {
        .request_timeout = std::chrono::seconds{2},
        .protocol_limits = {
            .maximum_frame_bytes = configuration.coordinator.maximum_frame_bytes,
-           .maximum_work_payload_bytes = configuration.maximum_payload_bytes}});
+           .maximum_work_payload_bytes = configuration.maximum_payload_bytes,
+           .maximum_result_payload_bytes = configuration.maximum_payload_bytes,
+           .maximum_chunked_result_bytes = configuration.maximum_result_bytes,
+           .maximum_result_reassembly_bytes =
+               configuration.coordinator.maximum_result_reassembly_bytes,
+           .maximum_result_transfers =
+               configuration.coordinator.maximum_result_transfers,
+           .result_transfer_timeout =
+               configuration.coordinator.result_transfer_timeout}});
   if (!remote)
     return 5;
 
@@ -252,8 +260,17 @@ int main(int argc, char **argv) {
   auto secure_service = service::DistributedWorkService::create(
       configuration, **coordinator, &observer, &result_publisher,
       &traffic_grants);
-  if (!secure_service || !(*secure_service)->start())
+  if (!secure_service) {
+    std::cerr << "secure service create: " << secure_service.error().message
+              << '\n';
     return 14;
+  }
+  auto secure_started = (*secure_service)->start();
+  if (!secure_started) {
+    std::cerr << "secure service start: " << secure_started.error().message
+              << '\n';
+    return 14;
+  }
 
   runtime::AsioTlsStreamTransportFactory secure_transports{
       {.trust_anchor_file = tls_fixture("ca.pem"),
@@ -270,7 +287,15 @@ int main(int argc, char **argv) {
        .request_timeout = std::chrono::seconds{2},
        .protocol_limits = {
            .maximum_frame_bytes = configuration.coordinator.maximum_frame_bytes,
-           .maximum_work_payload_bytes = configuration.maximum_payload_bytes}});
+           .maximum_work_payload_bytes = configuration.maximum_payload_bytes,
+           .maximum_result_payload_bytes = configuration.maximum_payload_bytes,
+           .maximum_chunked_result_bytes = configuration.maximum_result_bytes,
+           .maximum_result_reassembly_bytes =
+               configuration.coordinator.maximum_result_reassembly_bytes,
+           .maximum_result_transfers =
+               configuration.coordinator.maximum_result_transfers,
+           .result_transfer_timeout =
+               configuration.coordinator.result_transfer_timeout}});
   if (!secure_remote) {
     std::cerr << "secure connect: " << secure_remote.error().message << '\n';
     return 15;
@@ -333,6 +358,17 @@ int main(int argc, char **argv) {
       (*secure_remote)->publish_result("worker-1", metadata_result);
   if (!metadata_published || !*metadata_published ||
       !result_publisher.received("worker-1", metadata_result))
+    return 19;
+  core::ByteBuffer chunked_payload(2'500, core::Byte{0x4d});
+  scheduler::WorkResultBatch chunked_result{
+      .id = scheduler::content_work_result_id(
+          scheduler::WorkResultKind::TorrentMetadataBatch, chunked_payload),
+      .kind = scheduler::WorkResultKind::TorrentMetadataBatch,
+      .payload = std::move(chunked_payload)};
+  auto chunked_published =
+      (*secure_remote)->publish_result("worker-1", chunked_result);
+  if (!chunked_published || !*chunked_published ||
+      !result_publisher.received("worker-1", chunked_result))
     return 19;
   auto first_grant =
       (*secure_remote)

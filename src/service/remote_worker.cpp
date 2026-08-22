@@ -98,14 +98,22 @@ RemoteDhtWorkerService::create(const config::AppConfig &configuration,
                configuration.distributed.maximum_payload_bytes,
            .maximum_result_payload_bytes =
                configuration.distributed.maximum_payload_bytes,
+           .maximum_chunked_result_bytes =
+               configuration.distributed.maximum_result_bytes,
+           .maximum_result_reassembly_bytes =
+               configuration.distributed.coordinator
+                   .maximum_result_reassembly_bytes,
+           .maximum_result_transfers =
+               configuration.distributed.coordinator.maximum_result_transfers,
+           .result_transfer_timeout =
+               configuration.distributed.coordinator.result_transfer_timeout,
            .maximum_traffic_grant_bytes = 16U * 1024U * 1024U}});
   if (!coordinator)
     return std::unexpected(coordinator.error());
   auto observations = std::make_unique<integration::RemoteObservationSink>(
       **coordinator, worker.id, worker.observation_batch_size);
   auto metadata = std::make_unique<integration::RemoteTorrentMetadataSink>(
-      **coordinator, worker.id,
-      configuration.distributed.maximum_payload_bytes);
+      **coordinator, worker.id, configuration.distributed.maximum_result_bytes);
   auto traffic = scheduler::GrantedTrafficGovernor::create(
       **coordinator, worker.id, configuration.network.traffic.grant_bytes);
   if (!traffic)
