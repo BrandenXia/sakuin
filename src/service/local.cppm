@@ -7,10 +7,12 @@ import sakuin.core.ids;
 import sakuin.core.result;
 import sakuin.index.duplicates;
 import sakuin.runtime.datagram;
+import sakuin.runtime.stream;
 import sakuin.scheduler.work;
 import sakuin.search.rebuild;
 import sakuin.service.api;
 import sakuin.service.duplicates;
+import sakuin.service.distributed;
 import sakuin.service.maintenance;
 import sakuin.service.materialization;
 import sakuin.service.runtime;
@@ -66,7 +68,8 @@ public:
          DhtRuntimeExternalAddresses external_addresses = {},
          StorageMaintenanceObserver *maintenance_observer = nullptr,
          MaterializationObserver *materialization_observer = nullptr,
-         DuplicateIndexObserver *duplicate_index_observer = nullptr);
+         DuplicateIndexObserver *duplicate_index_observer = nullptr,
+         DistributedWorkServiceObserver *distributed_observer = nullptr);
 
   ~LocalSakuinService();
 
@@ -86,6 +89,10 @@ public:
   std::optional<runtime::DatagramEndpoint> api_endpoint() const noexcept {
     return api_ ? std::optional{api_->local_endpoint()} : std::nullopt;
   }
+  std::optional<runtime::StreamEndpoint> coordinator_endpoint() const noexcept {
+    return distributed_ ? std::optional{distributed_->local_endpoint()}
+                        : std::nullopt;
+  }
   core::Result<void> reload_api_credentials();
   core::Result<search::SearchRebuildResult> refresh_search();
   core::Result<index::DuplicateSynchronizationResult> refresh_duplicates();
@@ -103,12 +110,13 @@ private:
       std::unique_ptr<DuplicateIndexCoordinator> duplicates,
       std::unique_ptr<StorageMaintenanceCoordinator> maintenance,
       std::unique_ptr<scheduler::LocalWorkCoordinator> work,
+      std::unique_ptr<DistributedWorkService> distributed,
       std::unique_ptr<AsioDhtRuntime> runtime)
       : storage_(std::move(storage)), api_(std::move(api)),
         materialization_(std::move(materialization)),
         duplicates_(std::move(duplicates)),
         maintenance_(std::move(maintenance)), work_(std::move(work)),
-        runtime_(std::move(runtime)) {}
+        distributed_(std::move(distributed)), runtime_(std::move(runtime)) {}
 
   std::unique_ptr<LocalCanonicalStorage> storage_;
   std::unique_ptr<LocalApiService> api_;
@@ -116,6 +124,7 @@ private:
   std::unique_ptr<DuplicateIndexCoordinator> duplicates_;
   std::unique_ptr<StorageMaintenanceCoordinator> maintenance_;
   std::unique_ptr<scheduler::LocalWorkCoordinator> work_;
+  std::unique_ptr<DistributedWorkService> distributed_;
   std::unique_ptr<AsioDhtRuntime> runtime_;
 };
 
@@ -176,14 +185,14 @@ core::Result<void> LocalAsioDhtService::stop() {
   return storage_->flush();
 }
 
-core::Result<std::unique_ptr<LocalSakuinService>>
-LocalSakuinService::create(const config::AppConfig &configuration,
-                           DhtRuntimeObserver &dht_observer,
-                           ApiServiceObserver &api_observer,
-                           DhtRuntimeExternalAddresses external_addresses,
-                           StorageMaintenanceObserver *maintenance_observer,
-                           MaterializationObserver *materialization_observer,
-                           DuplicateIndexObserver *duplicate_index_observer) {
+core::Result<std::unique_ptr<LocalSakuinService>> LocalSakuinService::create(
+    const config::AppConfig &configuration, DhtRuntimeObserver &dht_observer,
+    ApiServiceObserver &api_observer,
+    DhtRuntimeExternalAddresses external_addresses,
+    StorageMaintenanceObserver *maintenance_observer,
+    MaterializationObserver *materialization_observer,
+    DuplicateIndexObserver *duplicate_index_observer,
+    DistributedWorkServiceObserver *distributed_observer) {
   if (auto valid = config::validate(configuration); !valid)
     return std::unexpected(valid.error());
   auto storage = LocalCanonicalStorage::open(configuration.storage);
@@ -211,6 +220,14 @@ LocalSakuinService::create(const config::AppConfig &configuration,
     api = std::move(*created);
   }
   auto *api_refresh = api.get();
+  std::unique_ptr<DistributedWorkService> distributed;
+  if (configuration.distributed.coordinator.enabled) {
+    auto created = DistributedWorkService::create(configuration.distributed,
+                                                  **work, distributed_observer);
+    if (!created)
+      return std::unexpected(created.error());
+    distributed = std::move(*created);
+  }
   std::unique_ptr<StorageMaintenanceCoordinator> maintenance;
   if (configuration.storage.maintenance.enabled)
     maintenance = std::make_unique<StorageMaintenanceCoordinator>(
@@ -256,7 +273,7 @@ LocalSakuinService::create(const config::AppConfig &configuration,
   return std::unique_ptr<LocalSakuinService>{new LocalSakuinService{
       std::move(*storage), std::move(api), std::move(materialization),
       std::move(duplicates), std::move(maintenance), std::move(*work),
-      std::move(*runtime)}};
+      std::move(distributed), std::move(*runtime)}};
 }
 
 LocalSakuinService::~LocalSakuinService() { static_cast<void>(stop()); }
@@ -297,8 +314,24 @@ core::Result<void> LocalSakuinService::start() {
       return std::unexpected(started.error());
     }
   }
+  if (distributed_) {
+    auto started = distributed_->start();
+    if (!started) {
+      if (maintenance_)
+        maintenance_->stop();
+      if (materialization_)
+        materialization_->stop();
+      if (duplicates_)
+        duplicates_->stop();
+      if (api_)
+        api_->stop();
+      return std::unexpected(started.error());
+    }
+  }
   auto started = runtime_->start();
   if (!started) {
+    if (distributed_)
+      distributed_->stop();
     if (maintenance_)
       maintenance_->stop();
     if (materialization_)
@@ -314,6 +347,8 @@ core::Result<void> LocalSakuinService::start() {
 
 core::Result<void> LocalSakuinService::stop() {
   runtime_->stop();
+  if (distributed_)
+    distributed_->stop();
   std::optional<core::Error> materialization_error;
   if (materialization_) {
     materialization_->stop();
@@ -340,6 +375,7 @@ core::Result<void> LocalSakuinService::stop() {
 
 bool LocalSakuinService::running() const noexcept {
   return runtime_->running() && (!api_ || api_->running()) &&
+         (!distributed_ || distributed_->running()) &&
          (!maintenance_ || maintenance_->running()) &&
          (!materialization_ || materialization_->running()) &&
          (!duplicates_ || duplicates_->running());

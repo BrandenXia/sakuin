@@ -575,20 +575,47 @@ TorrentDataset::changes_since(TorrentChangeCursor cursor) const {
 
 core::Result<CompactionResult>
 TorrentDataset::compact(const CompactionPolicy &policy) {
-  if (policy.minimum_segment_count < 2 || policy.target_block_size == 0)
+  const auto target_block_size =
+      policy.warm_target_block_size.value_or(policy.target_block_size);
+  if (policy.minimum_segment_count < 2 ||
+      policy.maximum_warm_segment_count == 0 || target_block_size == 0)
     return std::unexpected(core::Error{
         core::ErrorCode::InvalidArgument,
-        "Torrent compaction requires at least two segments and a nonzero "
-        "block size"});
+        "Torrent compaction requires at least two HOT segments, one WARM "
+        "segment slot, and a nonzero block size"});
 
   auto pin = catalog_->pin_current();
   if (!pin)
     return std::unexpected(pin.error());
   const auto &manifest = (*pin)->manifest();
-  if (manifest.segments.size() < policy.minimum_segment_count)
+  auto first_hot = manifest.segments.size();
+  while (first_hot > 0 &&
+         manifest.segments[first_hot - 1].tier == SegmentTier::Hot)
+    --first_hot;
+  if (!std::ranges::all_of(std::span{manifest.segments}.first(first_hot),
+                           [](const SegmentDescriptor &segment) {
+                             return segment.tier == SegmentTier::Warm;
+                           }))
+    return std::unexpected(core::Error{
+        core::ErrorCode::UnsupportedFormat,
+        "Torrent compaction requires WARM segments followed by a HOT suffix"});
+
+  const auto hot_count = manifest.segments.size() - first_hot;
+  const auto warm_count = first_hot;
+  if (hot_count < policy.minimum_segment_count &&
+      warm_count <= policy.maximum_warm_segment_count)
     return CompactionResult{.source_generation = manifest.id.generation};
 
-  TorrentStream stream{*pin, *blobs_, codec_};
+  // Normal passes only compact the newly appended HOT suffix. When adding
+  // another WARM segment would exceed the configured fan-out, consolidate the
+  // complete keyed view and return to a single WARM base segment.
+  const auto first_compacted =
+      warm_count >= policy.maximum_warm_segment_count ? 0U : first_hot;
+  const auto compacted_count = manifest.segments.size() - first_compacted;
+  if (compacted_count < 2)
+    return CompactionResult{.source_generation = manifest.id.generation};
+
+  TorrentStream stream{*pin, *blobs_, codec_, first_compacted};
   std::vector<model::TorrentRecord> records;
   while (true) {
     auto next = stream.next();
@@ -610,7 +637,7 @@ TorrentDataset::compact(const CompactionPolicy &policy) {
       .encoding = SegmentEncoding::RowV1,
       .tier = SegmentTier::Warm,
       .compression = policy.compression,
-      .target_block_size = policy.target_block_size,
+      .target_block_size = target_block_size,
   };
   auto writer = RowV1SegmentWriter::create(
       *blobs_, output_header,
@@ -658,16 +685,20 @@ TorrentDataset::compact(const CompactionPolicy &policy) {
   }
 
   const auto bytes_before = std::transform_reduce(
-      manifest.segments.begin(), manifest.segments.end(), std::uint64_t{},
-      std::plus{},
+      manifest.segments.begin() + static_cast<std::ptrdiff_t>(first_compacted),
+      manifest.segments.end(), std::uint64_t{}, std::plus{},
       [](const SegmentDescriptor &segment) { return segment.physical_size; });
-  auto published = catalog_->publish(manifest.id, {*replacement});
+  std::vector<SegmentDescriptor> next_segments{
+      manifest.segments.begin(),
+      manifest.segments.begin() + static_cast<std::ptrdiff_t>(first_compacted)};
+  next_segments.push_back(*replacement);
+  auto published = catalog_->publish(manifest.id, std::move(next_segments));
   if (!published)
     return std::unexpected(published.error());
   return CompactionResult{
       .source_generation = published->generation,
       .segments_created = 1,
-      .segments_removed = manifest.segments.size(),
+      .segments_removed = compacted_count,
       .bytes_before = bytes_before,
       .bytes_after = replacement->physical_size,
   };

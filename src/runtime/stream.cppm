@@ -66,4 +66,68 @@ protected:
   StreamTransportFactory() = default;
 };
 
+using StreamSessionId = std::uint64_t;
+
+struct StreamServerOptions {
+  StreamEndpoint bind_to{};
+  core::Duration idle_timeout{std::chrono::seconds{30}};
+  std::size_t read_buffer_bytes{16U * 1024U};
+  std::size_t maximum_queued_write_bytes{1024U * 1024U};
+  std::size_t maximum_connections{256};
+};
+
+class StreamServerSession {
+public:
+  virtual ~StreamServerSession() = default;
+
+  StreamServerSession(const StreamServerSession &) = delete;
+  StreamServerSession &operator=(const StreamServerSession &) = delete;
+
+  virtual StreamSessionId id() const noexcept = 0;
+  virtual StreamEndpoint remote_endpoint() const noexcept = 0;
+  virtual core::Result<void> send(core::ByteBuffer bytes) = 0;
+  virtual void close() noexcept = 0;
+
+protected:
+  StreamServerSession() = default;
+};
+
+class StreamServerHandler {
+public:
+  virtual ~StreamServerHandler() = default;
+
+  // Callbacks for all sessions are serialized on one runtime-owned execution
+  // thread. Session references remain valid until their closed callback
+  // returns.
+  virtual void on_stream_session_opened(StreamServerSession &session) = 0;
+  virtual void on_stream_session_data(StreamServerSession &session,
+                                      core::ByteBuffer bytes) = 0;
+  virtual void on_stream_session_closed(StreamSessionId session,
+                                        std::optional<core::Error> error) = 0;
+};
+
+class StreamServerEvents {
+public:
+  virtual ~StreamServerEvents() = default;
+  virtual void on_stream_server_error(core::Error error) = 0;
+};
+
+class StreamServer {
+public:
+  virtual ~StreamServer() = default;
+
+  StreamServer(const StreamServer &) = delete;
+  StreamServer &operator=(const StreamServer &) = delete;
+
+  // The handler and optional event sink must outlive the server until stop()
+  // returns. This boundary deliberately exposes no Asio execution types.
+  virtual core::Result<void> start(StreamServerHandler &handler,
+                                   StreamServerEvents *events = nullptr) = 0;
+  virtual StreamEndpoint local_endpoint() const noexcept = 0;
+  virtual void stop() noexcept = 0;
+
+protected:
+  StreamServer() = default;
+};
+
 } // namespace sakuin::runtime

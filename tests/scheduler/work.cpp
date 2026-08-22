@@ -87,8 +87,8 @@ int main() {
   if (!(*coordinator)->unregister_worker(worker.id, seconds(10)))
     return 11;
   const auto released = (*coordinator)->snapshot(seconds(10));
-  if (released.pending != 1 || released.leased != 0 ||
-      released.succeeded != 2 || released.workers != 0)
+  if (!released || released->pending != 1 || released->leased != 0 ||
+      released->succeeded != 2 || released->workers != 0)
     return 12;
 
   if (!(*coordinator)
@@ -106,7 +106,7 @@ int main() {
                   seconds(11)))
     return 15;
   const auto terminal = (*coordinator)->snapshot(seconds(11));
-  if (terminal.failed != 1 || terminal.succeeded != 2)
+  if (!terminal || terminal->failed != 1 || terminal->succeeded != 2)
     return 16;
 
   auto concurrent = scheduler::LocalWorkCoordinator::create(
@@ -134,7 +134,8 @@ int main() {
         accepted += result->size();
     });
   threads.clear();
-  if (accepted != 1 || (*concurrent)->snapshot(seconds(0)).leased != 1)
+  auto concurrent_snapshot = (*concurrent)->snapshot(seconds(0));
+  if (accepted != 1 || !concurrent_snapshot || concurrent_snapshot->leased != 1)
     return 19;
   return 0;
 }

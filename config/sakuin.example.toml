@@ -55,6 +55,8 @@ level = 3
 
 [storage.compaction]
 minimum_segments = 4
+maximum_warm_segments = 8
+warm_block_target_bytes = 65536
 
 [storage.maintenance]
 enabled = true
