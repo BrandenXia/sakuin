@@ -1,0 +1,46 @@
+name: sakuin
+
+services:
+  sakuin:
+    image: ${SAKUIN_IMAGE:-sakuin:local}
+    build:
+      context: .
+      args:
+        SAKUIN_VERSION: ${SAKUIN_VERSION:-latest}
+        SAKUIN_RELEASE_BASE_URL: ${SAKUIN_RELEASE_BASE_URL:-https://github.com/BrandenXia/sakuin/releases}
+        SAKUIN_BINARY_URL: ${SAKUIN_BINARY_URL:-}
+    init: true
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      SAKUIN_STORAGE_LOCAL_ROOT: /var/lib/sakuin
+      SAKUIN_API_CREDENTIAL_STORE_DIRECTORY: /var/lib/sakuin/operational/api
+      SAKUIN_API_LISTEN_ADDRESS: 0.0.0.0
+      SAKUIN_API_LISTEN_PORT: "8080"
+      SAKUIN_NETWORK_LISTEN_PORT: "6881"
+      SAKUIN_NETWORK_ENABLE_IPV6: ${SAKUIN_ENABLE_IPV6:-false}
+      SAKUIN_DHT_BOOTSTRAP: ${SAKUIN_DHT_BOOTSTRAP:-}
+    command: ["--config=/etc/sakuin/sakuin.toml"]
+    ports:
+      - "127.0.0.1:${SAKUIN_API_PORT:-8080}:8080/tcp"
+      - "${SAKUIN_DHT_PORT:-6881}:6881/udp"
+    volumes:
+      - sakuin-data:/var/lib/sakuin
+      - ./config/sakuin.docker.toml:/etc/sakuin/sakuin.toml:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8080/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    stop_grace_period: 30s
+
+volumes:
+  sakuin-data:
+    name: ${SAKUIN_DATA_VOLUME:-sakuin-data}

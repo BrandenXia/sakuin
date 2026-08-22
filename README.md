@@ -1,190 +1,101 @@
 # Sakuin
 
-Sakuin is a self-hosted BitTorrent DHT indexer built around portable immutable
-canonical storage rather than a database. It discovers infohashes, acquires
-torrent metadata, materializes searchable torrent records, and maintains
-rebuildable search and duplicate indexes.
+Sakuin is a self-hosted BitTorrent DHT indexer. It discovers torrent
+infohashes, fetches metadata, keeps a searchable local catalog, and groups
+likely duplicate torrents without relying on PostgreSQL, Redis, or an external
+search service.
 
-The working local deployment requires no PostgreSQL, Redis, SQLite, or external
-search service. Canonical state consists of content-addressed segment objects
-and atomic manifest generations under the configured storage root.
+Sakuin is designed for people who want to own and move their index as ordinary
+files. Its source of truth is a compact, immutable local dataset; search and
+duplicate indexes can be rebuilt from it.
 
-## Current architecture
+## Features
 
-- C++23 modules built with xmake
-- Standalone Asio hidden behind Sakuin datagram, stream, and server interfaces
-- TOML configuration with defaults → file → environment → CLI precedence
-- BEP 42 DHT identities by default
-- RowV1 HOT, indexed WARM, and scan-oriented COLD storage tiers
-- Zstandard block compression, checksums, immutable compaction, snapshot pins,
-  and reachability-based garbage collection
-- Incremental observation materialization into keyed torrent metadata
-- Durable, rebuildable local search and duplicate projections
-- API-key authentication, permissions, request limits, and optional TLS
-- Local work coordination plus a versioned TCP coordinator/worker protocol
-  with leases, heartbeats, cancellation, renewal, bounded durable results,
-  and retry handling
-- Crash-safe, checksummed coordinator work checkpoints with bounded recovery;
-  interrupted leases return to the pending queue without restoring stale
-  worker sessions or lease ownership
-- Mutually authenticated remote workers whose certificate identity scopes
-  their protocol worker namespace
-- Coordinator-reserved traffic grants that enforce one aggregate periodic DHT
-  byte budget across its local crawler and all remote workers
-- spdlog operational logging
+- Crawls the public BitTorrent DHT and acquires torrent metadata.
+- Searches torrent names, paths, sizes, file counts, dates, and infohashes.
+- Detects exact file-layout and normalized-metadata duplicates.
+- Preserves historical observations with configurable retention and
+  compression.
+- Enforces configurable DHT traffic budgets.
+- Protects the HTTP API with scoped API keys and rate limits.
+- Runs as one local service, with optional authenticated remote workers.
+- Stores all persistent data in a portable local volume.
 
-Plaintext coordination is deliberately loopback-only. With a dedicated worker
-CA and mTLS configured, disposable `sakuin worker` processes can crawl and
-fetch metadata remotely without access to the storage backend. Observation and
-logical torrent-metadata batches are content-ID validated, materialized only by
-the coordinator, and recorded in a durable result receipt log before success is
-acknowledged. Retrying an acknowledged batch does not duplicate canonical
-facts, including after process restart or observation compaction.
-Receipts store only the 17-byte result identity and kind, not a second copy of
-the result payload. Normal storage maintenance deduplicates them into compact
-RowV1 segments and garbage-collects replaced objects. Receipt identities do
-not expire: without a bounded delivery lifetime, deleting one could make a
-late acknowledged retry unsafe after canonical compaction.
+## How it compares
 
-Coordinator work state is atomically checkpointed under
-`<storage.local_root>/operational/scheduler` by default. A checkpoint failure
-puts the coordinator into a fail-stop state before it acknowledges the
-mutation, preserving at-least-once recovery. This is a local durable baseline,
-not replicated coordinator high availability; the storage abstraction leaves
-room for a distributed implementation later.
+[Bitmagnet](https://bitmagnet.io/) is the closest established project. Both
+projects crawl the DHT and provide a self-hosted searchable torrent catalog,
+but they make different tradeoffs.
 
-## Build and test
+| | Sakuin | Bitmagnet |
+|---|---|---|
+| Primary storage | Portable immutable files | PostgreSQL |
+| Minimum deployment | One application container and one data volume | Application plus PostgreSQL |
+| Historical data | Explicit observation history and tiered retention | Database-oriented current catalog |
+| Duplicate grouping | File-layout and normalized-metadata fingerprints | Classification-oriented processing |
+| Distributed crawling | Built-in coordinator and disposable remote workers | Worker model centered on the shared database |
+| User interface | HTTP API only | Mature web UI and integrations |
+| Project maturity | New; operational interfaces may still evolve | Established and more feature-complete |
 
-Dependencies are declared in [xmake.lua](xmake.lua): OpenSSL, Zstandard,
-Standalone Asio, toml++, llhttp, nlohmann/json, and spdlog.
+Sakuin's main advantages are simple data ownership, no database administration,
+storage-efficient history, and a design that can scale crawling separately
+from canonical storage. Its current disadvantages are equally important: there
+is no web UI, no S3 backend yet, fewer media/classification integrations, and
+less real-world deployment history than Bitmagnet.
+
+## Quick deployment
+
+Requirements: Docker with the Compose plugin, and one or more DHT bootstrap
+contacts that you trust.
 
 ```bash
-# macOS with Homebrew LLVM
-xmake f --toolchain=clang --sdk=/opt/homebrew/opt/llvm
+cp .env.example .env
+# Edit .env and set SAKUIN_DHT_BOOTSTRAP=host:port[,host:port...]
+./scripts/deploy.sh
+```
 
-# Linux with a compiler that supports C++ modules
-# xmake f --toolchain=gcc
+The first deployment creates a `reader` API key and prints its bearer token
+once. Data is kept in the `sakuin-data` Docker volume. The API is available at
+`http://127.0.0.1:8080` by default; UDP port 6881 is exposed for the DHT.
 
+```bash
+curl http://127.0.0.1:8080/v1/health
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "http://127.0.0.1:8080/v1/search?q=ubuntu"
+```
+
+Useful deployment commands:
+
+```bash
+./scripts/deploy.sh status
+./scripts/deploy.sh logs
+./scripts/deploy.sh verify
+./scripts/deploy.sh key reader-2 search
+./scripts/deploy.sh down
+```
+
+The image uses verified prebuilt Linux release bundles rather than compiling
+Sakuin during deployment. Set `SAKUIN_VERSION` in `.env` to pin a release.
+
+## Native usage
+
+Sakuin uses C++23 modules and Xmake. After building, copy
+[`config/sakuin.example.toml`](config/sakuin.example.toml), add trusted DHT
+bootstrap contacts, initialize the credential store, and start the daemon:
+
+```bash
 xmake build
-xmake test
-```
-
-The storage benchmark is intentionally separate from the default build:
-
-```bash
-xmake build sakuin-storage-benchmark
-xmake run sakuin-storage-benchmark 100000 65536
-```
-
-The arguments are record count and WARM block target bytes. Output includes
-append/scan throughput, compression ratio, compaction and COLD-archive
-throughput, write amplification, keyed lookup rate, and WARM/COLD scan rate.
-
-## Configure and run
-
-Start with [config/sakuin.example.toml](config/sakuin.example.toml):
-
-```bash
 cp config/sakuin.example.toml sakuin.toml
-# Set network.dht.bootstrap to one or more operator-trusted host:port contacts
-# before the first public-DHT start.
 xmake run sakuin-api-key --state-dir=./data/operational/api init
 xmake run sakuin-api-key --state-dir=./data/operational/api \
   create --id reader --permissions search
 xmake run sakuin --config=sakuin.toml
 ```
 
-Normal settings can also be overridden through `SAKUIN_*` environment variables
-or `--section.key=value` arguments. The example keeps both the API and work
-coordinator on loopback. A fresh public node needs at least one trusted DHT
-bootstrap contact to join proactively. An empty list remains supported for
-private or passive deployments and emits a startup warning in public mode.
+Storage administration is available through `sakuin admin verify`, `compact`,
+and `gc`. See [`docs/architecture.md`](docs/architecture.md) for the design,
+data lifecycle, distributed runtime, persistent formats, and testing strategy.
 
-Allow inbound and outbound UDP on the configured DHT port (6881 in the
-example). Keep the HTTP API on loopback unless it is protected by a TLS reverse
-proxy or by the configured API TLS certificate and private key. After startup,
-verify the process and storage with:
-
-```bash
-curl http://127.0.0.1:8080/v1/health
-xmake run sakuin admin verify --config=sakuin.toml
-```
-
-For a remote crawler and metadata fetcher, configure both
-`[distributed.coordinator]` and `[distributed.worker]` as shown in the example,
-issue the worker a certificate whose common name exactly matches
-`distributed.worker.id`, then run:
-
-```bash
-xmake run sakuin worker --config=worker.toml
-```
-
-One worker process registers `id:v4` and/or `id:v6` beneath that authenticated
-identity. The worker needs DHT network access and coordinator TCP access, but no
-canonical-storage mount or database credentials. `distributed.maximum_payload_bytes`
-is the per-frame payload ceiling. Results up to
-`distributed.maximum_result_bytes` are transferred as ordered bounded chunks,
-then content-ID verified and published atomically by the coordinator. Global
-reassembly byte/count limits and expiration prevent abandoned transfers from
-becoming an unbounded operational-state sink.
-
-Coordinator checkpoints retain completed and failed work only for the
-configured terminal-work time/count window. This bounds long-running local
-state without deleting canonical observations, torrent records, or durable
-result receipts; a retired work identity may be scheduled again safely.
-
-`network.traffic.inbound_bytes` and `outbound_bytes` are coordinator-wide when
-the distributed listener is enabled. Workers reserve bounded chunks using
-`network.traffic.grant_bytes`, then admit individual datagrams locally; this
-avoids a coordinator round trip per packet. Reservations are conservatively
-charged immediately, so an unused remainder cannot cause the fleet to exceed
-the configured window.
-
-Observation retention is deletion-capable and therefore disabled by default.
-When enabled, only whole segments whose maximum observation time has crossed a
-cutoff are archived or expired. Torrent metadata is retained indefinitely, and
-live snapshots continue to pin replaced objects until garbage collection is
-safe.
-
-## API credentials
-
-Initialize the credential store before enabling the API:
-
-```bash
-xmake run sakuin-api-key --state-dir=./data/operational/api init
-xmake run sakuin-api-key --state-dir=./data/operational/api \
-  create --id reader --permissions search
-```
-
-The creation command prints the bearer credential once. The store persists
-salted verifier material rather than plaintext secrets. Use the same CLI to
-list or disable keys. To rotate a credential, create a new key ID, reload the
-daemon with `SIGHUP`, move clients to the new bearer token, and then disable the
-old key.
-
-Authenticated endpoints include:
-
-- `GET /v1/health`
-- `GET /v1/search`
-- `GET /v1/duplicates`
-- `GET /v1/duplicates/{infohash}`
-
-Search supports text over torrent names, paths, and infohashes together with
-size, file-count, first-seen, last-seen, offset, and limit filters.
-
-## Storage administration and migration
-
-```bash
-xmake run sakuin admin verify --config=sakuin.toml
-xmake run sakuin admin compact --config=sakuin.toml
-xmake run sakuin admin gc --config=sakuin.toml
-```
-
-The storage administration API also provides backend-neutral pinned-snapshot
-migration. It copies and content-ID-verifies reachable objects before publishing
-the destination manifest. A separate RowV1 migration operation upgrades legacy
-HOT 1.0 segments to schema-aware HOT 1.1 without mutating committed objects.
-
-Derived search and duplicate state lives under `derived/` and can be discarded
-and rebuilt from canonical torrent segments. Operational credentials, locks,
-leases, and counters are kept separate from canonical data.
+Only index and access content that you are legally permitted to handle. A DHT
+index can observe untrusted or unlawful metadata; operators are responsible for
+retention, access control, and compliance in their jurisdiction.

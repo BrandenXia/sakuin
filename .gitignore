@@ -5,4 +5,7 @@ build/
 # MacOS Cache
 .DS_Store
 
+# Local deployment settings and release bundles
+.env
+dist/
 

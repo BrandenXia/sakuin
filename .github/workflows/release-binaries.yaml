@@ -1,0 +1,100 @@
+name: Release Linux binaries
+
+on:
+  push:
+    branches:
+      - release
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Linux ${{ matrix.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Require tags to point into the release branch
+        if: github.ref_type == 'tag'
+        run: |
+          git fetch origin release:refs/remotes/origin/release
+          git merge-base --is-ancestor "${GITHUB_SHA}" refs/remotes/origin/release
+
+      - name: Install compiler tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential clang clang-tools cmake libc++-dev libc++abi-dev \
+            lld ninja-build perl pkg-config shellcheck
+
+      - name: Validate deployment files
+        run: |
+          shellcheck scripts/deploy.sh scripts/package-linux.sh
+          docker compose config --quiet
+
+      - name: Install Xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: v3.0.9
+
+      - name: Build release binaries
+        run: |
+          xmake f --yes --mode=release --toolchain=clang --runtimes=c++_shared
+          xmake build --yes --jobs=2 sakuin sakuin-api-key
+
+      - name: Smoke-test the command line
+        run: |
+          xmake run sakuin --help
+          xmake run sakuin-api-key --help
+
+      - name: Package release bundle
+        run: ./scripts/package-linux.sh
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sakuin-linux-${{ matrix.architecture }}
+          path: |
+            dist/sakuin-linux-${{ matrix.architecture }}.tar.gz
+            dist/sakuin-linux-${{ matrix.architecture }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release bundles
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sakuin-linux-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish tagged release
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          files: |
+            dist/sakuin-linux-amd64.tar.gz
+            dist/sakuin-linux-amd64.tar.gz.sha256
+            dist/sakuin-linux-arm64.tar.gz
+            dist/sakuin-linux-arm64.tar.gz.sha256

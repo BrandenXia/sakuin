@@ -1,0 +1,46 @@
+[network]
+enable_ipv4 = true
+enable_ipv6 = false
+listen_port = 6881
+
+[network.dht]
+private_network = false
+# Supplied by SAKUIN_DHT_BOOTSTRAP in docker-compose.yaml.
+bootstrap = []
+
+[network.dht.identity]
+mode = "bep42"
+
+[network.dht.metadata]
+enabled = true
+
+[storage]
+backend = "local"
+local_root = "/var/lib/sakuin"
+
+[storage.retention]
+enabled = false
+
+[storage.maintenance]
+enabled = true
+
+[storage.materialization]
+enabled = true
+
+[indexing.duplicates]
+enabled = true
+
+[api]
+enabled = true
+credential_store_directory = "/var/lib/sakuin/operational/api"
+listen_address = "0.0.0.0"
+listen_port = 8080
+
+[api.rate_limit]
+enabled = true
+
+[distributed.coordinator]
+enabled = false
+
+[distributed.worker]
+enabled = false
