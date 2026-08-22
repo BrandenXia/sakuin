@@ -37,6 +37,11 @@ logical torrent-metadata batches are content-ID validated, materialized only by
 the coordinator, and recorded in a durable result receipt log before success is
 acknowledged. Retrying an acknowledged batch does not duplicate canonical
 facts, including after process restart or observation compaction.
+Receipts store only the 17-byte result identity and kind, not a second copy of
+the result payload. Normal storage maintenance deduplicates them into compact
+RowV1 segments and garbage-collects replaced objects. Receipt identities do
+not expire: without a bounded delivery lifetime, deleting one could make a
+late acknowledged retry unsafe after canonical compaction.
 
 ## Build and test
 

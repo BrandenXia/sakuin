@@ -35,6 +35,28 @@ sakuin::core::InfoHash hash(std::uint8_t seed) {
   return result;
 }
 
+bool has_receipt(
+    std::span<const sakuin::integration::WorkResultReceipt> receipts,
+    const sakuin::scheduler::WorkResultBatch &batch) {
+  return std::ranges::any_of(receipts, [&](const auto &receipt) {
+    return receipt.id == batch.id && receipt.kind == batch.kind;
+  });
+}
+
+sakuin::core::ByteBuffer
+legacy_receipt(const sakuin::scheduler::WorkResultBatch &batch) {
+  sakuin::core::ByteBuffer encoded;
+  encoded.reserve(21 + batch.payload.size());
+  for (const auto byte : batch.id.bytes)
+    encoded.push_back(static_cast<std::byte>(byte));
+  encoded.push_back(static_cast<std::byte>(batch.kind));
+  auto size = static_cast<std::uint32_t>(batch.payload.size());
+  for (unsigned shift = 0; shift < 32; shift += 8)
+    encoded.push_back(static_cast<std::byte>(size >> shift));
+  encoded.insert(encoded.end(), batch.payload.begin(), batch.payload.end());
+  return encoded;
+}
+
 } // namespace
 
 int main() {
@@ -48,6 +70,64 @@ int main() {
   const auto batch = integration::make_work_result_batch(
       scheduler::WorkResultKind::TorrentMetadataBatch, bytes("metadata"));
 
+  // Schema-v1 receipts stored the full payload. A current inbox must validate
+  // and compact them into the schema-v2 identity-only representation.
+  auto legacy_catalog = storage::LocalManifestCatalog::open(
+      directory.path / "legacy-manifests", blobs);
+  if (!legacy_catalog)
+    return 33;
+  auto legacy_writer = storage::RowV1SegmentWriter::create(
+      blobs, {.schema_id = integration::WorkResultReceiptSchema,
+              .schema_version = {1},
+              .encoding = storage::SegmentEncoding::RowV1,
+              .compression = storage::CompressionCodec::None,
+              .target_block_size = 64});
+  if (!legacy_writer || !(*legacy_writer)->append(legacy_receipt(batch)))
+    return 34;
+  auto legacy_segment = (*legacy_writer)->finalize();
+  if (!legacy_segment ||
+      !(*legacy_catalog)
+           ->publish((*legacy_catalog)->current_id(), {*legacy_segment}))
+    return 35;
+  integration::CanonicalWorkResultInbox legacy_inbox{blobs, **legacy_catalog};
+  auto legacy_scan = legacy_inbox.scan_receipts();
+  auto migrated =
+      legacy_inbox.compact({.minimum_segment_count = 64,
+                            .target_block_size = 64,
+                            .compression = storage::CompressionCodec::None});
+  auto migrated_pin = (*legacy_catalog)->pin_current();
+  if (!legacy_scan || legacy_scan->size() != 1 ||
+      !has_receipt(*legacy_scan, batch) || !migrated ||
+      migrated->segments_removed != 1 || !migrated_pin ||
+      (*migrated_pin)->manifest().segments.size() != 1 ||
+      (*migrated_pin)->manifest().segments.front().schema_version.value != 2)
+    return 36;
+
+  auto corrupt_catalog = storage::LocalManifestCatalog::open(
+      directory.path / "corrupt-manifests", blobs);
+  if (!corrupt_catalog)
+    return 37;
+  auto corrupt_writer = storage::RowV1SegmentWriter::create(
+      blobs, {.schema_id = integration::WorkResultReceiptSchema,
+              .schema_version = {1},
+              .encoding = storage::SegmentEncoding::RowV1,
+              .compression = storage::CompressionCodec::None,
+              .target_block_size = 64});
+  auto corrupt_encoded = legacy_receipt(batch);
+  corrupt_encoded.back() ^= std::byte{1};
+  if (!corrupt_writer || !(*corrupt_writer)->append(corrupt_encoded))
+    return 38;
+  auto corrupt_segment = (*corrupt_writer)->finalize();
+  if (!corrupt_segment ||
+      !(*corrupt_catalog)
+           ->publish((*corrupt_catalog)->current_id(), {*corrupt_segment}))
+    return 39;
+  integration::CanonicalWorkResultInbox corrupt_inbox{blobs, **corrupt_catalog};
+  auto corrupt_scan = corrupt_inbox.scan_receipts();
+  if (corrupt_scan ||
+      corrupt_scan.error().code != core::ErrorCode::ChecksumMismatch)
+    return 40;
+
   {
     auto catalog = storage::LocalManifestCatalog::open(catalog_path, blobs);
     if (!catalog)
@@ -59,9 +139,9 @@ int main() {
          .target_block_size = 64}};
     auto published = inbox.publish_result("worker-1", batch);
     auto duplicate = inbox.publish_result("worker-1", batch);
-    auto results = inbox.scan();
+    auto results = inbox.scan_receipts();
     if (!published || !*published || !duplicate || *duplicate || !results ||
-        results->size() != 1 || results->front() != batch)
+        results->size() != 1 || !has_receipt(*results, batch))
       return 2;
 
     auto invalid = batch;
@@ -77,9 +157,9 @@ int main() {
     return 4;
   integration::CanonicalWorkResultInbox reopened{blobs, **reopened_catalog};
   auto duplicate = reopened.publish_result("worker-1", batch);
-  auto results = reopened.scan();
+  auto results = reopened.scan_receipts();
   if (!duplicate || *duplicate || !results || results->size() != 1 ||
-      results->front() != batch ||
+      !has_receipt(*results, batch) ||
       (*reopened_catalog)->current_id().generation != 1)
     return 5;
 
@@ -158,8 +238,8 @@ int main() {
       (*observation_catalog)->current_id().generation != 1)
     return 16;
 
-  results = reopened.scan();
-  if (!results || results->size() != 2 || results->front() != batch ||
+  results = reopened.scan_receipts();
+  if (!results || results->size() != 2 || !has_receipt(*results, batch) ||
       (*reopened_catalog)->current_id().generation != 2)
     return 17;
 
@@ -245,9 +325,39 @@ int main() {
   if (oversized || oversized.error().code != core::ErrorCode::QuotaExceeded)
     return 27;
 
-  results = reopened.scan();
+  results = reopened.scan_receipts();
   if (!results || results->size() != 4 ||
-      results->back().kind != scheduler::WorkResultKind::TorrentMetadataBatch)
+      !std::ranges::any_of(*results, [](const auto &receipt) {
+        return receipt.kind == scheduler::WorkResultKind::TorrentMetadataBatch;
+      }))
     return 28;
+
+  auto receipt_compaction = restarted_receipts.compact(
+      {.minimum_segment_count = 2,
+       .target_block_size = 64,
+       .compression = storage::CompressionCodec::None});
+  if (!receipt_compaction || receipt_compaction->segments_removed != 4 ||
+      receipt_compaction->segments_created != 1 ||
+      receipt_compaction->bytes_after >= receipt_compaction->bytes_before)
+    return 29;
+  auto receipt_pin = (*reopened_catalog)->pin_current();
+  if (!receipt_pin || (*receipt_pin)->manifest().segments.size() != 1 ||
+      (*receipt_pin)->manifest().segments.front().schema_version.value != 2 ||
+      (*receipt_pin)->manifest().segments.front().record_count != 4)
+    return 30;
+  receipt_pin->reset();
+
+  integration::CanonicalWorkResultInbox compacted_receipts{blobs,
+                                                           **reopened_catalog};
+  auto replay_after_receipt_compaction =
+      compacted_receipts.publish_result("worker-1", batch);
+  auto compacted_scan = compacted_receipts.scan_receipts();
+  if (!replay_after_receipt_compaction || *replay_after_receipt_compaction ||
+      !compacted_scan || compacted_scan->size() != 4 ||
+      !has_receipt(*compacted_scan, batch))
+    return 31;
+  auto receipt_gc = (*reopened_catalog)->garbage_collect();
+  if (!receipt_gc || receipt_gc->objects_deleted < 4)
+    return 32;
   return 0;
 }

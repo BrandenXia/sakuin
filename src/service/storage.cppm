@@ -31,7 +31,7 @@ import sakuin.storage.format.segment;
 
 export namespace sakuin::service {
 
-enum class LocalDataset { Observations, Torrents };
+enum class LocalDataset { Observations, Torrents, WorkResults };
 
 // Owns the canonical local storage graph. Both DHT address-family runtimes may
 // share observations(); the buffered sink serializes publication to its
@@ -258,6 +258,8 @@ core::Result<storage::CompactionResult>
 LocalCanonicalStorage::compact(LocalDataset dataset) {
   if (dataset == LocalDataset::Torrents)
     return torrents_->compact(compaction_policy_);
+  if (dataset == LocalDataset::WorkResults)
+    return work_results_->compact(compaction_policy_);
   return storage::RowV1DatasetMaintenance::compact(
       blobs_, *observation_catalog_, compaction_policy_);
 }
@@ -287,16 +289,32 @@ LocalCanonicalStorage::retain_observations(core::Timestamp now) {
 
 core::Result<storage::VerifyResult>
 LocalCanonicalStorage::verify(LocalDataset dataset) {
-  auto &catalog = dataset == LocalDataset::Observations ? *observation_catalog_
-                                                        : *torrent_catalog_;
-  return storage::RowV1DatasetMaintenance::verify(blobs_, catalog);
+  switch (dataset) {
+  case LocalDataset::Observations:
+    return storage::RowV1DatasetMaintenance::verify(blobs_,
+                                                    *observation_catalog_);
+  case LocalDataset::Torrents:
+    return storage::RowV1DatasetMaintenance::verify(blobs_, *torrent_catalog_);
+  case LocalDataset::WorkResults:
+    return storage::RowV1DatasetMaintenance::verify(blobs_,
+                                                    *work_result_catalog_);
+  }
+  std::unreachable();
 }
 
 core::Result<storage::GcResult>
 LocalCanonicalStorage::garbage_collect(LocalDataset dataset) {
-  auto &catalog = dataset == LocalDataset::Observations ? *observation_catalog_
-                                                        : *torrent_catalog_;
-  return storage::RowV1DatasetMaintenance::garbage_collect(catalog);
+  switch (dataset) {
+  case LocalDataset::Observations:
+    return storage::RowV1DatasetMaintenance::garbage_collect(
+        *observation_catalog_);
+  case LocalDataset::Torrents:
+    return storage::RowV1DatasetMaintenance::garbage_collect(*torrent_catalog_);
+  case LocalDataset::WorkResults:
+    return storage::RowV1DatasetMaintenance::garbage_collect(
+        *work_result_catalog_);
+  }
+  std::unreachable();
 }
 
 } // namespace sakuin::service
