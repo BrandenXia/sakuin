@@ -90,6 +90,10 @@ int main() {
   status.snapshot.ipv4.cycles = 42;
   status.snapshot.ipv4.routing_nodes = 13;
   status.snapshot.ipv4.metadata_in_flight = 2;
+  status.snapshot.ipv4.observations_stored = 99;
+  status.snapshot.ipv4.bootstrap_complete = true;
+  status.snapshot.search_source_generation = 7;
+  status.snapshot.search_records_indexed = 21;
   std::size_t refreshes{};
   api::SearchHttpHandler handler{**authenticator,
                                  index,
@@ -215,6 +219,41 @@ int main() {
       body(*operator_status).contains("\"last_error\":[null]") ||
       !body(*operator_status).contains("\"state\":\"running\""))
     return 20;
+
+  auto reader_metrics = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/metrics",
+       .headers = {{"authorization", credential("reader", secret)}}});
+  if (!reader_metrics || reader_metrics->status != 403)
+    return 23;
+  auto operator_metrics = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/metrics",
+       .headers = {{"authorization", credential("operator", admin_secret)}}});
+  if (!operator_metrics || operator_metrics->status != 200 ||
+      operator_metrics->headers["content-type"] !=
+          "text/plain; version=0.0.4; charset=utf-8" ||
+      !body(*operator_metrics)
+           .contains("# TYPE sakuin_dht_cycles_total counter\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_cycles_total{family=\"ipv4\"} 42\n") ||
+      !body(*operator_metrics)
+           .contains(
+               "sakuin_dht_observations_stored_total{family=\"ipv4\"} 99\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_bootstrap_complete{family=\"ipv4\"} 1\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_search_source_generation 7\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_search_records_indexed_total 21\n"))
+    return 24;
+  auto metrics_with_post = handler.handle(
+      {.method = api::HttpMethod::Post,
+       .target = "/v1/metrics",
+       .headers = {{"authorization", credential("operator", admin_secret)}}});
+  if (!metrics_with_post || metrics_with_post->status != 405 ||
+      metrics_with_post->headers["allow"] != "GET")
+    return 25;
 
   auto refreshed = handler.handle(
       {.method = api::HttpMethod::Post,

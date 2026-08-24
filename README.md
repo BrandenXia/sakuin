@@ -68,6 +68,8 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
   "http://127.0.0.1:8080/v1/search?q=ubuntu"
 curl -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
   http://127.0.0.1:8080/v1/status
+curl -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
+  http://127.0.0.1:8080/metrics
 curl -X POST -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
   http://127.0.0.1:8080/v1/operations/search-refresh
 ```
@@ -76,6 +78,7 @@ Useful commands from a repository checkout:
 
 ```bash
 ./scripts/deploy.sh status YOUR_OPERATOR_TOKEN
+./scripts/deploy.sh metrics YOUR_OPERATOR_TOKEN
 ./scripts/deploy.sh logs
 ./scripts/deploy.sh verify
 ./scripts/deploy.sh key reader-2 search
@@ -94,6 +97,11 @@ Torznab clients can use `http://127.0.0.1:8080/api` as the indexer URL and the
 complete `sakuin_...` reader token as `apikey`. Sakuin currently advertises and
 implements generic `t=search`; results use magnet links because Sakuin indexes
 metadata rather than hosting `.torrent` files.
+
+Prometheus can scrape `/metrics` (or `/v1/metrics`) with the operator token as
+an `Authorization: Bearer` header. The endpoint reports service uptime, DHT
+activity and queues, search and duplicate generations, materialization, and
+storage-maintenance counters without including peer addresses or error text.
 
 ## Native usage
 

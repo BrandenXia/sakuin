@@ -192,12 +192,18 @@ normalization or fuzzy matching is introduced.
 
 ## API and credentials
 
-The HTTP service exposes health, detailed operator status, search, duplicate
-queries, and an authenticated search-refresh operation. Status snapshots
+The HTTP service exposes health, detailed operator status, Prometheus metrics,
+search, duplicate queries, and an authenticated search-refresh operation.
+Status snapshots
 aggregate DHT family cycles, bootstrap progress, datagram dispatch, derived
 index generations, materialization, and maintenance without exposing runtime
 or Asio types. Search and duplicate data is returned through domain views
 rather than exposing manifests or segment paths.
+
+`/metrics` and `/v1/metrics` serialize that same snapshot using the Prometheus
+text format. Both require an operator credential. Labels are bounded to service
+state and IP address family; peer addresses and error messages are omitted to
+avoid sensitive output and unbounded time-series cardinality.
 
 The `/api` compatibility route implements Torznab capabilities and generic
 search responses as UTF-8 XML/RSS. It publishes the `Other` category because

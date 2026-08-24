@@ -5,6 +5,7 @@ import std;
 import sakuin.api.auth;
 import sakuin.api.http;
 import sakuin.api.json;
+import sakuin.api.metrics;
 import sakuin.api.rate_limit;
 import sakuin.api.status;
 import sakuin.api.torznab;
@@ -459,13 +460,14 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
   const bool duplicate_route =
       path == duplicates_path || path.starts_with("/v1/duplicates/");
   const bool status_route = path == "/v1/status";
+  const bool metrics_route = path == "/metrics" || path == "/v1/metrics";
   const bool refresh_route = path == "/v1/operations/search-refresh";
   if (path != "/v1/search" && !duplicate_route && !status_route &&
-      !refresh_route)
+      !metrics_route && !refresh_route)
     return error_response(404, "not_found", "Route not found");
   if (duplicate_route && !duplicates_)
     return error_response(404, "not_found", "Duplicate index is disabled");
-  if (status_route && !status_)
+  if ((status_route || metrics_route) && !status_)
     return error_response(404, "not_found", "Detailed status is unavailable");
   if (refresh_route && !refresh_search_)
     return error_response(404, "not_found",
@@ -487,7 +489,8 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
   if (!*principal)
     return unauthorized();
   const auto required_permission =
-      status_route || refresh_route ? Permission::Admin : Permission::Search;
+      status_route || metrics_route || refresh_route ? Permission::Admin
+                                                     : Permission::Search;
   if (!(**principal).allows(required_permission))
     return forbidden(required_permission == Permission::Admin
                          ? "Admin permission is required"
@@ -507,6 +510,17 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
     if (!body)
       return std::unexpected(body.error());
     return json_response(200, std::move(*body));
+  }
+  if (metrics_route) {
+    auto body = prometheus_metrics(status_->status());
+    if (!body)
+      return std::unexpected(body.error());
+    return HttpResponse{
+        .status = 200,
+        .headers = {{"content-type",
+                     "text/plain; version=0.0.4; charset=utf-8"},
+                    {"cache-control", "no-store"}},
+        .body = std::move(*body)};
   }
   if (refresh_route) {
     auto refreshed = refresh_search_();
