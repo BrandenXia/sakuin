@@ -31,6 +31,11 @@ enabled = true
 [indexing.duplicates]
 enabled = true
 
+[indexing.classification]
+enabled = true
+adult_detection_enabled = true
+adult_content_policy = "include"
+
 [api]
 enabled = true
 credential_store_directory = "/var/lib/sakuin/operational/api"

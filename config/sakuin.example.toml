@@ -89,6 +89,16 @@ interval_ms = 60000
 enabled = true
 interval_ms = 300000
 
+[indexing.classification]
+enabled = true
+# Detection only assigns a label; it does not hide results. Visibility remains
+# an explicit include/exclude/only policy and defaults to including everything.
+adult_detection_enabled = true
+adult_content_policy = "include"
+maximum_files_to_inspect = 100000
+maximum_path_bytes = 4096
+maximum_tokens = 16384
+
 [api]
 enabled = true
 credential_store_directory = "./data/operational/api"

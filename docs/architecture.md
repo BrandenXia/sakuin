@@ -231,6 +231,17 @@ classification is not yet available, and returns magnet links because the
 canonical store retains decoded torrent metadata rather than downloadable
 `.torrent` payloads.
 
+Classification is a deterministic, rebuildable projection over torrent names,
+file paths, sizes, and layout. It records a semantic content kind, confidence,
+bounded evidence identifiers, and independent labels such as Anime and Adult;
+none of these derived values mutate canonical torrent metadata. Records without
+a fetched file list remain explicitly awaiting metadata rather than being
+treated as unknown. Adult detection defaults on, while search visibility is a
+separate operator choice (`include`, `exclude`, or `only`) that defaults to
+including all content. Disabling detection suppresses only the label and never
+filters a torrent. The rules inspect bounded untrusted strings without opening
+paths, extracting archives, or performing network lookups.
+
 API credentials live in a separate operational store. The CLI generates the
 secret once and persists a salted verifier, owner-only pepper, and permission
 set. Writes are locked and atomically replaced. Credentials can be created,

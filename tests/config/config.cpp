@@ -83,6 +83,14 @@ interval_ms = 30000
 enabled = true
 interval_ms = 120000
 
+[indexing.classification]
+enabled = true
+adult_detection_enabled = true
+adult_content_policy = "only"
+maximum_files_to_inspect = 50000
+maximum_path_bytes = 2048
+maximum_tokens = 8192
+
 [api]
 credential_store_directory = "/srv/sakuin/api-credentials"
 listen_address = "::1"
@@ -181,6 +189,8 @@ tls_server_name = "coordinator.internal"
                 std::string{"15000"}},
       std::pair{std::string{"SAKUIN_DUPLICATE_INDEX_INTERVAL_MS"},
                 std::string{"60000"}},
+      std::pair{std::string{"SAKUIN_CLASSIFICATION_ADULT_CONTENT_POLICY"},
+                std::string{"exclude"}},
       std::pair{std::string{"SAKUIN_DISTRIBUTED_MAXIMUM_WORK_ITEMS"},
                 std::string{"16384"}},
       std::pair{std::string{"SAKUIN_DISTRIBUTED_COORDINATOR_LISTEN_PORT"},
@@ -270,6 +280,13 @@ tls_server_name = "coordinator.internal"
       loaded.storage.materialization.interval != std::chrono::seconds{15} ||
       !loaded.indexing.duplicates.enabled ||
       loaded.indexing.duplicates.interval != std::chrono::minutes{1} ||
+      !loaded.indexing.classification.enabled ||
+      !loaded.indexing.classification.adult_detection_enabled ||
+      loaded.indexing.classification.adult_content_policy !=
+          config::AdultContentPolicy::Exclude ||
+      loaded.indexing.classification.maximum_files_to_inspect != 50'000 ||
+      loaded.indexing.classification.maximum_path_bytes != 2'048 ||
+      loaded.indexing.classification.maximum_tokens != 8'192 ||
       loaded.api.credential_store_directory !=
           "/var/lib/sakuin/api-credentials" ||
       loaded.api.listen_address != "::1" || loaded.api.listen_port != 9001 ||
