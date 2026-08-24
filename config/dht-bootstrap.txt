@@ -1,0 +1,5 @@
+# Public BitTorrent DHT bootstrap routers used only when no contacts are
+# supplied through TOML, SAKUIN_DHT_BOOTSTRAP, or the command line.
+router.bittorrent.com:6881
+router.utorrent.com:6881
+dht.transmissionbt.com:6881

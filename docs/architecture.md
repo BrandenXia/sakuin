@@ -164,9 +164,17 @@ DHT packet
   → authenticated HTTP query
 ```
 
-A fresh public node needs at least one trusted contact before it can bootstrap
-proactively. Sakuin deliberately does not hard-code a public router; an empty
-public bootstrap list produces a warning and permits passive discovery.
+A fresh public node needs at least one contact before it can bootstrap
+proactively. Explicit TOML, environment, and command-line contacts take
+precedence. When they are absent, Sakuin may load one `host:port` entry per
+line from a standalone bootstrap file; release bundles provide an initial
+public-router list that operators can replace. If no list is available, the
+node warns and permits passive discovery.
+
+DNS absence is evaluated per address family. An IPv4-only router therefore
+does not prevent a dual-stack node from starting its IPv6 family with other
+contacts, while startup still fails when none of the configured contacts
+resolve for any enabled family.
 
 ## Search and duplicate indexes
 
@@ -184,9 +192,18 @@ normalization or fuzzy matching is introduced.
 
 ## API and credentials
 
-The HTTP service exposes health, search, and duplicate queries. Search and
-duplicate data is returned through domain views rather than exposing manifests
-or segment paths.
+The HTTP service exposes health, detailed operator status, search, duplicate
+queries, and an authenticated search-refresh operation. Status snapshots
+aggregate DHT family cycles, bootstrap progress, datagram dispatch, derived
+index generations, materialization, and maintenance without exposing runtime
+or Asio types. Search and duplicate data is returned through domain views
+rather than exposing manifests or segment paths.
+
+The `/api` compatibility route implements Torznab capabilities and generic
+search responses as UTF-8 XML/RSS. It publishes the `Other` category because
+classification is not yet available, and returns magnet links because the
+canonical store retains decoded torrent metadata rather than downloadable
+`.torrent` payloads.
 
 API credentials live in a separate operational store. The CLI generates the
 secret once and persists a salted verifier, owner-only pepper, and permission
@@ -247,6 +264,7 @@ a release asset named `sakuin-linux-amd64.tar.gz` or
 bin/sakuin
 bin/sakuin-api-key
 lib/                    # non-system shared libraries, when required
+share/sakuin/dht-bootstrap.txt
 ```
 
 The adjacent `.sha256` release asset is mandatory. `scripts/package-linux.sh`
@@ -292,4 +310,5 @@ xmake run sakuin-storage-benchmark 100000 65536
 - Coordinator recovery is durable on one host but not replicated.
 - Duplicate matching is deterministic metadata fingerprinting, not semantic or
   fuzzy similarity.
-- There is currently no browser UI, media classifier, or Torznab integration.
+- There is currently no browser UI or media classifier. Torznab support is
+  limited to generic search until classification is available.

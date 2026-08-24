@@ -183,6 +183,8 @@ resolve_dht_bootstrap(std::span<const std::string> configured,
     if (!host)
       return std::unexpected(host.error());
     auto endpoints = resolver.resolve(host->host, host->port, address_family);
+    if (!endpoints && endpoints.error().code == core::ErrorCode::NotFound)
+      continue;
     if (!endpoints)
       return std::unexpected(endpoints.error());
     for (auto &endpoint : *endpoints)

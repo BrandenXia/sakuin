@@ -31,6 +31,13 @@ struct DhtRuntimePoll {
   std::size_t observations_stored{};
   std::size_t metadata_candidates_accepted{};
   std::size_t routing_probes_accepted{};
+  // Point-in-time gauges captured on the DHT owner thread.
+  std::size_t routing_nodes{};
+  std::size_t outstanding_queries{};
+  std::size_t pending_actions{};
+  std::size_t metadata_queued{};
+  std::size_t metadata_in_flight{};
+  std::size_t metadata_pending_storage{};
   // Earliest owner-thread deadline after this poll. An empty value means the
   // owner may sleep until a callback explicitly wakes it.
   std::optional<core::Timestamp> next_wakeup;
@@ -443,6 +450,16 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
     include_wakeup(result.bootstrap->next_wakeup);
   if (result.routing)
     include_wakeup(result.routing->next_wakeup);
+  result.pending_actions = pending_count_.load(std::memory_order_acquire);
+  if (node_) {
+    result.routing_nodes = node_->routing_table().size();
+    result.outstanding_queries = node_->outstanding_queries();
+  }
+  if (metadata_) {
+    result.metadata_queued = metadata_->queued();
+    result.metadata_in_flight = metadata_->in_flight();
+    result.metadata_pending_storage = metadata_->pending_storage();
+  }
   return result;
 }
 

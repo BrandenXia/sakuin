@@ -3,6 +3,7 @@ export module sakuin.service.local;
 import std;
 
 import sakuin.config.model;
+import sakuin.api.status;
 import sakuin.core.ids;
 import sakuin.core.result;
 import sakuin.index.duplicates;
@@ -73,7 +74,8 @@ public:
          StorageMaintenanceObserver *maintenance_observer = nullptr,
          MaterializationObserver *materialization_observer = nullptr,
          DuplicateIndexObserver *duplicate_index_observer = nullptr,
-         DistributedWorkServiceObserver *distributed_observer = nullptr);
+         DistributedWorkServiceObserver *distributed_observer = nullptr,
+         api::StatusProvider *status = nullptr);
 
   ~LocalSakuinService();
 
@@ -217,14 +219,16 @@ core::Result<void> LocalAsioDhtService::stop() {
   return storage_->flush();
 }
 
-core::Result<std::unique_ptr<LocalSakuinService>> LocalSakuinService::create(
-    const config::AppConfig &configuration, DhtRuntimeObserver &dht_observer,
-    ApiServiceObserver &api_observer,
-    DhtRuntimeExternalAddresses external_addresses,
-    StorageMaintenanceObserver *maintenance_observer,
-    MaterializationObserver *materialization_observer,
-    DuplicateIndexObserver *duplicate_index_observer,
-    DistributedWorkServiceObserver *distributed_observer) {
+core::Result<std::unique_ptr<LocalSakuinService>>
+LocalSakuinService::create(const config::AppConfig &configuration,
+                           DhtRuntimeObserver &dht_observer,
+                           ApiServiceObserver &api_observer,
+                           DhtRuntimeExternalAddresses external_addresses,
+                           StorageMaintenanceObserver *maintenance_observer,
+                           MaterializationObserver *materialization_observer,
+                           DuplicateIndexObserver *duplicate_index_observer,
+                           DistributedWorkServiceObserver *distributed_observer,
+                           api::StatusProvider *status) {
   if (auto valid = config::validate(configuration); !valid)
     return std::unexpected(valid.error());
   auto storage = LocalCanonicalStorage::open(configuration.storage);
@@ -246,7 +250,7 @@ core::Result<std::unique_ptr<LocalSakuinService>> LocalSakuinService::create(
   if (configuration.api.enabled) {
     auto created = LocalApiService::create(
         configuration.api, (*storage)->torrents(), api_observer,
-        (*storage)->root() / "derived" / "search", duplicates.get());
+        (*storage)->root() / "derived" / "search", duplicates.get(), status);
     if (!created)
       return std::unexpected(created.error());
     api = std::move(*created);

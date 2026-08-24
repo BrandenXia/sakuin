@@ -33,19 +33,9 @@ env_value() {
   printf '%s' "${value}"
 }
 
-require_bootstrap() {
-  local bootstrap="${SAKUIN_DHT_BOOTSTRAP:-}"
-  if [[ -z "${bootstrap}" ]]; then
-    bootstrap="$(env_value SAKUIN_DHT_BOOTSTRAP)"
-  fi
-  if [[ -z "${bootstrap}" && "${SAKUIN_ALLOW_PASSIVE_DHT:-0}" != "1" ]]; then
-    fail "set SAKUIN_DHT_BOOTSTRAP in .env to trusted host:port contacts (or set SAKUIN_ALLOW_PASSIVE_DHT=1)"
-  fi
-}
-
 credential_command() {
   "${compose[@]}" run --rm --no-deps --entrypoint sakuin-api-key sakuin \
-    --state-dir="${credential_directory}" "$@"
+    --state-dir "${credential_directory}" "$@"
 }
 
 initialize_credentials() {
@@ -57,6 +47,10 @@ initialize_credentials() {
   if ! grep -q '^reader[[:space:]]' <<<"${listing}"; then
     printf 'One-time reader API token:\n'
     credential_command create --id reader --permissions search
+  fi
+  if ! grep -q '^operator[[:space:]]' <<<"${listing}"; then
+    printf 'One-time operator API token:\n'
+    credential_command create --id operator --permissions admin
   fi
 }
 
@@ -76,7 +70,6 @@ wait_for_health() {
 deploy() {
   local api_port="${SAKUIN_API_PORT:-}"
   local release_version="${SAKUIN_VERSION:-}"
-  require_bootstrap
   "${compose[@]}" config --quiet
   if [[ -z "${release_version}" ]]; then
     release_version="$(env_value SAKUIN_VERSION)"
@@ -112,6 +105,12 @@ logs)
   ;;
 status)
   "${compose[@]}" ps
+  if [[ -n "${2:-}" ]]; then
+    "${compose[@]}" exec -T sakuin curl --fail --silent --show-error \
+      -H "Authorization: Bearer ${2}" \
+      http://127.0.0.1:8080/v1/status
+    printf '\n'
+  fi
   ;;
 verify)
   "${compose[@]}" exec -T sakuin sakuin admin verify \
@@ -125,6 +124,6 @@ key)
   "${compose[@]}" kill --signal SIGHUP sakuin >/dev/null 2>&1 || true
   ;;
 *)
-  fail "usage: $0 [up|down|logs|status|verify|key KEY_ID [PERMISSIONS]]"
+  fail "usage: $0 [up|down|logs|status [OPERATOR_TOKEN]|verify|key KEY_ID [PERMISSIONS]]"
   ;;
 esac

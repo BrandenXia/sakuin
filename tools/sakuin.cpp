@@ -4,6 +4,7 @@
 import std;
 
 import sakuin.config;
+import sakuin.api.status;
 import sakuin.core;
 import sakuin.dht.krpc;
 import sakuin.integration.dht_worker;
@@ -52,13 +53,79 @@ class Observer final : public sakuin::service::DhtRuntimeObserver,
                        public sakuin::service::StorageMaintenanceObserver,
                        public sakuin::service::MaterializationObserver,
                        public sakuin::service::DuplicateIndexObserver,
-                       public sakuin::service::DistributedWorkServiceObserver {
+                       public sakuin::service::DistributedWorkServiceObserver,
+                       public sakuin::api::StatusProvider {
 public:
-  void on_family_cycle(sakuin::runtime::AddressFamily,
-                       sakuin::integration::DhtRuntimeCycle) override {}
+  explicit Observer(const sakuin::config::AppConfig &configuration) {
+    snapshot_.started_at_ms = now_ms();
+    started_steady_ = std::chrono::steady_clock::now();
+    snapshot_.ipv4.enabled = configuration.network.enable_ipv4;
+    snapshot_.ipv6.enabled = configuration.network.enable_ipv6;
+  }
+
+  sakuin::api::ServiceStatus status() const override {
+    std::lock_guard lock{mutex_};
+    auto result = snapshot_;
+    result.uptime_ms = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started_steady_)
+            .count());
+    return result;
+  }
+
+  void mark_started() {
+    std::lock_guard lock{mutex_};
+    snapshot_.started_at_ms = now_ms();
+    started_steady_ = std::chrono::steady_clock::now();
+    snapshot_.state = "running";
+    snapshot_.ipv4.running = snapshot_.ipv4.enabled;
+    snapshot_.ipv6.running = snapshot_.ipv6.enabled;
+  }
+
+  void mark_stopped() {
+    std::lock_guard lock{mutex_};
+    snapshot_.state = "stopped";
+    snapshot_.ipv4.running = false;
+    snapshot_.ipv6.running = false;
+  }
+
+  void on_family_cycle(sakuin::runtime::AddressFamily family,
+                       sakuin::integration::DhtRuntimeCycle cycle) override {
+    std::lock_guard lock{mutex_};
+    auto &status = family_status(family);
+    ++status.cycles;
+    status.running = true;
+    status.last_cycle_ms = now_ms();
+    status.observations_stored += cycle.poll.observations_stored;
+    status.metadata_candidates_accepted +=
+        cycle.poll.metadata_candidates_accepted;
+    status.routing_probes_accepted += cycle.poll.routing_probes_accepted;
+    status.queries_expired += cycle.poll.queries_expired;
+    status.datagrams_attempted += cycle.dispatch.attempted;
+    status.datagrams_accepted += cycle.dispatch.accepted;
+    status.datagrams_failed += cycle.dispatch.failed;
+    status.routing_nodes = cycle.poll.routing_nodes;
+    status.outstanding_queries = cycle.poll.outstanding_queries;
+    status.pending_actions = cycle.poll.pending_actions;
+    status.metadata_queued = cycle.poll.metadata_queued;
+    status.metadata_in_flight = cycle.poll.metadata_in_flight;
+    status.metadata_pending_storage = cycle.poll.metadata_pending_storage;
+    if (cycle.poll.bootstrap) {
+      status.bootstrap_candidates = cycle.poll.bootstrap->known_candidates;
+      status.bootstrap_complete = cycle.poll.bootstrap->complete;
+    }
+  }
 
   void on_family_error(sakuin::runtime::AddressFamily family,
                        sakuin::core::Error error) override {
+    {
+      std::lock_guard lock{mutex_};
+      auto &status = family_status(family);
+      ++status.errors;
+      status.last_error_ms = now_ms();
+      status.last_error = error.message;
+      snapshot_.last_service_error = error.message;
+    }
     spdlog::error("DHT {}: {}", family_name(family), error.message);
   }
 
@@ -72,11 +139,17 @@ public:
   }
 
   void on_api_error(sakuin::core::Error error) override {
+    record_service_error(error.message);
     spdlog::error("API: {}", error.message);
   }
 
   void on_search_index_refreshed(
       sakuin::search::SearchRebuildResult result) override {
+    {
+      std::lock_guard lock{mutex_};
+      snapshot_.search_source_generation = result.source_generation;
+      snapshot_.search_records_indexed += result.records_indexed;
+    }
     if (result.records_indexed != 0)
       spdlog::info("Search index advanced to generation {} using {} records",
                    result.source_generation, result.records_indexed);
@@ -84,6 +157,10 @@ public:
 
   void
   on_maintenance_completed(sakuin::service::MaintenanceEvent event) override {
+    {
+      std::lock_guard lock{mutex_};
+      ++snapshot_.maintenance_operations;
+    }
     const auto dataset =
         event.dataset == sakuin::service::LocalDataset::Observations
             ? "observations"
@@ -118,6 +195,11 @@ public:
   void on_maintenance_error(sakuin::service::LocalDataset dataset,
                             sakuin::service::MaintenanceOperation operation,
                             sakuin::core::Error error) override {
+    {
+      std::lock_guard lock{mutex_};
+      ++snapshot_.maintenance_errors;
+      snapshot_.last_service_error = error.message;
+    }
     const auto dataset_name =
         dataset == sakuin::service::LocalDataset::Observations ? "observations"
                                                                : "torrents";
@@ -144,6 +226,11 @@ public:
 
   void on_materialization_completed(
       sakuin::index::IncrementalMaterializationResult result) override {
+    {
+      std::lock_guard lock{mutex_};
+      snapshot_.materialized_observations += result.observations_read;
+      snapshot_.materialized_torrent_updates += result.torrents_updated;
+    }
     if (result.observations_read != 0)
       spdlog::info(
           "Materialized {} observations into {} torrent updates; source "
@@ -153,6 +240,7 @@ public:
   }
 
   void on_materialization_error(sakuin::core::Error error) override {
+    record_service_error(error.message);
     if (error.code == sakuin::core::ErrorCode::Conflict)
       spdlog::warn("Torrent materialization deferred: {}", error.message);
     else
@@ -161,6 +249,11 @@ public:
 
   void on_duplicate_index_synchronized(
       sakuin::index::DuplicateSynchronizationResult result) override {
+    {
+      std::lock_guard lock{mutex_};
+      snapshot_.duplicate_source_generation = result.source_generation;
+      snapshot_.duplicate_records_processed += result.records_processed;
+    }
     if (result.records_processed == 0)
       return;
     spdlog::info("Duplicate index advanced to generation {} using {} records{}",
@@ -169,6 +262,7 @@ public:
   }
 
   void on_duplicate_index_error(sakuin::core::Error error) override {
+    record_service_error(error.message);
     if (error.code == sakuin::core::ErrorCode::Conflict)
       spdlog::warn("Duplicate-index refresh deferred: {}", error.message);
     else
@@ -178,11 +272,34 @@ public:
   void on_distributed_work_error(
       std::optional<sakuin::runtime::StreamSessionId> session,
       sakuin::core::Error error) override {
+    record_service_error(error.message);
     if (session)
       spdlog::warn("Distributed work session {}: {}", *session, error.message);
     else
       spdlog::error("Distributed coordinator: {}", error.message);
   }
+
+private:
+  static std::int64_t now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+  }
+
+  sakuin::api::DhtFamilyStatus &
+  family_status(sakuin::runtime::AddressFamily family) {
+    return family == sakuin::runtime::AddressFamily::IPv4 ? snapshot_.ipv4
+                                                          : snapshot_.ipv6;
+  }
+
+  void record_service_error(std::string message) {
+    std::lock_guard lock{mutex_};
+    snapshot_.last_service_error = std::move(message);
+  }
+
+  mutable std::mutex mutex_;
+  sakuin::api::ServiceStatus snapshot_;
+  std::chrono::steady_clock::time_point started_steady_;
 };
 
 std::vector<std::pair<std::string, std::string>> environment_values() {
@@ -266,9 +383,30 @@ int main(int argc, char **argv) {
   overrides.reserve(arguments->configuration_overrides.size());
   for (const auto &argument : arguments->configuration_overrides)
     overrides.push_back(argument);
-  auto configuration = config::load({.toml_file = arguments->configuration_file,
-                                     .environment = environment,
-                                     .command_line = overrides});
+  std::vector<std::filesystem::path> bootstrap_fallback_files;
+  if (arguments->configuration_file)
+    bootstrap_fallback_files.push_back(
+        arguments->configuration_file->parent_path() / "dht-bootstrap.txt");
+  std::error_code executable_error;
+  std::filesystem::path executable;
+#if defined(__linux__)
+  executable =
+      std::filesystem::read_symlink("/proc/self/exe", executable_error);
+#endif
+  if (executable_error || executable.empty()) {
+    executable_error.clear();
+    executable = std::filesystem::weakly_canonical(argv[0], executable_error);
+  }
+  if (!executable_error)
+    bootstrap_fallback_files.push_back(executable.parent_path().parent_path() /
+                                       "share" / "sakuin" /
+                                       "dht-bootstrap.txt");
+  bootstrap_fallback_files.emplace_back("config/dht-bootstrap.txt");
+  auto configuration =
+      config::load({.toml_file = arguments->configuration_file,
+                    .environment = environment,
+                    .command_line = overrides,
+                    .bootstrap_fallback_files = bootstrap_fallback_files});
   if (!configuration)
     return fail(configuration.error().message, 2);
   if (arguments->admin_command)
@@ -280,7 +418,7 @@ int main(int argc, char **argv) {
         "No public DHT bootstrap contacts are configured; a fresh node may "
         "remain isolated until it learns a contact from inbound traffic");
 
-  Observer observer;
+  Observer observer{*configuration};
   if (std::signal(SIGINT, handle_signal) == SIG_ERR ||
       std::signal(SIGTERM, handle_signal) == SIG_ERR ||
       std::signal(SIGHUP, handle_signal) == SIG_ERR)
@@ -314,11 +452,12 @@ int main(int argc, char **argv) {
   }
   auto service = service::LocalSakuinService::create(
       *configuration, observer, observer, {}, &observer, &observer, &observer,
-      &observer);
+      &observer, &observer);
   if (!service)
     return fail(service.error().message);
   if (auto started = (*service)->start(); !started)
     return fail(started.error().message);
+  observer.mark_started();
 
   if (const auto endpoint = (*service)->api_endpoint())
     spdlog::info("API listening on port {}", endpoint->port);
@@ -357,6 +496,7 @@ int main(int argc, char **argv) {
 
   if (auto stopped = (*service)->stop(); !stopped)
     return fail(stopped.error().message);
+  observer.mark_stopped();
   spdlog::info("Sakuin stopped");
   return 0;
 }

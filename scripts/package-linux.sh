@@ -43,9 +43,12 @@ done
 
 staging_directory="$(mktemp -d)"
 trap 'rm -rf -- "${staging_directory}"' EXIT
-install -d "${staging_directory}/bin" "${staging_directory}/lib" "${output_directory}"
+install -d "${staging_directory}/bin" "${staging_directory}/lib" \
+  "${staging_directory}/share/sakuin" "${output_directory}"
 install -m 0755 "${binary_directory}/sakuin" \
   "${binary_directory}/sakuin-api-key" "${staging_directory}/bin/"
+install -m 0644 "${project_directory}/config/dht-bootstrap.txt" \
+  "${staging_directory}/share/sakuin/"
 
 while IFS= read -r dependency; do
   [[ -n "${dependency}" ]] || continue

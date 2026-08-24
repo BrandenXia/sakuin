@@ -6,6 +6,8 @@ import sakuin.api.auth;
 import sakuin.api.http;
 import sakuin.api.json;
 import sakuin.api.rate_limit;
+import sakuin.api.status;
+import sakuin.api.torznab;
 import sakuin.core.bytes;
 import sakuin.core.ids;
 import sakuin.core.random;
@@ -21,9 +23,12 @@ public:
   SearchHttpHandler(ApiKeyAuthenticator &authenticator,
                     search::SearchIndex &index,
                     ApiRequestGovernor *governor = nullptr,
-                    index::DuplicateIndexView *duplicates = nullptr)
+                    index::DuplicateIndexView *duplicates = nullptr,
+                    StatusProvider *status = nullptr,
+                    std::function<core::Result<void>()> refresh_search = {})
       : authenticator_(&authenticator), index_(&index), governor_(governor),
-        duplicates_(duplicates) {}
+        duplicates_(duplicates), status_(status),
+        refresh_search_(std::move(refresh_search)) {}
 
   core::Result<HttpResponse> handle(HttpRequest request) override;
 
@@ -32,6 +37,8 @@ private:
   search::SearchIndex *index_;
   ApiRequestGovernor *governor_;
   index::DuplicateIndexView *duplicates_;
+  StatusProvider *status_;
+  std::function<core::Result<void>()> refresh_search_;
 };
 
 } // namespace sakuin::api
@@ -55,11 +62,13 @@ core::Result<HttpResponse> error_response(unsigned status,
   return json_response(status, std::move(*body));
 }
 
-core::Result<HttpResponse> method_not_allowed() {
+core::Result<HttpResponse>
+method_not_allowed(std::string_view allowed_method = "GET") {
   auto response =
-      error_response(405, "method_not_allowed", "Only GET is supported");
+      error_response(405, "method_not_allowed",
+                     "Only " + std::string{allowed_method} + " is supported");
   if (response)
-    response->headers["allow"] = "GET";
+    response->headers["allow"] = std::string{allowed_method};
   return response;
 }
 
@@ -69,6 +78,10 @@ core::Result<HttpResponse> unauthorized() {
   if (response)
     response->headers["www-authenticate"] = "Bearer realm=\"sakuin\"";
   return response;
+}
+
+core::Result<HttpResponse> forbidden(std::string_view message) {
+  return error_response(403, "forbidden", message);
 }
 
 core::Result<HttpResponse> rate_limited(core::Duration retry_after) {
@@ -111,17 +124,17 @@ private:
   ApiKeySecret *secret_;
 };
 
-std::optional<Credential> credential(std::string_view header) {
-  constexpr std::string_view prefix{"Bearer sakuin_"};
-  if (!header.starts_with(prefix))
+std::optional<Credential> credential_token(std::string_view token) {
+  constexpr std::string_view prefix{"sakuin_"};
+  if (!token.starts_with(prefix))
     return std::nullopt;
-  header.remove_prefix(prefix.size());
-  const auto separator = header.rfind('_');
+  token.remove_prefix(prefix.size());
+  const auto separator = token.rfind('_');
   if (separator == std::string_view::npos || separator == 0 ||
-      header.size() - separator - 1 != 64)
+      token.size() - separator - 1 != 64)
     return std::nullopt;
-  Credential result{.key_id = std::string{header.substr(0, separator)}};
-  const auto encoded = header.substr(separator + 1);
+  Credential result{.key_id = std::string{token.substr(0, separator)}};
+  const auto encoded = token.substr(separator + 1);
   for (std::size_t index = 0; index < result.secret.bytes.size(); ++index) {
     const auto high = hex_digit(encoded[index * 2]);
     const auto low = hex_digit(encoded[index * 2 + 1]);
@@ -132,9 +145,27 @@ std::optional<Credential> credential(std::string_view header) {
   return result;
 }
 
+std::optional<Credential> credential(std::string_view header) {
+  constexpr std::string_view prefix{"Bearer "};
+  if (!header.starts_with(prefix))
+    return std::nullopt;
+  header.remove_prefix(prefix.size());
+  return credential_token(header);
+}
+
 core::ByteView secret_view(const ApiKeySecret &secret) {
   return {reinterpret_cast<const std::byte *>(secret.bytes.data()),
           secret.bytes.size()};
+}
+
+core::Result<std::optional<ApiPrincipal>>
+authenticate(ApiKeyAuthenticator &authenticator,
+             std::optional<Credential> parsed) {
+  if (!parsed)
+    return std::optional<ApiPrincipal>{};
+  CredentialCleaner cleaner{parsed->secret};
+  return authenticator.authenticate(parsed->key_id,
+                                    secret_view(parsed->secret));
 }
 
 core::Result<std::string> percent_decode(std::string_view value) {
@@ -371,48 +402,120 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
       query_start == std::string::npos
           ? std::string_view{}
           : std::string_view{request.target}.substr(query_start + 1);
-  if (request.method != HttpMethod::Get)
-    return method_not_allowed();
-  if (!request.body.empty())
-    return error_response(400, "invalid_request",
-                          "GET requests must not contain a body");
   if (path == "/v1/health") {
+    if (request.method != HttpMethod::Get)
+      return method_not_allowed();
+    if (!request.body.empty())
+      return error_response(400, "invalid_request",
+                            "GET requests must not contain a body");
     auto body = json_health();
     if (!body)
       return std::unexpected(body.error());
     return json_response(200, std::move(*body));
   }
+
+  const bool torznab_route = path == "/api" || path == "/torznab/api";
+  if (torznab_route) {
+    if (request.method != HttpMethod::Get)
+      return torznab_error("201", "Torznab only supports GET requests");
+    if (!request.body.empty())
+      return torznab_error("201", "GET requests must not contain a body");
+    auto parsed = parse_torznab_request(query);
+    if (!parsed)
+      return torznab_error("201", parsed.error().message);
+    if (parsed->function == TorznabFunction::Capabilities)
+      return torznab_capabilities();
+    if (parsed->function == TorznabFunction::Unsupported)
+      return torznab_error("203", "Function not available");
+    auto principal =
+        authenticate(*authenticator_, credential_token(parsed->api_key));
+    if (!principal)
+      return std::unexpected(principal.error());
+    if (!*principal)
+      return torznab_error("100", "Incorrect user credentials");
+    if (!(**principal).allows(Permission::Search))
+      return torznab_error("100", "Search permission is required");
+    if (governor_) {
+      auto admission = governor_->admit((**principal).key_id,
+                                        std::chrono::system_clock::now());
+      if (!admission)
+        return std::unexpected(admission.error());
+      if (!admission->allowed)
+        return torznab_error("910", "API request limit exceeded");
+    }
+    search::SearchResult result;
+    if (parsed->category_matches) {
+      auto found = index_->search(parsed->query);
+      if (!found)
+        return torznab_error("900", found.error().message);
+      result = std::move(*found);
+    } else {
+      result.source_generation = index_->source_generation();
+    }
+    return torznab_search_response(result, parsed->query.offset);
+  }
+
   constexpr std::string_view duplicates_path{"/v1/duplicates"};
   const bool duplicate_route =
       path == duplicates_path || path.starts_with("/v1/duplicates/");
-  if (path != "/v1/search" && !duplicate_route)
+  const bool status_route = path == "/v1/status";
+  const bool refresh_route = path == "/v1/operations/search-refresh";
+  if (path != "/v1/search" && !duplicate_route && !status_route &&
+      !refresh_route)
     return error_response(404, "not_found", "Route not found");
   if (duplicate_route && !duplicates_)
     return error_response(404, "not_found", "Duplicate index is disabled");
+  if (status_route && !status_)
+    return error_response(404, "not_found", "Detailed status is unavailable");
+  if (refresh_route && !refresh_search_)
+    return error_response(404, "not_found",
+                          "Search refresh operation is unavailable");
+  if ((refresh_route && request.method != HttpMethod::Post) ||
+      (!refresh_route && request.method != HttpMethod::Get))
+    return method_not_allowed(refresh_route ? "POST" : "GET");
+  if (!request.body.empty())
+    return error_response(400, "invalid_request",
+                          "This endpoint does not accept a request body");
 
   const auto authorization = request.headers.find("authorization");
   auto parsed = authorization == request.headers.end()
                     ? std::optional<Credential>{}
                     : credential(authorization->second);
-  if (!parsed)
-    return unauthorized();
-  CredentialCleaner credential_cleaner{parsed->secret};
-  auto principal =
-      authenticator_->authenticate(parsed->key_id, secret_view(parsed->secret));
+  auto principal = authenticate(*authenticator_, std::move(parsed));
   if (!principal)
     return std::unexpected(principal.error());
   if (!*principal)
     return unauthorized();
-  if (!(*principal)->allows(Permission::Search))
-    return error_response(403, "forbidden", "Search permission is required");
+  const auto required_permission =
+      status_route || refresh_route ? Permission::Admin : Permission::Search;
+  if (!(**principal).allows(required_permission))
+    return forbidden(required_permission == Permission::Admin
+                         ? "Admin permission is required"
+                         : "Search permission is required");
   if (governor_) {
-    auto admission = governor_->admit((*principal)->key_id,
+    auto admission = governor_->admit((**principal).key_id,
                                       std::chrono::system_clock::now());
     if (!admission)
       return std::unexpected(admission.error());
     if (!admission->allowed)
       return rate_limited(
           admission->retry_after.value_or(core::Duration::zero()));
+  }
+
+  if (status_route) {
+    auto body = json_status(status_->status());
+    if (!body)
+      return std::unexpected(body.error());
+    return json_response(200, std::move(*body));
+  }
+  if (refresh_route) {
+    auto refreshed = refresh_search_();
+    if (!refreshed)
+      return std::unexpected(refreshed.error());
+    constexpr std::string_view completed{
+        R"json({"operation":"search_refresh","status":"completed"})json"};
+    const auto bytes = std::as_bytes(std::span{completed});
+    return json_response(200, {bytes.begin(), bytes.end()});
   }
 
   if (path == "/v1/search") {

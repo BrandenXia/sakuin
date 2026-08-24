@@ -187,6 +187,22 @@ AsioDhtRuntime::create(const config::NetworkConfig &configuration,
     if (!bootstrap)
       return std::unexpected(bootstrap.error());
     result->ipv4_bootstrap_ = std::move(*bootstrap);
+  }
+  if (configuration.enable_ipv6) {
+    auto bootstrap = resolve_dht_bootstrap(
+        configuration.dht.bootstrap, runtime::AddressFamily::IPv6, resolver);
+    if (!bootstrap)
+      return std::unexpected(bootstrap.error());
+    result->ipv6_bootstrap_ = std::move(*bootstrap);
+  }
+  if (!configuration.dht.bootstrap.empty() && result->ipv4_bootstrap_.empty() &&
+      result->ipv6_bootstrap_.empty())
+    return std::unexpected(core::Error{
+        core::ErrorCode::NotFound,
+        "No configured DHT bootstrap contact resolved for an enabled address "
+        "family"});
+
+  if (configuration.enable_ipv4) {
     result->ipv4_observer_ =
         std::make_unique<FamilyObserver>(*result, runtime::AddressFamily::IPv4);
     auto family = result->create_family(runtime::AddressFamily::IPv4,
@@ -197,11 +213,6 @@ AsioDhtRuntime::create(const config::NetworkConfig &configuration,
     result->ipv4_ = std::move(*family);
   }
   if (configuration.enable_ipv6) {
-    auto bootstrap = resolve_dht_bootstrap(
-        configuration.dht.bootstrap, runtime::AddressFamily::IPv6, resolver);
-    if (!bootstrap)
-      return std::unexpected(bootstrap.error());
-    result->ipv6_bootstrap_ = std::move(*bootstrap);
     result->ipv6_observer_ =
         std::make_unique<FamilyObserver>(*result, runtime::AddressFamily::IPv6);
     auto family = result->create_family(runtime::AddressFamily::IPv6,

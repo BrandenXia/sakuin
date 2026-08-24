@@ -15,6 +15,7 @@ listen_port = 7000
 maximum_in_flight = 64
 query_timeout_ms = 12000
 bootstrap = ["router.example:6881", "router6.example:6881"]
+bootstrap_file = "bootstrap.txt"
 
 [network.dht.identity]
 mode = "bep42"
@@ -245,6 +246,7 @@ tls_server_name = "coordinator.internal"
       loaded.network.dht.identity.fixed_ipv4_node_id != std::string(40, 'a') ||
       loaded.network.dht.identity.fixed_ipv6_node_id != std::string(40, 'b') ||
       loaded.network.dht.bootstrap.size() != 2 ||
+      loaded.network.dht.bootstrap_file != "bootstrap.txt" ||
       loaded.network.traffic.grant_bytes != 131072 ||
       loaded.storage.local_root != "/srv/sakuin" ||
       loaded.storage.compression_level != 5 ||
@@ -395,5 +397,23 @@ tls_server_name = "coordinator.internal"
   enabled_worker_without_tls.distributed.worker.enabled = true;
   if (config::validate(enabled_worker_without_tls))
     return 17;
+  const auto fallback_file =
+      std::filesystem::temp_directory_path() /
+      ("sakuin-bootstrap-" +
+       std::to_string(
+           std::chrono::steady_clock::now().time_since_epoch().count()) +
+       ".txt");
+  {
+    std::ofstream output{fallback_file};
+    output << "# fallback contacts\nrouter.example:6881 # primary\n\n"
+              "router6.example:6881\n";
+  }
+  const std::array fallback_files{fallback_file};
+  auto fallback = config::load({.bootstrap_fallback_files = fallback_files});
+  std::filesystem::remove(fallback_file);
+  if (!fallback || fallback->network.dht.bootstrap.size() != 2 ||
+      fallback->network.dht.bootstrap[0] != "router.example:6881" ||
+      fallback->network.dht.bootstrap_file != fallback_file)
+    return 21;
   return 0;
 }
