@@ -50,6 +50,7 @@ struct DhtConfig {
   std::size_t bootstrap_maximum_attempts{3};
   core::Duration bootstrap_retry_delay{std::chrono::seconds{5}};
   std::vector<std::string> bootstrap;
+  std::optional<std::filesystem::path> bootstrap_file;
   DhtIdentityConfig identity;
   RoutingMaintenanceConfig routing;
   MetadataAcquisitionConfig metadata;
@@ -316,6 +317,8 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.network.dht.bootstrap_retry_delay = *value;
+    } else if (name == "network.dht.bootstrap_file") {
+      config.network.dht.bootstrap_file = text;
     } else if (name == "network.dht.routing.maximum_queued") {
       auto value = unsigned_value<std::size_t>(text, name);
       if (!value)
@@ -1051,6 +1054,10 @@ core::Result<void> validate(const AppConfig &config) {
       return std::unexpected(
           invalid("DHT bootstrap entries must not be empty"));
   }
+  if (config.network.dht.bootstrap_file &&
+      config.network.dht.bootstrap_file->empty())
+    return std::unexpected(
+        invalid("network.dht.bootstrap_file must not be empty"));
   return {};
 }
 

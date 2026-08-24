@@ -6,6 +6,7 @@ import sakuin.api.auth;
 import sakuin.api.credentials.store;
 import sakuin.api.rate_limit;
 import sakuin.api.search;
+import sakuin.api.status;
 import sakuin.config.model;
 import sakuin.core.bytes;
 import sakuin.core.result;
@@ -43,7 +44,8 @@ public:
   create(const config::ApiConfig &configuration,
          storage::TorrentDataset &torrents, ApiServiceObserver &observer,
          std::optional<std::filesystem::path> search_state_directory = {},
-         index::DuplicateIndexView *duplicates = nullptr);
+         index::DuplicateIndexView *duplicates = nullptr,
+         api::StatusProvider *status = nullptr);
 
   ~LocalApiService();
 
@@ -242,7 +244,7 @@ core::Result<std::unique_ptr<LocalApiService>> LocalApiService::create(
     const config::ApiConfig &configuration, storage::TorrentDataset &torrents,
     ApiServiceObserver &observer,
     std::optional<std::filesystem::path> search_state_directory,
-    index::DuplicateIndexView *duplicates) {
+    index::DuplicateIndexView *duplicates, api::StatusProvider *status) {
   if (!configuration.enabled)
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
@@ -306,7 +308,12 @@ core::Result<std::unique_ptr<LocalApiService>> LocalApiService::create(
   }
   result->handler = std::make_unique<api::SearchHttpHandler>(
       *result->authenticator, *result->index, result->governor.get(),
-      duplicates);
+      duplicates, status, [impl = result.get()]() -> core::Result<void> {
+        auto refreshed = impl->refresh();
+        if (!refreshed)
+          return std::unexpected(refreshed.error());
+        return {};
+      });
   auto server =
       runtime::AsioHttpServer::create(server_options(configuration, *endpoint));
   if (!server)

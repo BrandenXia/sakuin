@@ -15,6 +15,7 @@ bootstrap_retry_delay_ms = 5000
 # deployments, but produces a startup warning in public mode.
 # bootstrap = ["dht-bootstrap.example.net:6881"]
 bootstrap = []
+bootstrap_file = "dht-bootstrap.txt"
 
 [network.dht.identity]
 mode = "bep42"

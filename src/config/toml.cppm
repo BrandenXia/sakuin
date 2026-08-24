@@ -15,6 +15,7 @@ struct ConfigLoadRequest {
   std::optional<std::filesystem::path> toml_file;
   std::span<const std::pair<std::string, std::string>> environment;
   std::span<const std::string_view> command_line;
+  std::span<const std::filesystem::path> bootstrap_fallback_files;
 };
 
 core::Result<ConfigOverlay> parse_toml(std::string_view source,
@@ -179,13 +180,13 @@ core::Result<void> parse_routing(const toml::table &table,
 }
 
 core::Result<void> parse_dht(const toml::table &table, ConfigOverlay &overlay) {
-  if (auto checked =
-          check_keys(table,
-                     {"private_network", "maximum_in_flight",
-                      "query_timeout_ms", "bootstrap_maximum_in_flight",
-                      "bootstrap_maximum_attempts", "bootstrap_retry_delay_ms",
-                      "bootstrap", "identity", "routing", "metadata"},
-                     "network.dht.");
+  if (auto checked = check_keys(
+          table,
+          {"private_network", "maximum_in_flight", "query_timeout_ms",
+           "bootstrap_maximum_in_flight", "bootstrap_maximum_attempts",
+           "bootstrap_retry_delay_ms", "bootstrap", "bootstrap_file",
+           "identity", "routing", "metadata"},
+          "network.dht.");
       !checked)
     return checked;
   for (auto result :
@@ -201,7 +202,9 @@ core::Result<void> parse_dht(const toml::table &table, ConfigOverlay &overlay) {
         scalar<std::int64_t>(table, "bootstrap_maximum_attempts",
                              "network.dht.bootstrap_maximum_attempts", overlay),
         scalar<std::int64_t>(table, "bootstrap_retry_delay_ms",
-                             "network.dht.bootstrap_retry_delay_ms", overlay)})
+                             "network.dht.bootstrap_retry_delay_ms", overlay),
+        scalar<std::string>(table, "bootstrap_file",
+                            "network.dht.bootstrap_file", overlay)})
     if (!result)
       return result;
 
@@ -744,6 +747,7 @@ core::Result<ConfigOverlay> environment_overlay(
        "network.dht.bootstrap_maximum_attempts"},
       {"SAKUIN_DHT_BOOTSTRAP_RETRY_DELAY_MS",
        "network.dht.bootstrap_retry_delay_ms"},
+      {"SAKUIN_DHT_BOOTSTRAP_FILE", "network.dht.bootstrap_file"},
       {"SAKUIN_DHT_ROUTING_MAXIMUM_QUEUED",
        "network.dht.routing.maximum_queued"},
       {"SAKUIN_DHT_ROUTING_MAXIMUM_IN_FLIGHT",
@@ -981,6 +985,64 @@ core::Result<AppConfig> load(const ConfigLoadRequest &request) {
     return std::unexpected(command_line.error());
   if (auto applied = apply(result, *command_line); !applied)
     return std::unexpected(applied.error());
+  if (result.network.dht.bootstrap.empty()) {
+    const auto read_bootstrap = [](const std::filesystem::path &path)
+        -> core::Result<std::vector<std::string>> {
+      std::ifstream input{path};
+      if (!input)
+        return std::unexpected(
+            core::Error{core::ErrorCode::IoError,
+                        "Unable to open DHT bootstrap file: " + path.string()});
+      std::vector<std::string> entries;
+      std::string line;
+      while (std::getline(input, line)) {
+        auto first = line.find_first_not_of(" \t\r");
+        if (first == std::string::npos || line[first] == '#')
+          continue;
+        auto last = line.find_last_not_of(" \t\r");
+        auto entry = line.substr(first, last - first + 1);
+        if (const auto comment = entry.find('#');
+            comment != std::string::npos) {
+          entry.erase(comment);
+          if (const auto end = entry.find_last_not_of(" \t\r");
+              end != std::string::npos)
+            entry.erase(end + 1);
+        }
+        if (!entry.empty())
+          entries.push_back(std::move(entry));
+      }
+      if (!input.eof())
+        return std::unexpected(
+            core::Error{core::ErrorCode::IoError,
+                        "Unable to read DHT bootstrap file: " + path.string()});
+      return entries;
+    };
+
+    if (result.network.dht.bootstrap_file) {
+      auto path = *result.network.dht.bootstrap_file;
+      if (path.is_relative() && request.toml_file)
+        path = request.toml_file->parent_path() / path;
+      auto entries = read_bootstrap(path);
+      if (!entries)
+        return std::unexpected(entries.error());
+      result.network.dht.bootstrap = std::move(*entries);
+      result.network.dht.bootstrap_file = std::move(path);
+    } else {
+      for (const auto &candidate : request.bootstrap_fallback_files) {
+        std::error_code status_error;
+        const bool exists =
+            std::filesystem::is_regular_file(candidate, status_error);
+        if (status_error || !exists)
+          continue;
+        auto entries = read_bootstrap(candidate);
+        if (!entries)
+          return std::unexpected(entries.error());
+        result.network.dht.bootstrap = std::move(*entries);
+        result.network.dht.bootstrap_file = candidate;
+        break;
+      }
+    }
+  }
   if (auto valid = validate(result); !valid)
     return std::unexpected(valid.error());
   return result;

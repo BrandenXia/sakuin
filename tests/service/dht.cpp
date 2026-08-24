@@ -23,6 +23,20 @@ public:
   }
 };
 
+class IPv4OnlyResolver final
+    : public sakuin::runtime::DatagramEndpointResolver {
+public:
+  sakuin::core::Result<std::vector<sakuin::runtime::DatagramEndpoint>>
+  resolve(std::string_view, std::uint16_t port,
+          sakuin::runtime::AddressFamily family) override {
+    if (family == sakuin::runtime::AddressFamily::IPv6)
+      return std::unexpected(sakuin::core::Error{
+          sakuin::core::ErrorCode::NotFound, "No IPv6 record"});
+    return std::vector{sakuin::runtime::DatagramEndpoint{
+        .address = sakuin::runtime::IpAddress::loopback_v4(), .port = port}};
+  }
+};
+
 class Observer final : public sakuin::integration::DhtRuntimeWorkerObserver {
 public:
   void on_cycle(sakuin::integration::DhtRuntimeCycle) override {
@@ -164,6 +178,16 @@ int main() {
       {.observations = &observations, .observer = &observer});
   if (!resolved_family || (*resolved_family)->local_endpoint().port == 0)
     return 9;
+
+  IPv4OnlyResolver ipv4_only;
+  const std::array configured{std::string{"router.example:6881"}};
+  auto resolved_ipv4 = service::resolve_dht_bootstrap(
+      configured, runtime::AddressFamily::IPv4, ipv4_only);
+  auto resolved_ipv6 = service::resolve_dht_bootstrap(
+      configured, runtime::AddressFamily::IPv6, ipv4_only);
+  if (!resolved_ipv4 || resolved_ipv4->size() != 1 || !resolved_ipv6 ||
+      !resolved_ipv6->empty())
+    return 21;
 
   configuration.bootstrap = {"unbracketed:ipv6:6881"};
   auto invalid_bootstrap_material = service::secure_dht_family_runtime_material(

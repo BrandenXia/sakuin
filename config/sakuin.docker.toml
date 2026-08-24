@@ -5,8 +5,9 @@ listen_port = 6881
 
 [network.dht]
 private_network = false
-# Supplied by SAKUIN_DHT_BOOTSTRAP in docker-compose.yaml.
+# Explicit entries supplied by SAKUIN_DHT_BOOTSTRAP take precedence.
 bootstrap = []
+bootstrap_file = "/opt/sakuin/share/sakuin/dht-bootstrap.txt"
 
 [network.dht.identity]
 mode = "bep42"

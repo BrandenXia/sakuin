@@ -28,7 +28,8 @@ RUN set -eux; \
     mkdir -p /opt/sakuin; \
     tar --extract --gzip --file "${asset}" --directory /opt/sakuin; \
     test -x /opt/sakuin/bin/sakuin; \
-    test -x /opt/sakuin/bin/sakuin-api-key
+    test -x /opt/sakuin/bin/sakuin-api-key; \
+    test -f /opt/sakuin/share/sakuin/dht-bootstrap.txt
 
 FROM ubuntu:24.04
 

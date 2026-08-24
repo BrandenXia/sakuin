@@ -32,6 +32,13 @@ public:
   sakuin::index::DuplicateIndexState state;
 };
 
+class Status final : public sakuin::api::StatusProvider {
+public:
+  sakuin::api::ServiceStatus status() const override { return snapshot; }
+
+  sakuin::api::ServiceStatus snapshot;
+};
+
 } // namespace
 
 int main() {
@@ -45,6 +52,11 @@ int main() {
   std::ranges::iota(secret.bytes, std::uint8_t{41});
   if (!(*authenticator)->put("reader", secret, {api::Permission::Search}))
     return 2;
+  api::ApiKeySecret admin_secret;
+  std::ranges::iota(admin_secret.bytes, std::uint8_t{81});
+  if (!(*authenticator)
+           ->put("operator", admin_secret, {api::Permission::Admin}))
+    return 15;
 
   search::InMemorySearchIndex index;
   auto rebuild = index.begin_rebuild(7);
@@ -71,7 +83,23 @@ int main() {
   duplicates.state.stats.source_generation = 7;
   duplicates.state.entries.push_back(std::move(duplicate_group));
 
-  api::SearchHttpHandler handler{**authenticator, index, nullptr, &duplicates};
+  Status status;
+  status.snapshot.state = "running";
+  status.snapshot.ipv4.enabled = true;
+  status.snapshot.ipv4.running = true;
+  status.snapshot.ipv4.cycles = 42;
+  status.snapshot.ipv4.routing_nodes = 13;
+  status.snapshot.ipv4.metadata_in_flight = 2;
+  std::size_t refreshes{};
+  api::SearchHttpHandler handler{**authenticator,
+                                 index,
+                                 nullptr,
+                                 &duplicates,
+                                 &status,
+                                 [&refreshes]() -> core::Result<void> {
+                                   ++refreshes;
+                                   return {};
+                                 }};
   auto health =
       handler.handle({.method = api::HttpMethod::Get, .target = "/v1/health"});
   if (!health || health->status != 200 ||
@@ -143,6 +171,65 @@ int main() {
   auto invalid_duplicate = handler.handle(std::move(invalid_duplicate_query));
   if (!invalid_duplicate || invalid_duplicate->status != 400)
     return 11;
+
+  auto caps =
+      handler.handle({.method = api::HttpMethod::Get, .target = "/api?t=caps"});
+  if (!caps || caps->status != 200 ||
+      !body(*caps).contains("<server version=\"1.3\" title=\"Sakuin\"") ||
+      !body(*caps).contains("<search available=\"yes\""))
+    return 16;
+
+  auto token = credential("reader", secret);
+  token.erase(0, std::string_view{"Bearer "}.size());
+  auto torznab = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/api?t=search&q=linux&cat=&limit=10&apikey=" + token});
+  if (!torznab || torznab->status != 200 ||
+      !body(*torznab).contains("<rss version=\"2.0\"") ||
+      !body(*torznab).contains("name=\"infohash\"") ||
+      !body(*torznab).contains("magnet:?xt=urn:btih:") ||
+      !body(*torznab).contains(std::string(40, '1')))
+    return 17;
+
+  auto torznab_unauthorized = handler.handle(
+      {.method = api::HttpMethod::Get, .target = "/api?t=search&q=linux"});
+  if (!torznab_unauthorized ||
+      !body(*torznab_unauthorized).contains("code=\"100\""))
+    return 18;
+
+  auto reader_status = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/v1/status",
+       .headers = {{"authorization", credential("reader", secret)}}});
+  if (!reader_status || reader_status->status != 403)
+    return 19;
+  auto operator_status = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/v1/status",
+       .headers = {{"authorization", credential("operator", admin_secret)}}});
+  if (!operator_status || operator_status->status != 200 ||
+      !body(*operator_status).contains("\"cycles\":42") ||
+      !body(*operator_status).contains("\"routing_nodes\":13") ||
+      !body(*operator_status).contains("\"metadata_in_flight\":2") ||
+      !body(*operator_status).contains("\"last_error\":null") ||
+      body(*operator_status).contains("\"last_error\":[null]") ||
+      !body(*operator_status).contains("\"state\":\"running\""))
+    return 20;
+
+  auto refreshed = handler.handle(
+      {.method = api::HttpMethod::Post,
+       .target = "/v1/operations/search-refresh",
+       .headers = {{"authorization", credential("operator", admin_secret)}}});
+  if (!refreshed || refreshed->status != 200 || refreshes != 1 ||
+      !body(*refreshed).contains("search_refresh"))
+    return 21;
+  auto refresh_with_get = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/v1/operations/search-refresh",
+       .headers = {{"authorization", credential("operator", admin_secret)}}});
+  if (!refresh_with_get || refresh_with_get->status != 405 ||
+      refresh_with_get->headers["allow"] != "POST")
+    return 22;
 
   auto governor = api::FixedWindowRequestGovernor::create(
       {.maximum_requests = 1, .period = std::chrono::hours{24}});

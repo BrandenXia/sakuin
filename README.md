@@ -45,29 +45,33 @@ less real-world deployment history than Bitmagnet.
 
 ## Quick deployment
 
-Requirements: Docker with the Compose plugin, and one or more DHT bootstrap
-contacts that you trust.
+Requirement: Docker with the Compose plugin. Sakuin ships a small public DHT
+bootstrap fallback list, which you can replace in `.env`.
 
 ```bash
 cp .env.example .env
-# Edit .env and set SAKUIN_DHT_BOOTSTRAP=host:port[,host:port...]
 ./scripts/deploy.sh
 ```
 
-The first deployment creates a `reader` API key and prints its bearer token
-once. Data is kept in the `sakuin-data` Docker volume. The API is available at
-`http://127.0.0.1:8080` by default; UDP port 6881 is exposed for the DHT.
+The first deployment creates `reader` and `operator` API keys and prints each
+bearer token once. Data is kept in the `sakuin-data` Docker volume. The API is
+available at `http://127.0.0.1:8080` by default; UDP port 6881 is exposed for
+the DHT.
 
 ```bash
 curl http://127.0.0.1:8080/v1/health
 curl -H "Authorization: Bearer YOUR_TOKEN" \
   "http://127.0.0.1:8080/v1/search?q=ubuntu"
+curl -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
+  http://127.0.0.1:8080/v1/status
+curl -X POST -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
+  http://127.0.0.1:8080/v1/operations/search-refresh
 ```
 
 Useful deployment commands:
 
 ```bash
-./scripts/deploy.sh status
+./scripts/deploy.sh status YOUR_OPERATOR_TOKEN
 ./scripts/deploy.sh logs
 ./scripts/deploy.sh verify
 ./scripts/deploy.sh key reader-2 search
@@ -77,17 +81,24 @@ Useful deployment commands:
 The image uses verified prebuilt Linux release bundles rather than compiling
 Sakuin during deployment. Set `SAKUIN_VERSION` in `.env` to pin a release.
 
+Torznab clients can use `http://127.0.0.1:8080/api` as the indexer URL and the
+complete `sakuin_...` reader token as `apikey`. Sakuin currently advertises and
+implements generic `t=search`; results use magnet links because Sakuin indexes
+metadata rather than hosting `.torrent` files.
+
 ## Native usage
 
 Sakuin uses C++23 modules and Xmake. After building, copy
-[`config/sakuin.example.toml`](config/sakuin.example.toml), add trusted DHT
-bootstrap contacts, initialize the credential store, and start the daemon:
+[`config/sakuin.example.toml`](config/sakuin.example.toml), copy or replace the
+provided DHT bootstrap list, initialize the credential store, and start the
+daemon:
 
 ```bash
 xmake build
 cp config/sakuin.example.toml sakuin.toml
-xmake run sakuin-api-key --state-dir=./data/operational/api init
-xmake run sakuin-api-key --state-dir=./data/operational/api \
+cp config/dht-bootstrap.txt dht-bootstrap.txt
+xmake run sakuin-api-key --state-dir ./data/operational/api init
+xmake run sakuin-api-key --state-dir ./data/operational/api \
   create --id reader --permissions search
 xmake run sakuin --config=sakuin.toml
 ```

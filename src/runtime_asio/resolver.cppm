@@ -57,11 +57,21 @@ AsioDatagramEndpointResolver::resolve(std::string_view host, std::uint16_t port,
   const auto resolved =
       resolver.resolve(protocol, std::string{host}, std::to_string(port),
                        asio::ip::resolver_base::numeric_service, error);
+  if (error == asio::error::host_not_found ||
+      error == asio::error::host_not_found_try_again)
+    return std::unexpected(core::Error{
+        core::ErrorCode::NotFound,
+        "UDP " +
+            std::string{address_family == AddressFamily::IPv4 ? "IPv4"
+                                                              : "IPv6"} +
+            " host " + std::string{host} + " has no matching DNS record"});
   if (error)
-    return std::unexpected(
-        core::Error{core::ErrorCode::IoError, "Could not resolve UDP host " +
-                                                  std::string{host} + ": " +
-                                                  error.message()});
+    return std::unexpected(core::Error{
+        core::ErrorCode::IoError,
+        "Could not resolve UDP " +
+            std::string{address_family == AddressFamily::IPv4 ? "IPv4"
+                                                              : "IPv6"} +
+            " host " + std::string{host} + ": " + error.message()});
 
   std::vector<DatagramEndpoint> result;
   for (const auto &entry : resolved) {
