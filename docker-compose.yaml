@@ -58,6 +58,9 @@ services:
       - "${SAKUIN_DHT_PORT:-6881}:6881/udp"
     volumes:
       - sakuin-data:/var/lib/sakuin
+      # Optional custom configuration. Create ./sakuin.toml before uncommenting;
+      # SAKUIN_* environment values above take precedence over the TOML file.
+      # - ./sakuin.toml:/etc/sakuin/sakuin.toml:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     healthcheck:
