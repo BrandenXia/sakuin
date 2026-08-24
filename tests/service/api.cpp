@@ -166,6 +166,16 @@ int main() {
   if (!health.starts_with("HTTP/1.1 200 OK\r\n") ||
       !health.ends_with("\r\n\r\n{\"status\":\"ok\"}"))
     return 4;
+  const auto openapi = request(api_configuration.listen_port,
+                               "GET /openapi.json HTTP/1.1\r\nHost: "
+                               "localhost\r\nConnection: close\r\n\r\n");
+  if (!openapi.starts_with("HTTP/1.1 200 OK\r\n") ||
+      !openapi.contains(
+          "\r\ncontent-type: application/json; charset=utf-8\r\n") ||
+      !openapi.contains("\"openapi\":\"3.1.2\"") ||
+      !openapi.contains("\"/v1/search\"") ||
+      !openapi.contains("\"bearerAuth\""))
+    return 18;
 
   api::ApiKeySecret secret;
   std::ranges::iota(secret.bytes, std::uint8_t{33});

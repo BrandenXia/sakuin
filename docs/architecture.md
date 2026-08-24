@@ -204,6 +204,11 @@ Tagged release builds inject one shared build version into both executables.
 The daemon exposes it through the authenticated status response and the bounded
 `sakuin_service_info` metric; local builds use the explicit `dev` identity.
 
+The public `/openapi.json` route serves a process-cached OpenAPI 3.1 document
+for the native JSON endpoints. It describes bearer authentication and required
+Sakuin permissions without embedding credentials. Torznab stays outside that
+document because its XML discovery and capability contract is `/api?t=caps`.
+
 The unauthenticated `/v1/health` route is a narrow HTTP liveness probe.
 `/v1/ready` reports success only after the service state is running and every
 enabled DHT family worker is running. It returns no component details; those

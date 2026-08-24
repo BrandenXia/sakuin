@@ -65,6 +65,7 @@ bootstrap list.
 ```bash
 curl http://127.0.0.1:8080/v1/health
 curl http://127.0.0.1:8080/v1/ready
+curl http://127.0.0.1:8080/openapi.json
 curl -H "Authorization: Bearer YOUR_TOKEN" \
   "http://127.0.0.1:8080/v1/search?q=ubuntu"
 curl -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
@@ -80,6 +81,11 @@ curl -X POST -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
 The detailed status response and Prometheus `sakuin_service_info` metric include
 the running release version. Native binaries also report it with
 `sakuin --version` and `sakuin-api-key --version`.
+
+`/openapi.json` publishes the native JSON API contract for client generation
+and interactive API tools. It contains no credentials and is available without
+authentication. Torznab clients should continue to discover their XML contract
+through `/api?t=caps`.
 
 Useful commands from a repository checkout:
 
