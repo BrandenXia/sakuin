@@ -131,7 +131,7 @@ target("sakuin-service")
            "sakuin-api", "sakuin-api-credentials", "sakuin-http",
            "sakuin-runtime-http", "sakuin-runtime-asio-http", "sakuin-search",
            "sakuin-search-local", "sakuin-search-pipeline", "sakuin-index",
-           "sakuin-index-local")
+           "sakuin-index-local", "sakuin-classification")
 
 target("sakuin")
   set_kind("binary")
@@ -154,13 +154,13 @@ target("sakuin-index-local")
 target("sakuin-search")
   set_kind("static")
   add_files("src/search/**.cppm", {public = true})
-  add_deps("sakuin-core", "sakuin-model")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-classification")
 
 target("sakuin-search-local")
   set_kind("static")
   add_files("src/search_local/**.cppm", {public = true})
   add_deps("sakuin-core", "sakuin-model", "sakuin-model-codecs",
-           "sakuin-search")
+           "sakuin-search", "sakuin-classification")
 
 target("sakuin-search-pipeline")
   set_kind("static")

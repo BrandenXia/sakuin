@@ -109,9 +109,11 @@ Set `SAKUIN_IMAGE=ghcr.io/brandenxia/sakuin:vX.Y.Z` in an adjacent `.env` file
 to pin a release.
 
 Torznab clients can use `http://127.0.0.1:8080/api` as the indexer URL and the
-complete `sakuin_...` reader token as `apikey`. Sakuin currently advertises and
-implements generic `t=search`; results use magnet links because Sakuin indexes
-metadata rather than hosting `.torrent` files.
+complete `sakuin_...` reader token as `apikey`. Sakuin advertises generic,
+movie, TV, music/audio, and book search, with standard Torznab categories.
+Results use magnet links because Sakuin indexes metadata rather than hosting
+`.torrent` files. Adult classification is only a label: visibility is an
+operator setting and defaults to including every result.
 
 Prometheus can scrape `/metrics` (or `/v1/metrics`) with the operator token as
 an `Authorization: Bearer` header. The endpoint reports service uptime, DHT

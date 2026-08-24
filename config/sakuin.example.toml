@@ -95,6 +95,8 @@ enabled = true
 # an explicit include/exclude/only policy and defaults to including everything.
 adult_detection_enabled = true
 adult_content_policy = "include"
+# Minimum evidence used by exclude/only and the Torznab XXX category.
+adult_minimum_confidence = "high"
 maximum_files_to_inspect = 100000
 maximum_path_bytes = 4096
 maximum_tokens = 16384

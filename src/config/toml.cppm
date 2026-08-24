@@ -515,7 +515,8 @@ core::Result<void> parse_indexing(const toml::table &table,
   if (auto checked = check_keys(
           **classification,
           {"enabled", "adult_detection_enabled", "adult_content_policy",
-           "maximum_files_to_inspect", "maximum_path_bytes", "maximum_tokens"},
+           "adult_minimum_confidence", "maximum_files_to_inspect",
+           "maximum_path_bytes", "maximum_tokens"},
           "indexing.classification.");
       !checked)
     return checked;
@@ -528,6 +529,9 @@ core::Result<void> parse_indexing(const toml::table &table,
         scalar<std::string>(**classification, "adult_content_policy",
                             "indexing.classification.adult_content_policy",
                             overlay),
+        scalar<std::string>(
+            **classification, "adult_minimum_confidence",
+            "indexing.classification.adult_minimum_confidence", overlay),
         scalar<std::int64_t>(**classification, "maximum_files_to_inspect",
                              "indexing.classification.maximum_files_to_inspect",
                              overlay),
@@ -867,6 +871,8 @@ core::Result<ConfigOverlay> environment_overlay(
        "indexing.classification.adult_detection_enabled"},
       {"SAKUIN_CLASSIFICATION_ADULT_CONTENT_POLICY",
        "indexing.classification.adult_content_policy"},
+      {"SAKUIN_CLASSIFICATION_ADULT_MINIMUM_CONFIDENCE",
+       "indexing.classification.adult_minimum_confidence"},
       {"SAKUIN_CLASSIFICATION_MAXIMUM_FILES_TO_INSPECT",
        "indexing.classification.maximum_files_to_inspect"},
       {"SAKUIN_CLASSIFICATION_MAXIMUM_PATH_BYTES",

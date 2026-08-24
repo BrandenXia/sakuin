@@ -225,11 +225,14 @@ The HTTP request only signals the maintenance coordinator and returns `202`;
 compaction, retention, garbage collection, and verification remain serialized
 on the maintenance owner thread rather than blocking an Asio request thread.
 
-The `/api` compatibility route implements Torznab capabilities and generic
-search responses as UTF-8 XML/RSS. It publishes the `Other` category because
-classification is not yet available, and returns magnet links because the
-canonical store retains decoded torrent metadata rather than downloadable
-`.torrent` payloads.
+The `/api` compatibility route implements Torznab capabilities and UTF-8
+XML/RSS search responses. Semantic classifications map to the advertised
+Movies, TV, Audio, PC, Books, XXX, and Other category families. Generic and
+specialized movie, TV, music/audio, and book searches apply category filters
+inside the derived index before totals and pagination. Unknown category IDs are
+ignored as Torznab specifies; a request containing only unknown IDs is empty.
+Results use magnet links because the canonical store retains decoded torrent
+metadata rather than downloadable `.torrent` payloads.
 
 Classification is a deterministic, rebuildable projection over torrent names,
 file paths, sizes, and layout. It records a semantic content kind, confidence,
@@ -238,9 +241,15 @@ none of these derived values mutate canonical torrent metadata. Records without
 a fetched file list remain explicitly awaiting metadata rather than being
 treated as unknown. Adult detection defaults on, while search visibility is a
 separate operator choice (`include`, `exclude`, or `only`) that defaults to
-including all content. Disabling detection suppresses only the label and never
-filters a torrent. The rules inspect bounded untrusted strings without opening
-paths, extracting archives, or performing network lookups.
+including all content. Operators also choose the minimum Adult-label confidence
+used by that policy (`low`, `medium`, or `high`, defaulting to `high`).
+Disabling detection suppresses only the label and never
+filters a torrent. The local search projection recomputes these values from
+canonical records when it opens or refreshes, so rule changes do not require a
+canonical storage migration. Native JSON results expose the derived kind,
+confidence, labels, categories, resolution, algorithm version, and truncation
+state. The rules inspect bounded untrusted strings without opening paths,
+extracting archives, or performing network lookups.
 
 API credentials live in a separate operational store. The CLI generates the
 secret once and persists a salted verifier, owner-only pepper, and permission
@@ -352,5 +361,5 @@ xmake run sakuin-storage-benchmark 100000 65536
 - Coordinator recovery is durable on one host but not replicated.
 - Duplicate matching is deterministic metadata fingerprinting, not semantic or
   fuzzy similarity.
-- There is currently no browser UI or media classifier. Torznab support is
-  limited to generic search until classification is available.
+- There is currently no browser UI. Classification is deterministic and
+  metadata-based; it does not yet use fuzzy similarity or learned models.

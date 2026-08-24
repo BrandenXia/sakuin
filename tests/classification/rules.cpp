@@ -12,6 +12,7 @@ using sakuin::classification::ClassifierOptions;
 using sakuin::classification::Confidence;
 using sakuin::classification::ContentKind;
 using sakuin::classification::ContentLabel;
+using sakuin::classification::MediaCategory;
 using sakuin::classification::VideoResolution;
 
 sakuin::model::TorrentRecord
@@ -55,6 +56,10 @@ int main() {
       movie.kind_confidence != Confidence::High ||
       movie.resolution != VideoResolution::Uhd2160)
     return 2;
+  const auto movie_categories = sakuin::classification::media_categories(movie);
+  if (!std::ranges::contains(movie_categories, MediaCategory::Movie) ||
+      !std::ranges::contains(movie_categories, MediaCategory::MovieUhd))
+    return 16;
 
   const auto series = classify(
       record("Example.Show.S02E07.1080p",
@@ -115,6 +120,9 @@ int main() {
                       {FileRecord{"Feature.mkv", 1'000'000'000}}));
   if (!label(adult, ContentLabel::Adult, Confidence::High))
     return 10;
+  if (!std::ranges::contains(sakuin::classification::media_categories(adult),
+                             MediaCategory::Adult))
+    return 17;
   const auto adult_disabled =
       classify(record("Explicit Porn Movie 2024 1080p",
                       {FileRecord{"Feature.mkv", 1'000'000'000}}),
@@ -127,6 +135,10 @@ int main() {
       record("XXX Movie 2024", {FileRecord{"Feature.mkv", 1'000'000'000}}));
   if (!label(contextual_adult, ContentLabel::Adult, Confidence::Medium))
     return 12;
+  if (std::ranges::contains(
+          sakuin::classification::media_categories(contextual_adult),
+          MediaCategory::Adult))
+    return 18;
 
   const auto anime =
       classify(record("Example Anime S01E01 1080p",

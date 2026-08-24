@@ -10,6 +10,7 @@ import sakuin.api.openapi;
 import sakuin.api.rate_limit;
 import sakuin.api.status;
 import sakuin.api.torznab;
+import sakuin.classification;
 import sakuin.core.bytes;
 import sakuin.core.ids;
 import sakuin.core.random;
@@ -28,11 +29,14 @@ public:
       index::DuplicateIndexView *duplicates = nullptr,
       StatusProvider *status = nullptr,
       std::function<core::Result<void>()> refresh_search = {},
-      std::function<core::Result<void>(bool)> request_maintenance = {})
+      std::function<core::Result<void>(bool)> request_maintenance = {},
+      search::AdultContentMode adult_content =
+          search::AdultContentMode::Include)
       : authenticator_(&authenticator), index_(&index), governor_(governor),
         duplicates_(duplicates), status_(status),
         refresh_search_(std::move(refresh_search)),
-        request_maintenance_(std::move(request_maintenance)) {}
+        request_maintenance_(std::move(request_maintenance)),
+        adult_content_(adult_content) {}
 
   // Composition hook used before the HTTP server starts. Maintenance is
   // constructed after the API because its commits notify search refreshes.
@@ -51,6 +55,7 @@ private:
   StatusProvider *status_;
   std::function<core::Result<void>()> refresh_search_;
   std::function<core::Result<void>(bool)> request_maintenance_;
+  search::AdultContentMode adult_content_;
 };
 
 } // namespace sakuin::api
@@ -291,6 +296,69 @@ core::Result<std::optional<core::Timestamp>> optional_timestamp(
           std::chrono::milliseconds{**value})}};
 }
 
+core::Result<std::vector<classification::MediaCategory>>
+categories(const std::map<std::string, std::string, std::less<>> &parameters) {
+  const auto found = parameters.find("category");
+  if (found == parameters.end())
+    return {};
+  std::vector<classification::MediaCategory> result;
+  std::string_view remaining{found->second};
+  if (remaining.empty())
+    return std::unexpected(core::Error{core::ErrorCode::InvalidQuery,
+                                       "category must not be empty"});
+  while (!remaining.empty()) {
+    const auto separator = remaining.find(',');
+    const auto value = remaining.substr(0, separator);
+    using enum classification::MediaCategory;
+    const auto category =
+        [&]() -> std::optional<classification::MediaCategory> {
+      if (value == "movie")
+        return Movie;
+      if (value == "movie_sd")
+        return MovieSd;
+      if (value == "movie_hd")
+        return MovieHd;
+      if (value == "movie_uhd")
+        return MovieUhd;
+      if (value == "series")
+        return Series;
+      if (value == "series_sd")
+        return SeriesSd;
+      if (value == "series_hd")
+        return SeriesHd;
+      if (value == "series_uhd")
+        return SeriesUhd;
+      if (value == "series_anime")
+        return SeriesAnime;
+      if (value == "audio")
+        return Audio;
+      if (value == "audiobook")
+        return Audiobook;
+      if (value == "application")
+        return Application;
+      if (value == "books")
+        return Books;
+      if (value == "ebook")
+        return Ebook;
+      if (value == "adult")
+        return Adult;
+      if (value == "other")
+        return Other;
+      return std::nullopt;
+    }();
+    if (!category)
+      return std::unexpected(
+          core::Error{core::ErrorCode::InvalidQuery,
+                      "Unknown search category: " + std::string{value}});
+    if (!std::ranges::contains(result, *category))
+      result.push_back(*category);
+    if (separator == std::string_view::npos)
+      break;
+    remaining.remove_prefix(separator + 1);
+  }
+  return result;
+}
+
 core::Result<search::SearchQuery> search_query(std::string_view encoded) {
   auto parameters = query_parameters(encoded);
   if (!parameters)
@@ -300,7 +368,7 @@ core::Result<search::SearchQuery> search_query(std::string_view encoded) {
         name != "min_files" && name != "max_files" &&
         name != "first_seen_at_or_after_ms" &&
         name != "last_seen_at_or_before_ms" && name != "offset" &&
-        name != "limit")
+        name != "limit" && name != "category")
       return std::unexpected(core::Error{core::ErrorCode::InvalidQuery,
                                          "Unknown query parameter: " + name});
   }
@@ -313,8 +381,9 @@ core::Result<search::SearchQuery> search_query(std::string_view encoded) {
   auto last_seen = optional_timestamp(*parameters, "last_seen_at_or_before_ms");
   auto offset = optional_number<std::size_t>(*parameters, "offset");
   auto limit = optional_number<std::size_t>(*parameters, "limit");
+  auto parsed_categories = categories(*parameters);
   if (!minimum || !maximum || !minimum_files || !maximum_files || !first_seen ||
-      !last_seen || !offset || !limit)
+      !last_seen || !offset || !limit || !parsed_categories)
     return std::unexpected(!minimum         ? minimum.error()
                            : !maximum       ? maximum.error()
                            : !minimum_files ? minimum_files.error()
@@ -322,7 +391,8 @@ core::Result<search::SearchQuery> search_query(std::string_view encoded) {
                            : !first_seen    ? first_seen.error()
                            : !last_seen     ? last_seen.error()
                            : !offset        ? offset.error()
-                                            : limit.error());
+                           : !limit         ? limit.error()
+                                            : parsed_categories.error());
   const auto text = parameters->find("q");
   return search::SearchQuery{.text = text == parameters->end() ? std::string{}
                                                                : text->second,
@@ -332,6 +402,7 @@ core::Result<search::SearchQuery> search_query(std::string_view encoded) {
                              .maximum_file_count = *maximum_files,
                              .first_seen_at_or_after = *first_seen,
                              .last_seen_at_or_before = *last_seen,
+                             .categories = std::move(*parsed_categories),
                              .offset = offset->value_or(0),
                              .limit = limit->value_or(50)};
 }
@@ -478,7 +549,7 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
     if (!parsed)
       return torznab_error("201", parsed.error().message);
     if (parsed->function == TorznabFunction::Capabilities)
-      return torznab_capabilities();
+      return torznab_capabilities(adult_content_);
     if (parsed->function == TorznabFunction::Unsupported)
       return torznab_error("203", "Function not available");
     auto principal =
@@ -497,8 +568,9 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
       if (!admission->allowed)
         return torznab_error("910", "API request limit exceeded");
     }
+    parsed->query.adult_content = adult_content_;
     search::SearchResult result;
-    if (parsed->category_matches) {
+    if (!parsed->category_filter_matches_nothing) {
       auto found = index_->search(parsed->query);
       if (!found)
         return torznab_error("900", found.error().message);
@@ -610,6 +682,7 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
     auto parsed_query = search_query(query);
     if (!parsed_query)
       return error_response(400, "invalid_query", parsed_query.error().message);
+    parsed_query->adult_content = adult_content_;
     auto result = index_->search(*parsed_query);
     if (!result) {
       if (result.error().code == core::ErrorCode::InvalidQuery)

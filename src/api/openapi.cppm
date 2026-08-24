@@ -93,6 +93,7 @@ core::Result<core::ByteBuffer> openapi_document() {
           {"$ref": "#/components/parameters/MaximumFiles"},
           {"$ref": "#/components/parameters/FirstSeenAfter"},
           {"$ref": "#/components/parameters/LastSeenBefore"},
+          {"$ref": "#/components/parameters/Category"},
           {"$ref": "#/components/parameters/Offset"},
           {"$ref": "#/components/parameters/Limit"}
         ],
@@ -238,6 +239,7 @@ core::Result<core::ByteBuffer> openapi_document() {
       "MaximumFiles": {"name": "max_files", "in": "query", "schema": {"type": "integer", "minimum": 0}},
       "FirstSeenAfter": {"name": "first_seen_at_or_after_ms", "in": "query", "schema": {"type": "integer"}},
       "LastSeenBefore": {"name": "last_seen_at_or_before_ms", "in": "query", "schema": {"type": "integer"}},
+      "Category": {"name": "category", "in": "query", "description": "Comma-separated semantic categories, matched with OR semantics.", "schema": {"type": "string", "examples": ["movie,movie_uhd", "series_anime", "ebook"]}},
       "Offset": {"name": "offset", "in": "query", "schema": {"type": "integer", "minimum": 0, "default": 0}},
       "Limit": {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 50}},
       "InfoHash": {"name": "infohash", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[0-9A-Fa-f]{40}$"}}
@@ -259,7 +261,7 @@ core::Result<core::ByteBuffer> openapi_document() {
       "Readiness": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string", "enum": ["ready", "not_ready"]}}},
       "SearchHit": {
         "type": "object",
-        "required": ["info_hash", "name", "total_size", "file_count", "first_seen_ms", "last_seen_ms", "score"],
+        "required": ["info_hash", "name", "total_size", "file_count", "first_seen_ms", "last_seen_ms", "score", "classification"],
         "properties": {
           "info_hash": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
           "name": {"type": ["string", "null"]},
@@ -267,7 +269,22 @@ core::Result<core::ByteBuffer> openapi_document() {
           "file_count": {"type": "integer", "minimum": 0},
           "first_seen_ms": {"type": "integer"},
           "last_seen_ms": {"type": "integer"},
-          "score": {"type": "integer", "minimum": 0}
+          "score": {"type": "integer", "minimum": 0},
+          "classification": {"$ref": "#/components/schemas/Classification"}
+        }
+      },
+      "Classification": {
+        "type": "object",
+        "required": ["state", "kind", "confidence", "labels", "categories", "resolution", "algorithm_version", "input_truncated"],
+        "properties": {
+          "state": {"type": "string", "enum": ["awaiting_metadata", "classified", "ambiguous", "unknown"]},
+          "kind": {"type": "string", "enum": ["unknown", "movie", "series", "music", "audiobook", "ebook", "game", "application", "mixed"]},
+          "confidence": {"type": "string", "enum": ["unknown", "low", "medium", "high"]},
+          "labels": {"type": "array", "items": {"type": "object", "required": ["name", "confidence"], "properties": {"name": {"type": "string", "enum": ["adult", "anime"]}, "confidence": {"type": "string", "enum": ["unknown", "low", "medium", "high"]}}}},
+          "categories": {"type": "array", "items": {"type": "string", "enum": ["movie", "movie_sd", "movie_hd", "movie_uhd", "series", "series_sd", "series_hd", "series_uhd", "series_anime", "audio", "audiobook", "application", "books", "ebook", "adult", "other"]}},
+          "resolution": {"type": ["string", "null"], "enum": ["sd", "720p", "1080p", "2160p", null]},
+          "algorithm_version": {"type": "integer", "minimum": 1},
+          "input_truncated": {"type": "boolean"}
         }
       },
       "SearchResult": {

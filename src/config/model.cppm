@@ -11,6 +11,7 @@ enum class DhtIdentityMode { Bep42, Fixed };
 enum class StorageBackend { Local };
 enum class CompressionCodec { None, Zstd };
 enum class AdultContentPolicy { Include, Exclude, Only };
+enum class ClassificationConfidence { Low, Medium, High };
 
 struct DhtIdentityConfig {
   DhtIdentityMode mode{DhtIdentityMode::Bep42};
@@ -143,6 +144,8 @@ struct ClassificationConfig {
   // Classification only supplies a label. Search visibility is an explicit
   // operator policy and defaults to retaining every result.
   AdultContentPolicy adult_content_policy{AdultContentPolicy::Include};
+  ClassificationConfidence adult_minimum_confidence{
+      ClassificationConfidence::High};
   std::size_t maximum_files_to_inspect{100'000};
   std::size_t maximum_path_bytes{4'096};
   std::size_t maximum_tokens{16'384};
@@ -596,6 +599,21 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
         return std::unexpected(invalid(
             "indexing.classification.adult_content_policy must be include, "
             "exclude, or only"));
+    } else if (name ==
+               "indexing.classification.adult_minimum_confidence") {
+      if (text == "low")
+        config.indexing.classification.adult_minimum_confidence =
+            ClassificationConfidence::Low;
+      else if (text == "medium")
+        config.indexing.classification.adult_minimum_confidence =
+            ClassificationConfidence::Medium;
+      else if (text == "high")
+        config.indexing.classification.adult_minimum_confidence =
+            ClassificationConfidence::High;
+      else
+        return std::unexpected(invalid(
+            "indexing.classification.adult_minimum_confidence must be low, "
+            "medium, or high"));
     } else if (name == "indexing.classification.maximum_files_to_inspect") {
       auto value = unsigned_value<std::size_t>(text, name);
       if (!value)
@@ -977,6 +995,13 @@ core::Result<void> validate(const AppConfig &config) {
       config.indexing.classification.maximum_tokens > 1'000'000)
     return std::unexpected(
         invalid("Classification inspection limits are invalid"));
+  if (config.indexing.classification.adult_content_policy !=
+          AdultContentPolicy::Include &&
+      (!config.indexing.classification.enabled ||
+       !config.indexing.classification.adult_detection_enabled))
+    return std::unexpected(invalid(
+        "Adult exclude/only policy requires classification and adult "
+        "detection to be enabled"));
   if (config.api.enabled &&
       (config.api.credential_store_directory.empty() ||
        config.api.listen_address.empty() || config.api.listen_port == 0 ||
