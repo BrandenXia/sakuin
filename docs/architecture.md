@@ -248,13 +248,14 @@ This is crash-safe local recovery, not replicated coordinator high
 availability. A future distributed scheduler can replace it behind the work
 interface.
 
-## Local deployment and release bundles
+## Local deployment, images, and release bundles
 
-The Compose deployment stores canonical, derived, and operational state in one
-named volume mounted at `/var/lib/sakuin`. The API listens inside the container
-on TCP 8080 and the DHT on UDP 6881. The container runs as UID/GID 10001 with a
-read-only root filesystem, no Linux capabilities, and a writable temporary
-filesystem.
+The self-contained Compose deployment pulls `ghcr.io/brandenxia/sakuin`, stores
+canonical, derived, and operational state in one named volume mounted at
+`/var/lib/sakuin`, and initializes scoped reader/operator credentials before
+starting the daemon. The API listens inside the container on TCP 8080 and the
+DHT on UDP 6881. Containers run as UID/GID 10001 with a read-only root
+filesystem, no Linux capabilities, and a writable temporary filesystem.
 
 The Dockerfile does not compile the project. It downloads and checksum-verifies
 a release asset named `sakuin-linux-amd64.tar.gz` or
@@ -271,8 +272,12 @@ The adjacent `.sha256` release asset is mandatory. `scripts/package-linux.sh`
 creates this bundle from prebuilt Linux binaries. The release workflow builds
 native `amd64` and `arm64` bundles on pushes to the `release` branch. A `v*`
 tag must point to a commit reachable from that branch; after both builds pass,
-the workflow creates or updates the GitHub Release and attaches all four bundle
-and checksum assets.
+the workflow creates or updates the GitHub Release, attaches the bundles,
+checksums, and Compose file, then publishes a provenance- and SBOM-bearing
+multi-architecture GHCR image tagged with the release and `latest`. The final
+workflow step verifies an anonymous pull. If GitHub creates the package as
+private on its first publication, an owner must make it public once in the
+package settings before rerunning that step.
 
 ## Administration, migration, and recovery
 

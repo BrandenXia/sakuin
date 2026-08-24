@@ -45,18 +45,22 @@ less real-world deployment history than Bitmagnet.
 
 ## Quick deployment
 
-Requirement: Docker with the Compose plugin. Sakuin ships a small public DHT
-bootstrap fallback list, which you can replace in `.env`.
+Requirement: Docker with the Compose plugin. Each tagged release publishes a
+multi-architecture image for AMD64 and ARM64 plus a self-contained Compose
+file. Download that one file, start it, and read the one-time credentials:
 
 ```bash
-cp .env.example .env
-./scripts/deploy.sh
+curl -LO https://github.com/BrandenXia/sakuin/releases/latest/download/docker-compose.yaml
+docker compose up --detach
+docker compose logs sakuin-init
 ```
 
-The first deployment creates `reader` and `operator` API keys and prints each
-bearer token once. Data is kept in the `sakuin-data` Docker volume. The API is
-available at `http://127.0.0.1:8080` by default; UDP port 6881 is exposed for
-the DHT.
+Save the displayed `reader` and `operator` bearer tokens, then remove the
+completed initializer and its token-bearing logs with
+`docker compose rm --force sakuin-init`. Data is kept in the `sakuin-data`
+Docker volume. The API is available at `http://127.0.0.1:8080` by default; UDP
+port 6881 is exposed for the DHT. The image includes a small public DHT
+bootstrap list.
 
 ```bash
 curl http://127.0.0.1:8080/v1/health
@@ -68,7 +72,7 @@ curl -X POST -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
   http://127.0.0.1:8080/v1/operations/search-refresh
 ```
 
-Useful deployment commands:
+Useful commands from a repository checkout:
 
 ```bash
 ./scripts/deploy.sh status YOUR_OPERATOR_TOKEN
@@ -78,8 +82,13 @@ Useful deployment commands:
 ./scripts/deploy.sh down
 ```
 
-The image uses verified prebuilt Linux release bundles rather than compiling
-Sakuin during deployment. Set `SAKUIN_VERSION` in `.env` to pin a release.
+Those helper commands are available when deploying from a repository checkout.
+The script pulls the published image and handles first-run credentials. For the
+single-file deployment, use the corresponding Compose commands directly:
+`docker compose ps`, `docker compose logs --follow sakuin`, and
+`docker compose down`.
+Set `SAKUIN_IMAGE=ghcr.io/brandenxia/sakuin:vX.Y.Z` in an adjacent `.env` file
+to pin a release.
 
 Torznab clients can use `http://127.0.0.1:8080/api` as the indexer URL and the
 complete `sakuin_...` reader token as `apikey`. Sakuin currently advertises and

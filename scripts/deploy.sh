@@ -69,18 +69,8 @@ wait_for_health() {
 
 deploy() {
   local api_port="${SAKUIN_API_PORT:-}"
-  local release_version="${SAKUIN_VERSION:-}"
   "${compose[@]}" config --quiet
-  if [[ -z "${release_version}" ]]; then
-    release_version="$(env_value SAKUIN_VERSION)"
-  fi
-  if [[ "${release_version:-latest}" == "latest" ]]; then
-    # A stable Docker build argument would otherwise keep an older cached
-    # `latest` bundle after a new GitHub release is published.
-    "${compose[@]}" build --pull --no-cache
-  else
-    "${compose[@]}" build --pull
-  fi
+  "${compose[@]}" pull
   initialize_credentials
   "${compose[@]}" up --detach
   wait_for_health
@@ -113,8 +103,7 @@ status)
   fi
   ;;
 verify)
-  "${compose[@]}" exec -T sakuin sakuin admin verify \
-    --config=/etc/sakuin/sakuin.toml
+  "${compose[@]}" exec -T sakuin sakuin admin verify
   ;;
 key)
   key_id="${2:-}"

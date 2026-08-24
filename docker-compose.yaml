@@ -1,14 +1,43 @@
 name: sakuin
 
+x-sakuin-image: &sakuin-image ${SAKUIN_IMAGE:-ghcr.io/brandenxia/sakuin:latest}
+
 services:
+  sakuin-init:
+    image: *sakuin-image
+    pull_policy: always
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        if ! sakuin-api-key --state-dir /var/lib/sakuin/operational/api list >/tmp/keys 2>/dev/null; then
+          sakuin-api-key --state-dir /var/lib/sakuin/operational/api init
+          sakuin-api-key --state-dir /var/lib/sakuin/operational/api list >/tmp/keys
+        fi
+        if ! grep -q '^reader[[:space:]]' /tmp/keys; then
+          printf 'One-time reader API token:\n'
+          sakuin-api-key --state-dir /var/lib/sakuin/operational/api create --id reader --permissions search
+        fi
+        if ! grep -q '^operator[[:space:]]' /tmp/keys; then
+          printf 'One-time operator API token:\n'
+          sakuin-api-key --state-dir /var/lib/sakuin/operational/api create --id operator --permissions admin
+        fi
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - sakuin-data:/var/lib/sakuin
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1m
+    restart: "no"
+
   sakuin:
-    image: ${SAKUIN_IMAGE:-sakuin:local}
-    build:
-      context: .
-      args:
-        SAKUIN_VERSION: ${SAKUIN_VERSION:-latest}
-        SAKUIN_RELEASE_BASE_URL: ${SAKUIN_RELEASE_BASE_URL:-https://github.com/BrandenXia/sakuin/releases}
-        SAKUIN_BINARY_URL: ${SAKUIN_BINARY_URL:-}
+    image: *sakuin-image
+    pull_policy: always
+    depends_on:
+      sakuin-init:
+        condition: service_completed_successfully
     init: true
     restart: unless-stopped
     read_only: true
@@ -24,13 +53,11 @@ services:
       SAKUIN_NETWORK_LISTEN_PORT: "6881"
       SAKUIN_NETWORK_ENABLE_IPV6: ${SAKUIN_ENABLE_IPV6:-false}
       SAKUIN_DHT_BOOTSTRAP: ${SAKUIN_DHT_BOOTSTRAP:-}
-    command: ["--config=/etc/sakuin/sakuin.toml"]
     ports:
       - "127.0.0.1:${SAKUIN_API_PORT:-8080}:8080/tcp"
       - "${SAKUIN_DHT_PORT:-6881}:6881/udp"
     volumes:
       - sakuin-data:/var/lib/sakuin
-      - ./config/sakuin.docker.toml:/etc/sakuin/sakuin.toml:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     healthcheck:
