@@ -2,12 +2,23 @@ export module sakuin.search.index;
 
 import std;
 
+import sakuin.classification;
 import sakuin.core.ids;
 import sakuin.core.result;
 import sakuin.core.time;
 import sakuin.model.torrent;
 
 export namespace sakuin::search {
+
+enum class AdultContentMode { Include, Exclude, Only };
+
+struct SearchClassificationOptions {
+  bool enabled{true};
+  classification::ClassifierOptions classifier;
+  classification::Confidence category_minimum{
+      classification::Confidence::Medium};
+  classification::Confidence adult_minimum{classification::Confidence::High};
+};
 
 struct SearchQuery {
   std::string text;
@@ -17,6 +28,10 @@ struct SearchQuery {
   std::optional<std::size_t> maximum_file_count;
   std::optional<core::Timestamp> first_seen_at_or_after;
   std::optional<core::Timestamp> last_seen_at_or_before;
+  // Categories are ORed. Adult visibility is intentionally separate from
+  // classification and defaults to retaining all matching records.
+  std::vector<classification::MediaCategory> categories;
+  AdultContentMode adult_content{AdultContentMode::Include};
   std::size_t offset{};
   std::size_t limit{50};
 };
@@ -29,6 +44,8 @@ struct SearchHit {
   core::Timestamp first_seen;
   core::Timestamp last_seen;
   std::uint32_t score{};
+  classification::Classification classification;
+  std::vector<classification::MediaCategory> categories;
 };
 
 struct SearchResult {

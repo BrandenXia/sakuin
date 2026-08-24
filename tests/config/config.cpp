@@ -87,6 +87,7 @@ interval_ms = 120000
 enabled = true
 adult_detection_enabled = true
 adult_content_policy = "only"
+adult_minimum_confidence = "medium"
 maximum_files_to_inspect = 50000
 maximum_path_bytes = 2048
 maximum_tokens = 8192
@@ -191,6 +192,8 @@ tls_server_name = "coordinator.internal"
                 std::string{"60000"}},
       std::pair{std::string{"SAKUIN_CLASSIFICATION_ADULT_CONTENT_POLICY"},
                 std::string{"exclude"}},
+      std::pair{std::string{"SAKUIN_CLASSIFICATION_ADULT_MINIMUM_CONFIDENCE"},
+                std::string{"low"}},
       std::pair{std::string{"SAKUIN_DISTRIBUTED_MAXIMUM_WORK_ITEMS"},
                 std::string{"16384"}},
       std::pair{std::string{"SAKUIN_DISTRIBUTED_COORDINATOR_LISTEN_PORT"},
@@ -284,6 +287,8 @@ tls_server_name = "coordinator.internal"
       !loaded.indexing.classification.adult_detection_enabled ||
       loaded.indexing.classification.adult_content_policy !=
           config::AdultContentPolicy::Exclude ||
+      loaded.indexing.classification.adult_minimum_confidence !=
+          config::ClassificationConfidence::Low ||
       loaded.indexing.classification.maximum_files_to_inspect != 50'000 ||
       loaded.indexing.classification.maximum_path_bytes != 2'048 ||
       loaded.indexing.classification.maximum_tokens != 8'192 ||

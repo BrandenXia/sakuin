@@ -33,6 +33,28 @@ enum class ContentLabel { Adult, Anime };
 
 enum class VideoResolution { Sd, Hd720, Hd1080, Uhd2160 };
 
+// Semantic categories are independent of any wire protocol. Adapters such as
+// Torznab map these to their own identifiers without leaking those identifiers
+// into the classifier or search interfaces.
+enum class MediaCategory {
+  Movie,
+  MovieSd,
+  MovieHd,
+  MovieUhd,
+  Series,
+  SeriesSd,
+  SeriesHd,
+  SeriesUhd,
+  SeriesAnime,
+  Audio,
+  Audiobook,
+  Application,
+  Books,
+  Ebook,
+  Adult,
+  Other,
+};
+
 enum class EvidenceSubject {
   Movie,
   Series,
@@ -114,6 +136,10 @@ std::optional<Confidence> label_confidence(const Classification &result,
   if (found == result.labels.end())
     return std::nullopt;
   return found->confidence;
+}
+
+constexpr bool at_least(Confidence value, Confidence minimum) noexcept {
+  return std::to_underlying(value) >= std::to_underlying(minimum);
 }
 
 } // namespace sakuin::classification

@@ -7,6 +7,7 @@ export module sakuin.api.torznab;
 import std;
 
 import sakuin.api.http;
+import sakuin.classification;
 import sakuin.core.bytes;
 import sakuin.core.ids;
 import sakuin.core.result;
@@ -22,11 +23,12 @@ struct TorznabRequest {
   std::string function_name;
   std::string api_key;
   search::SearchQuery query;
-  bool category_matches{true};
+  bool category_filter_matches_nothing{};
 };
 
 core::Result<TorznabRequest> parse_torznab_request(std::string_view query);
-HttpResponse torznab_capabilities();
+HttpResponse torznab_capabilities(
+    search::AdultContentMode adult_content = search::AdultContentMode::Include);
 HttpResponse torznab_search_response(const search::SearchResult &result,
                                      std::size_t offset);
 HttpResponse torznab_error(std::string_view code, std::string_view description);
@@ -200,6 +202,90 @@ HttpResponse xml_response(std::string text, std::string_view content_type) {
           .body = core::ByteBuffer{view.begin(), view.end()}};
 }
 
+struct TorznabCategory {
+  unsigned id;
+  std::string_view name;
+};
+
+std::optional<classification::MediaCategory> semantic_category(unsigned id) {
+  using enum classification::MediaCategory;
+  switch (id) {
+  case 2000:
+    return Movie;
+  case 2030:
+    return MovieSd;
+  case 2040:
+    return MovieHd;
+  case 2045:
+    return MovieUhd;
+  case 3000:
+    return Audio;
+  case 3030:
+    return Audiobook;
+  case 4000:
+    return Application;
+  case 5000:
+    return Series;
+  case 5030:
+    return SeriesSd;
+  case 5040:
+    return SeriesHd;
+  case 5045:
+    return SeriesUhd;
+  case 5070:
+    return SeriesAnime;
+  case 6000:
+    return Adult;
+  case 7000:
+    return Books;
+  case 7020:
+    return Ebook;
+  case 8000:
+    return Other;
+  default:
+    return std::nullopt;
+  }
+}
+
+TorznabCategory torznab_category(classification::MediaCategory category) {
+  using enum classification::MediaCategory;
+  switch (category) {
+  case Movie:
+    return {2000, "Movies"};
+  case MovieSd:
+    return {2030, "Movies/SD"};
+  case MovieHd:
+    return {2040, "Movies/HD"};
+  case MovieUhd:
+    return {2045, "Movies/UHD"};
+  case Series:
+    return {5000, "TV"};
+  case SeriesSd:
+    return {5030, "TV/SD"};
+  case SeriesHd:
+    return {5040, "TV/HD"};
+  case SeriesUhd:
+    return {5045, "TV/UHD"};
+  case SeriesAnime:
+    return {5070, "TV/Anime"};
+  case Audio:
+    return {3000, "Audio"};
+  case Audiobook:
+    return {3030, "Audio/Audiobook"};
+  case Application:
+    return {4000, "PC"};
+  case Books:
+    return {7000, "Books"};
+  case Ebook:
+    return {7020, "Books/EBook"};
+  case Adult:
+    return {6000, "XXX"};
+  case Other:
+    return {8000, "Other"};
+  }
+  std::unreachable();
+}
+
 } // namespace
 
 core::Result<TorznabRequest> parse_torznab_request(std::string_view encoded) {
@@ -224,7 +310,11 @@ core::Result<TorznabRequest> parse_torznab_request(std::string_view encoded) {
                          });
   if (result.function_name == "caps")
     result.function = TorznabFunction::Capabilities;
-  else if (result.function_name == "search")
+  else if (result.function_name == "search" ||
+           result.function_name == "movie" ||
+           result.function_name == "tvsearch" ||
+           result.function_name == "music" || result.function_name == "audio" ||
+           result.function_name == "book")
     result.function = TorznabFunction::Search;
   const auto output = values->find("o");
   if (output != values->end()) {
@@ -247,9 +337,10 @@ core::Result<TorznabRequest> parse_torznab_request(std::string_view encoded) {
     return std::unexpected(offset ? limit.error() : offset.error());
   result.query.offset = *offset;
   result.query.limit = std::min(*limit, MaximumLimit);
+  bool category_parameter{};
   if (const auto category = values->find("cat");
       category != values->end() && !category->second.empty()) {
-    result.category_matches = false;
+    category_parameter = true;
     std::string_view remaining{category->second};
     while (!remaining.empty()) {
       const auto separator = remaining.find(',');
@@ -261,35 +352,56 @@ core::Result<TorznabRequest> parse_torznab_request(std::string_view encoded) {
           end != entry.data() + entry.size())
         return std::unexpected(core::Error{core::ErrorCode::InvalidQuery,
                                            "cat must contain integer IDs"});
-      if (value == 8000)
-        result.category_matches = true;
+      if (const auto semantic = semantic_category(value))
+        result.query.categories.push_back(*semantic);
       if (separator == std::string_view::npos)
         break;
       remaining.remove_prefix(separator + 1);
     }
+    result.category_filter_matches_nothing = result.query.categories.empty();
+  }
+  if (!category_parameter) {
+    using enum classification::MediaCategory;
+    if (result.function_name == "movie")
+      result.query.categories.push_back(Movie);
+    else if (result.function_name == "tvsearch")
+      result.query.categories.push_back(Series);
+    else if (result.function_name == "music" || result.function_name == "audio")
+      result.query.categories.push_back(Audio);
+    else if (result.function_name == "book")
+      result.query.categories.push_back(Books);
   }
   return result;
 }
 
-HttpResponse torznab_capabilities() {
-  return xml_response(
-      R"xml(<?xml version="1.0" encoding="UTF-8"?>
+HttpResponse torznab_capabilities(search::AdultContentMode adult_content) {
+  std::string xml = R"xml(<?xml version="1.0" encoding="UTF-8"?>
 <caps>
   <server version="1.3" title="Sakuin" />
   <limits default="50" max="100" />
   <registration available="no" open="no" />
   <searching>
     <search available="yes" supportedParams="q" />
-    <tv-search available="no" supportedParams="q" />
-    <movie-search available="no" supportedParams="q" />
-    <music-search available="no" supportedParams="q" />
-    <audio-search available="no" supportedParams="q" />
-    <book-search available="no" supportedParams="q" />
+    <tv-search available="yes" supportedParams="q" />
+    <movie-search available="yes" supportedParams="q" />
+    <audio-search available="yes" supportedParams="q" />
+    <book-search available="yes" supportedParams="q" />
   </searching>
-  <categories><category id="8000" name="Other" /></categories>
+  <categories>
+    <category id="2000" name="Movies"><subcat id="2030" name="SD" /><subcat id="2040" name="HD" /><subcat id="2045" name="UHD" /></category>
+    <category id="3000" name="Audio"><subcat id="3030" name="Audiobook" /></category>
+    <category id="4000" name="PC" />
+    <category id="5000" name="TV"><subcat id="5030" name="SD" /><subcat id="5040" name="HD" /><subcat id="5045" name="UHD" /><subcat id="5070" name="Anime" /></category>
+)xml";
+  if (adult_content != search::AdultContentMode::Exclude)
+    xml += "    <category id=\"6000\" name=\"XXX\" />\n";
+  xml +=
+      R"xml(    <category id="7000" name="Books"><subcat id="7020" name="EBook" /></category>
+    <category id="8000" name="Other" />
+  </categories>
 </caps>
-)xml",
-      "application/xml; charset=utf-8");
+)xml";
+  return xml_response(std::move(xml), "application/xml; charset=utf-8");
 }
 
 HttpResponse torznab_search_response(const search::SearchResult &result,
@@ -314,12 +426,21 @@ HttpResponse torznab_search_response(const search::SearchResult &result,
     xml += "<item><title>" + xml_escape(title) +
            "</title><guid isPermaLink=\"false\">" + hash + "</guid><link>" +
            escaped_magnet + "</link><pubDate>" + rss_date(hit.last_seen) +
-           "</pubDate><category>Other</category><description>Indexed from "
+           "</pubDate>";
+    for (const auto category : hit.categories) {
+      const auto wire = torznab_category(category);
+      xml += "<category>" + xml_escape(wire.name) + "</category>";
+    }
+    xml += "<description>Indexed from "
            "the BitTorrent DHT</description><enclosure url=\"" +
            escaped_magnet + "\" length=\"" + std::to_string(hit.total_size) +
-           "\" type=\"application/x-bittorrent\" />"
-           "<torznab:attr name=\"category\" value=\"8000\" />"
-           "<torznab:attr name=\"size\" value=\"" +
+           "\" type=\"application/x-bittorrent\" />";
+    for (const auto category : hit.categories) {
+      const auto wire = torznab_category(category);
+      xml += "<torznab:attr name=\"category\" value=\"" +
+             std::to_string(wire.id) + "\" />";
+    }
+    xml += "<torznab:attr name=\"size\" value=\"" +
            std::to_string(hit.total_size) +
            "\" /><torznab:attr name=\"files\" value=\"" +
            std::to_string(hit.file_count) +

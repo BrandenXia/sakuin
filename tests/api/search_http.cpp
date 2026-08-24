@@ -69,7 +69,16 @@ int main() {
   record.first_seen = core::Timestamp{std::chrono::milliseconds{10}};
   record.last_seen = core::Timestamp{std::chrono::milliseconds{20}};
   record.files.push_back({.path = "linux.iso", .size = 4096});
-  if (!(*rebuild)->append(record) || !(*rebuild)->commit())
+  model::TorrentRecord movie;
+  movie.info_hash.bytes.fill(0x33);
+  movie.name = "Example Movie 2024 1080p";
+  movie.total_size = 1'000'000;
+  movie.first_seen = core::Timestamp{std::chrono::milliseconds{30}};
+  movie.last_seen = core::Timestamp{std::chrono::milliseconds{40}};
+  movie.files.push_back(
+      {.path = "Example.Movie.2024.1080p.mkv", .size = 1'000'000});
+  if (!(*rebuild)->append(record) || !(*rebuild)->append(movie) ||
+      !(*rebuild)->commit())
     return 4;
 
   Duplicates duplicates;
@@ -167,6 +176,8 @@ int main() {
       !body(*found).contains("\"source_generation\":7") ||
       !body(*found).contains("\"total_matches\":1") ||
       !body(*found).contains("Linux Distribution") ||
+      !body(*found).contains("\"classification\"") ||
+      !body(*found).contains("\"categories\":[\"other\"]") ||
       !body(*found).contains(std::string(40, '1')))
     return 7;
 
@@ -179,6 +190,16 @@ int main() {
   if (!time_filtered || time_filtered->status != 200 ||
       !body(*time_filtered).contains("\"total_matches\":1"))
     return 14;
+
+  api::HttpRequest category_query{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?category=movie&limit=10",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto category_filtered = handler.handle(std::move(category_query));
+  if (!category_filtered || category_filtered->status != 200 ||
+      !body(*category_filtered).contains("\"total_matches\":1") ||
+      !body(*category_filtered).contains("Example Movie 2024 1080p"))
+    return 38;
 
   api::HttpRequest invalid{
       .method = api::HttpMethod::Get,
@@ -222,7 +243,10 @@ int main() {
       handler.handle({.method = api::HttpMethod::Get, .target = "/api?t=caps"});
   if (!caps || caps->status != 200 ||
       !body(*caps).contains("<server version=\"1.3\" title=\"Sakuin\"") ||
-      !body(*caps).contains("<search available=\"yes\""))
+      !body(*caps).contains("<search available=\"yes\"") ||
+      !body(*caps).contains("<movie-search available=\"yes\"") ||
+      !body(*caps).contains("<audio-search available=\"yes\"") ||
+      !body(*caps).contains("<category id=\"2000\" name=\"Movies\""))
     return 16;
 
   auto token = credential("reader", secret);
@@ -236,6 +260,20 @@ int main() {
       !body(*torznab).contains("magnet:?xt=urn:btih:") ||
       !body(*torznab).contains(std::string(40, '1')))
     return 17;
+
+  auto torznab_movie = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/api?t=movie&q=example&limit=10&apikey=" + token});
+  if (!torznab_movie ||
+      !body(*torznab_movie).contains("name=\"category\" value=\"2000\"") ||
+      !body(*torznab_movie).contains("name=\"category\" value=\"2040\"") ||
+      !body(*torznab_movie).contains("total=\"1\""))
+    return 36;
+  auto unknown_category = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/api?t=search&cat=9999&limit=10&apikey=" + token});
+  if (!unknown_category || !body(*unknown_category).contains("total=\"0\""))
+    return 37;
 
   auto torznab_unauthorized = handler.handle(
       {.method = api::HttpMethod::Get, .target = "/api?t=search&q=linux"});

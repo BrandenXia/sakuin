@@ -35,6 +35,7 @@ enabled = true
 enabled = true
 adult_detection_enabled = true
 adult_content_policy = "include"
+adult_minimum_confidence = "high"
 
 [api]
 enabled = true

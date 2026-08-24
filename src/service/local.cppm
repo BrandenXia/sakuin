@@ -250,7 +250,8 @@ LocalSakuinService::create(const config::AppConfig &configuration,
   if (configuration.api.enabled) {
     auto created = LocalApiService::create(
         configuration.api, (*storage)->torrents(), api_observer,
-        (*storage)->root() / "derived" / "search", duplicates.get(), status);
+        (*storage)->root() / "derived" / "search", duplicates.get(), status,
+        configuration.indexing.classification);
     if (!created)
       return std::unexpected(created.error());
     api = std::move(*created);
