@@ -59,6 +59,8 @@ public:
   virtual ServiceStatus status() const = 0;
 };
 
+bool service_ready(const ServiceStatus &status) noexcept;
+core::Result<core::ByteBuffer> json_readiness(bool ready);
 core::Result<core::ByteBuffer> json_status(const ServiceStatus &status);
 
 } // namespace sakuin::api
@@ -101,6 +103,28 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
 }
 
 } // namespace
+
+bool service_ready(const ServiceStatus &status) noexcept {
+  if (status.state != "running")
+    return false;
+  const bool family_enabled = status.ipv4.enabled || status.ipv6.enabled;
+  return family_enabled && (!status.ipv4.enabled || status.ipv4.running) &&
+         (!status.ipv6.enabled || status.ipv6.running);
+}
+
+core::Result<core::ByteBuffer> json_readiness(bool ready) {
+  try {
+    const auto text =
+        nlohmann::json{{"status", ready ? "ready" : "not_ready"}}.dump();
+    const auto bytes = std::as_bytes(std::span{text});
+    return core::ByteBuffer{bytes.begin(), bytes.end()};
+  } catch (const std::exception &exception) {
+    return std::unexpected(
+        core::Error{core::ErrorCode::Internal,
+                    std::string{"Could not serialize readiness response: "} +
+                        exception.what()});
+  }
+}
 
 core::Result<core::ByteBuffer> json_status(const ServiceStatus &status) {
   try {

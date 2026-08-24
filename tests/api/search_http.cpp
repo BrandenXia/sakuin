@@ -115,6 +115,18 @@ int main() {
   if (!health || health->status != 200 ||
       body(*health) != "{\"status\":\"ok\"}")
     return 5;
+  auto ready =
+      handler.handle({.method = api::HttpMethod::Get, .target = "/v1/ready"});
+  if (!ready || ready->status != 200 ||
+      body(*ready) != "{\"status\":\"ready\"}")
+    return 29;
+  status.snapshot.state = "starting";
+  auto not_ready =
+      handler.handle({.method = api::HttpMethod::Get, .target = "/v1/ready"});
+  if (!not_ready || not_ready->status != 503 ||
+      body(*not_ready) != "{\"status\":\"not_ready\"}")
+    return 30;
+  status.snapshot.state = "running";
 
   auto unauthorized = handler.handle(
       {.method = api::HttpMethod::Get, .target = "/v1/search?q=linux"});
@@ -253,6 +265,8 @@ int main() {
       !body(*operator_metrics)
            .contains("sakuin_search_records_indexed_total 21\n"))
     return 24;
+  if (!body(*operator_metrics).contains("sakuin_service_ready 1\n"))
+    return 31;
   auto metrics_with_post = handler.handle(
       {.method = api::HttpMethod::Post,
        .target = "/v1/metrics",
@@ -306,6 +320,10 @@ int main() {
     return 12;
   api::SearchHttpHandler limited_handler{**authenticator, index,
                                          governor->get()};
+  auto unavailable_readiness = limited_handler.handle(
+      {.method = api::HttpMethod::Get, .target = "/v1/ready"});
+  if (!unavailable_readiness || unavailable_readiness->status != 503)
+    return 32;
   const auto authenticated = [&] {
     return api::HttpRequest{
         .method = api::HttpMethod::Get,
