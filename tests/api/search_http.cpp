@@ -128,6 +128,30 @@ int main() {
     return 30;
   status.snapshot.state = "running";
 
+  auto openapi = handler.handle(
+      {.method = api::HttpMethod::Get, .target = "/openapi.json"});
+  if (!openapi || openapi->status != 200 ||
+      openapi->headers["content-type"] != "application/json; charset=utf-8" ||
+      !body(*openapi).contains("\"openapi\":\"3.1.2\"") ||
+      !body(*openapi).contains(
+          "\"jsonSchemaDialect\":\"https://spec.openapis.org/oas/3.1/"
+          "dialect/base\"") ||
+      !body(*openapi).contains("\"version\":\"" + std::string{core::version} +
+                               "\"") ||
+      !body(*openapi).contains("\"/v1/search\"") ||
+      !body(*openapi).contains("\"bearerAuth\"") ||
+      body(*openapi).contains("sakuin_reader_"))
+    return 33;
+  auto openapi_alias = handler.handle(
+      {.method = api::HttpMethod::Get, .target = "/v1/openapi.json"});
+  if (!openapi_alias || body(*openapi_alias) != body(*openapi))
+    return 34;
+  auto openapi_post = handler.handle(
+      {.method = api::HttpMethod::Post, .target = "/openapi.json"});
+  if (!openapi_post || openapi_post->status != 405 ||
+      openapi_post->headers["allow"] != "GET")
+    return 35;
+
   auto unauthorized = handler.handle(
       {.method = api::HttpMethod::Get, .target = "/v1/search?q=linux"});
   if (!unauthorized || unauthorized->status != 401)

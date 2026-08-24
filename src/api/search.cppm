@@ -6,6 +6,7 @@ import sakuin.api.auth;
 import sakuin.api.http;
 import sakuin.api.json;
 import sakuin.api.metrics;
+import sakuin.api.openapi;
 import sakuin.api.rate_limit;
 import sakuin.api.status;
 import sakuin.api.torznab;
@@ -454,6 +455,17 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
     if (!body)
       return std::unexpected(body.error());
     return json_response(ready ? 200 : 503, std::move(*body));
+  }
+  if (path == "/openapi.json" || path == "/v1/openapi.json") {
+    if (request.method != HttpMethod::Get)
+      return method_not_allowed();
+    if (!request.body.empty())
+      return error_response(400, "invalid_request",
+                            "GET requests must not contain a body");
+    auto body = openapi_document();
+    if (!body)
+      return std::unexpected(body.error());
+    return json_response(200, std::move(*body));
   }
 
   const bool torznab_route = path == "/api" || path == "/torznab/api";
