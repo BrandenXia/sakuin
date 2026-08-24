@@ -178,6 +178,7 @@ int main() {
       !body(*found).contains("Linux Distribution") ||
       !body(*found).contains("\"classification\"") ||
       !body(*found).contains("\"categories\":[\"other\"]") ||
+      !body(*found).contains("\"evidence\":[") ||
       !body(*found).contains(std::string(40, '1')))
     return 7;
 
@@ -198,7 +199,10 @@ int main() {
   auto category_filtered = handler.handle(std::move(category_query));
   if (!category_filtered || category_filtered->status != 200 ||
       !body(*category_filtered).contains("\"total_matches\":1") ||
-      !body(*category_filtered).contains("Example Movie 2024 1080p"))
+      !body(*category_filtered).contains("Example Movie 2024 1080p") ||
+      !body(*category_filtered).contains("\"code\":\"release_year_token\"") ||
+      !body(*category_filtered).contains("\"subject\":\"movie\"") ||
+      !body(*category_filtered).contains("\"weight\":"))
     return 38;
 
   api::HttpRequest invalid{

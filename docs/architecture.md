@@ -255,8 +255,10 @@ filters a torrent. The local search projection recomputes these values from
 canonical records when it opens or refreshes, so rule changes do not require a
 canonical storage migration. Native JSON results expose the derived kind,
 confidence, labels, categories, resolution, algorithm version, and truncation
-state. The rules inspect bounded untrusted strings without opening paths,
-extracting archives, or performing network lookups.
+state. They also include each bounded evidence code, subject, and signed rule
+weight so clients and operators can explain a classification without inspecting
+classifier internals. The rules inspect bounded untrusted strings without
+opening paths, extracting archives, or performing network lookups.
 
 API credentials live in a separate operational store. The CLI generates the
 secret once and persists a salted verifier, owner-only pepper, and permission

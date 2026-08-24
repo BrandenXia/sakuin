@@ -197,6 +197,76 @@ std::string_view name(classification::MediaCategory value) {
   std::unreachable();
 }
 
+std::string_view name(classification::EvidenceSubject value) {
+  using enum classification::EvidenceSubject;
+  switch (value) {
+  case Movie:
+    return "movie";
+  case Series:
+    return "series";
+  case Music:
+    return "music";
+  case Audiobook:
+    return "audiobook";
+  case Ebook:
+    return "ebook";
+  case Game:
+    return "game";
+  case Application:
+    return "application";
+  case Mixed:
+    return "mixed";
+  case Adult:
+    return "adult";
+  case Anime:
+    return "anime";
+  case Resolution:
+    return "resolution";
+  }
+  std::unreachable();
+}
+
+std::string_view name(classification::EvidenceCode value) {
+  using enum classification::EvidenceCode;
+  switch (value) {
+  case VideoPayloadDominant:
+    return "video_payload_dominant";
+  case AudioPayloadDominant:
+    return "audio_payload_dominant";
+  case EbookPayloadDominant:
+    return "ebook_payload_dominant";
+  case GamePayloadDominant:
+    return "game_payload_dominant";
+  case ApplicationPayloadDominant:
+    return "application_payload_dominant";
+  case MultiplePayloadFamilies:
+    return "multiple_payload_families";
+  case SingleDominantVideo:
+    return "single_dominant_video";
+  case SeasonEpisodeToken:
+    return "season_episode_token";
+  case ReleaseYearToken:
+    return "release_year_token";
+  case MusicReleaseToken:
+    return "music_release_token";
+  case AudiobookToken:
+    return "audiobook_token";
+  case EbookToken:
+    return "ebook_token";
+  case GameToken:
+    return "game_token";
+  case ApplicationToken:
+    return "application_token";
+  case AdultToken:
+    return "adult_token";
+  case AnimeToken:
+    return "anime_token";
+  case ResolutionToken:
+    return "resolution_token";
+  }
+  std::unreachable();
+}
+
 nlohmann::json classification_json(const search::SearchHit &hit) {
   nlohmann::json labels = nlohmann::json::array();
   for (const auto &label : hit.classification.labels)
@@ -205,12 +275,18 @@ nlohmann::json classification_json(const search::SearchHit &hit) {
   nlohmann::json categories = nlohmann::json::array();
   for (const auto category : hit.categories)
     categories.push_back(name(category));
+  nlohmann::json evidence = nlohmann::json::array();
+  for (const auto &item : hit.classification.evidence)
+    evidence.push_back({{"code", name(item.code)},
+                        {"subject", name(item.subject)},
+                        {"weight", item.weight}});
   nlohmann::json result{
       {"state", name(hit.classification.state)},
       {"kind", name(hit.classification.kind)},
       {"confidence", name(hit.classification.kind_confidence)},
       {"labels", std::move(labels)},
       {"categories", std::move(categories)},
+      {"evidence", std::move(evidence)},
       {"algorithm_version", hit.classification.algorithm_version},
       {"input_truncated", hit.classification.input_truncated}};
   result["resolution"] =
