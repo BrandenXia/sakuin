@@ -6,9 +6,11 @@ export module sakuin.api.status;
 
 import std;
 
+import sakuin.classification;
 import sakuin.core.bytes;
 import sakuin.core.result;
 import sakuin.core.version;
+import sakuin.search.index;
 
 export namespace sakuin::api {
 
@@ -46,6 +48,7 @@ struct ServiceStatus {
   DhtFamilyStatus ipv6;
   std::uint64_t search_source_generation{};
   std::uint64_t search_records_indexed{};
+  search::ClassificationIndexStats search_classification;
   std::uint64_t materialized_observations{};
   std::uint64_t materialized_torrent_updates{};
   std::uint64_t duplicate_source_generation{};
@@ -104,6 +107,67 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
   return result;
 }
 
+std::string_view category_name(classification::MediaCategory category) {
+  using enum classification::MediaCategory;
+  switch (category) {
+  case Movie:
+    return "movie";
+  case MovieSd:
+    return "movie_sd";
+  case MovieHd:
+    return "movie_hd";
+  case MovieUhd:
+    return "movie_uhd";
+  case Series:
+    return "series";
+  case SeriesSd:
+    return "series_sd";
+  case SeriesHd:
+    return "series_hd";
+  case SeriesUhd:
+    return "series_uhd";
+  case SeriesAnime:
+    return "series_anime";
+  case Audio:
+    return "audio";
+  case Audiobook:
+    return "audiobook";
+  case Application:
+    return "application";
+  case Books:
+    return "books";
+  case Ebook:
+    return "ebook";
+  case Adult:
+    return "adult";
+  case Other:
+    return "other";
+  }
+  std::unreachable();
+}
+
+nlohmann::json
+classification_json(const search::ClassificationIndexStats &classification) {
+  nlohmann::json categories = nlohmann::json::object();
+  for (std::size_t index = 0; index < search::MediaCategoryCount; ++index) {
+    const auto category = static_cast<classification::MediaCategory>(index);
+    categories[category_name(category)] =
+        classification.category_count(category);
+  }
+  using enum classification::ClassificationState;
+  return {{"enabled", classification.enabled},
+          {"algorithm_version", classification.algorithm_version},
+          {"total_records", classification.total_records},
+          {"states",
+           {{"awaiting_metadata", classification.state_count(AwaitingMetadata)},
+            {"classified", classification.state_count(Classified)},
+            {"ambiguous", classification.state_count(Ambiguous)},
+            {"unknown", classification.state_count(Unknown)}}},
+          {"input_truncated", classification.input_truncated},
+          {"adult_labeled", classification.adult_labeled},
+          {"categories", std::move(categories)}};
+}
+
 } // namespace
 
 bool service_ready(const ServiceStatus &status) noexcept {
@@ -140,7 +204,9 @@ core::Result<core::ByteBuffer> json_status(const ServiceStatus &status) {
           {"ipv6", family_json(status.ipv6)}}},
         {"search",
          {{"source_generation", status.search_source_generation},
-          {"records_indexed", status.search_records_indexed}}},
+          {"records_indexed", status.search_records_indexed},
+          {"classification",
+           classification_json(status.search_classification)}}},
         {"materialization",
          {{"observations_processed", status.materialized_observations},
           {"torrent_updates", status.materialized_torrent_updates}}},

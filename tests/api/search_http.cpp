@@ -297,6 +297,9 @@ int main() {
       !body(*operator_status).contains("\"cycles\":42") ||
       !body(*operator_status).contains("\"routing_nodes\":13") ||
       !body(*operator_status).contains("\"metadata_in_flight\":2") ||
+      !body(*operator_status).contains("\"total_records\":2") ||
+      !body(*operator_status).contains("\"adult_labeled\":0") ||
+      !body(*operator_status).contains("\"movie\":1") ||
       !body(*operator_status).contains("\"last_error\":null") ||
       body(*operator_status).contains("\"last_error\":[null]") ||
       !body(*operator_status).contains("\"state\":\"running\""))
@@ -332,6 +335,14 @@ int main() {
       !body(*operator_metrics)
            .contains("sakuin_search_records_indexed_total 21\n"))
     return 24;
+  if (!body(*operator_metrics).contains("sakuin_classification_enabled 1\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_classification_adult_labeled_records 0\n") ||
+      !body(*operator_metrics)
+           .contains(
+               "sakuin_classification_category_records{category=\"movie\"} "
+               "1\n"))
+    return 39;
   if (!body(*operator_metrics).contains("sakuin_service_ready 1\n"))
     return 31;
   auto metrics_with_post = handler.handle(

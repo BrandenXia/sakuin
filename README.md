@@ -119,6 +119,8 @@ Prometheus can scrape `/metrics` (or `/v1/metrics`) with the operator token as
 an `Authorization: Bearer` header. The endpoint reports service uptime, DHT
 activity and queues, search and duplicate generations, materialization, and
 storage-maintenance counters without including peer addresses or error text.
+Classifier coverage, ambiguity, bounded-input truncation, and semantic category
+counts are included so operators can assess classification quality in place.
 
 `/v1/health` is a liveness check for the HTTP process. `/v1/ready` stays at
 HTTP 503 until the composed service and every enabled DHT address-family worker
