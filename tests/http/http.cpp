@@ -90,6 +90,12 @@ void serializes_owned_framing() {
   sakuin::api::HttpResponse framing{.status = 200,
                                     .headers = {{"Content-Length", "0"}}};
   require(!sakuin::http::serialize_response(std::move(framing)));
+
+  const auto accepted_body = bytes("accepted");
+  auto accepted = sakuin::http::serialize_response(
+      {.status = 202, .body = {accepted_body.begin(), accepted_body.end()}});
+  require(static_cast<bool>(accepted));
+  require(text(*accepted).starts_with("HTTP/1.1 202 Accepted\r\n"));
 }
 
 } // namespace

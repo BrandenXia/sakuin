@@ -7,6 +7,7 @@ import sakuin.api.credentials.store;
 import sakuin.core.bytes;
 import sakuin.core.random;
 import sakuin.core.result;
+import sakuin.core.version;
 
 export namespace sakuin::api {
 
@@ -23,6 +24,7 @@ constexpr std::string_view usage = R"usage(Usage:
   sakuin-api-key [--state-dir PATH] create --id ID --permissions LIST
   sakuin-api-key [--state-dir PATH] list
   sakuin-api-key [--state-dir PATH] disable --id ID
+  sakuin-api-key --version
 
 LIST is a comma-separated subset of: search,admin
 )usage";
@@ -33,6 +35,7 @@ struct Options {
   std::optional<std::string> key_id;
   std::optional<std::string> permissions;
   bool help{};
+  bool version{};
 };
 
 class SecretCleaner {
@@ -69,6 +72,10 @@ std::optional<Options> parse(std::span<const std::string_view> arguments,
     const auto argument = arguments[index];
     if (argument == "--help" || argument == "-h") {
       result.help = true;
+      continue;
+    }
+    if (argument == "--version" || argument == "-V") {
+      result.version = true;
       continue;
     }
     if (argument == "--state-dir" || argument == "--id" ||
@@ -160,6 +167,10 @@ int run_api_key_cli(std::span<const std::string_view> arguments,
     return 2;
   if (options->help) {
     output << usage;
+    return 0;
+  }
+  if (options->version) {
+    output << "sakuin-api-key " << core::version << '\n';
     return 0;
   }
   if (options->command.empty()) {

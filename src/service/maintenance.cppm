@@ -59,6 +59,10 @@ public:
   void stop() noexcept;
   bool running() const noexcept { return running_.load(); }
 
+  // Coalesces an operator request onto the maintenance owner thread. A later
+  // verification request upgrades an already queued ordinary pass.
+  core::Result<void> request_run(bool verify);
+
   // Runs a synchronous maintenance pass. Verification is optional because it
   // is substantially more expensive than threshold-based compaction and GC.
   void run_once(bool verify);
@@ -76,6 +80,8 @@ private:
   std::atomic<bool> running_{};
   std::mutex wait_mutex_;
   std::condition_variable_any wake_;
+  bool run_requested_{};
+  bool verification_requested_{};
   std::jthread worker_;
 };
 
@@ -117,6 +123,23 @@ void StorageMaintenanceCoordinator::stop() noexcept {
   wake_.notify_all();
   if (worker_.joinable())
     worker_.join();
+  std::lock_guard lock{wait_mutex_};
+  run_requested_ = false;
+  verification_requested_ = false;
+}
+
+core::Result<void>
+StorageMaintenanceCoordinator::request_run(bool perform_verification) {
+  {
+    std::lock_guard lock{wait_mutex_};
+    if (!running_.load())
+      return std::unexpected(core::Error{core::ErrorCode::Conflict,
+                                         "Storage maintenance is not running"});
+    run_requested_ = true;
+    verification_requested_ |= perform_verification;
+  }
+  wake_.notify_all();
+  return {};
 }
 
 void StorageMaintenanceCoordinator::notify(MaintenanceEvent event) noexcept {
@@ -222,12 +245,16 @@ void StorageMaintenanceCoordinator::worker(std::stop_token stop) {
       std::chrono::steady_clock::now() + configuration_.verification_interval;
   std::unique_lock lock{wait_mutex_};
   while (!stop.stop_requested()) {
-    wake_.wait_for(lock, stop, configuration_.interval, [] { return false; });
+    wake_.wait_for(lock, stop, configuration_.interval,
+                   [this] { return run_requested_; });
     if (stop.stop_requested())
       break;
+    const bool requested_verification = verification_requested_;
+    run_requested_ = false;
+    verification_requested_ = false;
     lock.unlock();
     const auto now = std::chrono::steady_clock::now();
-    const bool verify = now >= next_verification;
+    const bool verify = requested_verification || now >= next_verification;
     run_once(verify);
     if (verify)
       next_verification = now + configuration_.verification_interval;

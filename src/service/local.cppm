@@ -300,6 +300,14 @@ LocalSakuinService::create(const config::AppConfig &configuration,
                   api_refresh->request_search_refresh(generation);
               }}
             : std::function<void(LocalDataset, std::uint64_t)>{});
+  if (api && maintenance) {
+    auto configured = api->set_maintenance_requester(
+        [coordinator = maintenance.get()](bool verify) {
+          return coordinator->request_run(verify);
+        });
+    if (!configured)
+      return std::unexpected(configured.error());
+  }
   std::unique_ptr<TorrentMaterializationCoordinator> materialization;
   if (configuration.storage.materialization.enabled)
     materialization = std::make_unique<TorrentMaterializationCoordinator>(

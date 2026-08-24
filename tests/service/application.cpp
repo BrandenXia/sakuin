@@ -53,5 +53,9 @@ int main() {
                                std::string_view{"verify"}};
   if (service::parse_daemon_arguments(conflicting))
     return 7;
+  const std::array version{std::string_view{"--version"}};
+  parsed = service::parse_daemon_arguments(version);
+  if (!parsed || !parsed->version)
+    return 8;
   return 0;
 }

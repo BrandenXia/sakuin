@@ -54,17 +54,17 @@ initialize_credentials() {
   fi
 }
 
-wait_for_health() {
+wait_for_ready() {
   local attempt
   for ((attempt = 1; attempt <= 30; ++attempt)); do
     if "${compose[@]}" exec -T sakuin \
-      curl --fail --silent http://127.0.0.1:8080/v1/health >/dev/null 2>&1; then
+      curl --fail --silent http://127.0.0.1:8080/v1/ready >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
   done
   "${compose[@]}" logs --tail=100 sakuin >&2 || true
-  fail "Sakuin did not become healthy within 30 seconds"
+  fail "Sakuin did not become ready within 30 seconds"
 }
 
 deploy() {
@@ -73,11 +73,11 @@ deploy() {
   "${compose[@]}" pull
   initialize_credentials
   "${compose[@]}" up --detach
-  wait_for_health
+  wait_for_ready
   if [[ -z "${api_port}" ]]; then
     api_port="$(env_value SAKUIN_API_PORT)"
   fi
-  printf 'Sakuin is healthy at http://127.0.0.1:%s\n' "${api_port:-8080}"
+  printf 'Sakuin is ready at http://127.0.0.1:%s\n' "${api_port:-8080}"
 }
 
 command="${1:-up}"
@@ -102,6 +102,24 @@ status)
     printf '\n'
   fi
   ;;
+metrics)
+  [[ -n "${2:-}" ]] || fail "usage: $0 metrics OPERATOR_TOKEN"
+  "${compose[@]}" exec -T sakuin curl --fail --silent --show-error \
+    -H "Authorization: Bearer ${2}" \
+    http://127.0.0.1:8080/metrics
+  ;;
+maintenance)
+  [[ -n "${2:-}" ]] || fail "usage: $0 maintenance OPERATOR_TOKEN [verify]"
+  maintenance_url=http://127.0.0.1:8080/v1/operations/storage-maintenance
+  if [[ "${3:-}" == "verify" ]]; then
+    maintenance_url="${maintenance_url}?verify=true"
+  elif [[ -n "${3:-}" ]]; then
+    fail "usage: $0 maintenance OPERATOR_TOKEN [verify]"
+  fi
+  "${compose[@]}" exec -T sakuin curl --fail --silent --show-error \
+    --request POST -H "Authorization: Bearer ${2}" "${maintenance_url}"
+  printf '\n'
+  ;;
 verify)
   "${compose[@]}" exec -T sakuin sakuin admin verify
   ;;
@@ -113,6 +131,6 @@ key)
   "${compose[@]}" kill --signal SIGHUP sakuin >/dev/null 2>&1 || true
   ;;
 *)
-  fail "usage: $0 [up|down|logs|status [OPERATOR_TOKEN]|verify|key KEY_ID [PERMISSIONS]]"
+  fail "usage: $0 [up|down|logs|status [OPERATOR_TOKEN]|metrics OPERATOR_TOKEN|maintenance OPERATOR_TOKEN [verify]|verify|key KEY_ID [PERMISSIONS]]"
   ;;
 esac

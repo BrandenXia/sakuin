@@ -192,12 +192,38 @@ normalization or fuzzy matching is introduced.
 
 ## API and credentials
 
-The HTTP service exposes health, detailed operator status, search, duplicate
-queries, and an authenticated search-refresh operation. Status snapshots
+The HTTP service exposes health, detailed operator status, Prometheus metrics,
+search, duplicate queries, and an authenticated search-refresh operation.
+Status snapshots
 aggregate DHT family cycles, bootstrap progress, datagram dispatch, derived
 index generations, materialization, and maintenance without exposing runtime
 or Asio types. Search and duplicate data is returned through domain views
 rather than exposing manifests or segment paths.
+
+Tagged release builds inject one shared build version into both executables.
+The daemon exposes it through the authenticated status response and the bounded
+`sakuin_service_info` metric; local builds use the explicit `dev` identity.
+
+The public `/openapi.json` route serves a process-cached OpenAPI 3.1 document
+for the native JSON endpoints. It describes bearer authentication and required
+Sakuin permissions without embedding credentials. Torznab stays outside that
+document because its XML discovery and capability contract is `/api?t=caps`.
+
+The unauthenticated `/v1/health` route is a narrow HTTP liveness probe.
+`/v1/ready` reports success only after the service state is running and every
+enabled DHT family worker is running. It returns no component details; those
+remain behind the authenticated status and metrics routes.
+
+`/metrics` and `/v1/metrics` serialize that same snapshot using the Prometheus
+text format. Both require an operator credential. Labels are bounded to service
+state and IP address family; peer addresses and error messages are omitted to
+avoid sensitive output and unbounded time-series cardinality.
+
+When maintenance is enabled, authenticated operators may enqueue a pass through
+`POST /v1/operations/storage-maintenance`, optionally including verification.
+The HTTP request only signals the maintenance coordinator and returns `202`;
+compaction, retention, garbage collection, and verification remain serialized
+on the maintenance owner thread rather than blocking an Asio request thread.
 
 The `/api` compatibility route implements Torznab capabilities and generic
 search responses as UTF-8 XML/RSS. It publishes the `Other` category because

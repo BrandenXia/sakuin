@@ -144,10 +144,21 @@ int main() {
   auto api_service = service::LocalApiService::create(
       api_configuration, (*canonical)->torrents(), observer, search_state,
       &duplicates);
+  std::atomic<std::size_t> maintenance_requests{};
+  std::atomic<bool> maintenance_verification{};
   if (!api_service ||
+      !(*api_service)
+           ->set_maintenance_requester([&](bool verify) -> core::Result<void> {
+             maintenance_verification = verify;
+             ++maintenance_requests;
+             return {};
+           }) ||
       (*api_service)->local_endpoint().port != api_configuration.listen_port ||
       !(*api_service)->start() || !(*api_service)->running() ||
-      (*api_service)->start())
+      (*api_service)->start() ||
+      (*api_service)->set_maintenance_requester([](bool) -> core::Result<void> {
+        return {};
+      }))
     return 3;
   const auto health = request(api_configuration.listen_port,
                               "GET /v1/health HTTP/1.1\r\nHost: "
@@ -155,6 +166,16 @@ int main() {
   if (!health.starts_with("HTTP/1.1 200 OK\r\n") ||
       !health.ends_with("\r\n\r\n{\"status\":\"ok\"}"))
     return 4;
+  const auto openapi = request(api_configuration.listen_port,
+                               "GET /openapi.json HTTP/1.1\r\nHost: "
+                               "localhost\r\nConnection: close\r\n\r\n");
+  if (!openapi.starts_with("HTTP/1.1 200 OK\r\n") ||
+      !openapi.contains(
+          "\r\ncontent-type: application/json; charset=utf-8\r\n") ||
+      !openapi.contains("\"openapi\":\"3.1.2\"") ||
+      !openapi.contains("\"/v1/search\"") ||
+      !openapi.contains("\"bearerAuth\""))
+    return 18;
 
   api::ApiKeySecret secret;
   std::ranges::iota(secret.bytes, std::uint8_t{33});
@@ -165,11 +186,21 @@ int main() {
       *pepper, "reader",
       {reinterpret_cast<const std::byte *>(secret.bytes.data()),
        secret.bytes.size()});
-  if (!verifier ||
+  api::ApiKeySecret admin_secret;
+  std::ranges::iota(admin_secret.bytes, std::uint8_t{73});
+  auto admin_verifier = api::derive_api_key_verifier(
+      *pepper, "operator",
+      {reinterpret_cast<const std::byte *>(admin_secret.bytes.data()),
+       admin_secret.bytes.size()});
+  if (!verifier || !admin_verifier ||
       !(*credential_store)
            ->insert({.key_id = "reader",
                      .verifier = *verifier,
                      .permissions = {api::Permission::Search}}) ||
+      !(*credential_store)
+           ->insert({.key_id = "operator",
+                     .verifier = *admin_verifier,
+                     .permissions = {api::Permission::Admin}}) ||
       !(*api_service)->reload_credentials())
     return 5;
 
@@ -218,6 +249,18 @@ int main() {
       !duplicate_match.contains("exact_file_layout_v1") ||
       !duplicate_match.contains("4343434343434343"))
     return 16;
+
+  const auto operator_token = bearer("operator", admin_secret);
+  const auto maintenance =
+      request(api_configuration.listen_port,
+              "POST /v1/operations/storage-maintenance?verify=true HTTP/1.1\r\n"
+              "Host: localhost\r\nAuthorization: " +
+                  operator_token + "\r\nConnection: close\r\n\r\n");
+  if (!maintenance.starts_with("HTTP/1.1 202 Accepted\r\n") ||
+      !maintenance.contains("\r\nlocation: /v1/status\r\n") ||
+      !maintenance.ends_with("\"verification\":true}") ||
+      maintenance_requests != 1 || !maintenance_verification)
+    return 17;
 
   (*api_service)->stop();
   if ((*api_service)->running() || observer.errors != 0)

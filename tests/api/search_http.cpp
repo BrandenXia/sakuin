@@ -90,21 +90,67 @@ int main() {
   status.snapshot.ipv4.cycles = 42;
   status.snapshot.ipv4.routing_nodes = 13;
   status.snapshot.ipv4.metadata_in_flight = 2;
+  status.snapshot.ipv4.observations_stored = 99;
+  status.snapshot.ipv4.bootstrap_complete = true;
+  status.snapshot.search_source_generation = 7;
+  status.snapshot.search_records_indexed = 21;
   std::size_t refreshes{};
-  api::SearchHttpHandler handler{**authenticator,
-                                 index,
-                                 nullptr,
-                                 &duplicates,
-                                 &status,
-                                 [&refreshes]() -> core::Result<void> {
-                                   ++refreshes;
-                                   return {};
-                                 }};
+  std::vector<bool> maintenance_requests;
+  api::SearchHttpHandler handler{
+      **authenticator,
+      index,
+      nullptr,
+      &duplicates,
+      &status,
+      [&refreshes]() -> core::Result<void> {
+        ++refreshes;
+        return {};
+      },
+      [&maintenance_requests](bool verify) -> core::Result<void> {
+        maintenance_requests.push_back(verify);
+        return {};
+      }};
   auto health =
       handler.handle({.method = api::HttpMethod::Get, .target = "/v1/health"});
   if (!health || health->status != 200 ||
       body(*health) != "{\"status\":\"ok\"}")
     return 5;
+  auto ready =
+      handler.handle({.method = api::HttpMethod::Get, .target = "/v1/ready"});
+  if (!ready || ready->status != 200 ||
+      body(*ready) != "{\"status\":\"ready\"}")
+    return 29;
+  status.snapshot.state = "starting";
+  auto not_ready =
+      handler.handle({.method = api::HttpMethod::Get, .target = "/v1/ready"});
+  if (!not_ready || not_ready->status != 503 ||
+      body(*not_ready) != "{\"status\":\"not_ready\"}")
+    return 30;
+  status.snapshot.state = "running";
+
+  auto openapi = handler.handle(
+      {.method = api::HttpMethod::Get, .target = "/openapi.json"});
+  if (!openapi || openapi->status != 200 ||
+      openapi->headers["content-type"] != "application/json; charset=utf-8" ||
+      !body(*openapi).contains("\"openapi\":\"3.1.2\"") ||
+      !body(*openapi).contains(
+          "\"jsonSchemaDialect\":\"https://spec.openapis.org/oas/3.1/"
+          "dialect/base\"") ||
+      !body(*openapi).contains("\"version\":\"" + std::string{core::version} +
+                               "\"") ||
+      !body(*openapi).contains("\"/v1/search\"") ||
+      !body(*openapi).contains("\"bearerAuth\"") ||
+      body(*openapi).contains("sakuin_reader_"))
+    return 33;
+  auto openapi_alias = handler.handle(
+      {.method = api::HttpMethod::Get, .target = "/v1/openapi.json"});
+  if (!openapi_alias || body(*openapi_alias) != body(*openapi))
+    return 34;
+  auto openapi_post = handler.handle(
+      {.method = api::HttpMethod::Post, .target = "/openapi.json"});
+  if (!openapi_post || openapi_post->status != 405 ||
+      openapi_post->headers["allow"] != "GET")
+    return 35;
 
   auto unauthorized = handler.handle(
       {.method = api::HttpMethod::Get, .target = "/v1/search?q=linux"});
@@ -208,6 +254,8 @@ int main() {
        .target = "/v1/status",
        .headers = {{"authorization", credential("operator", admin_secret)}}});
   if (!operator_status || operator_status->status != 200 ||
+      !body(*operator_status)
+           .contains("\"version\":\"" + std::string{core::version} + "\"") ||
       !body(*operator_status).contains("\"cycles\":42") ||
       !body(*operator_status).contains("\"routing_nodes\":13") ||
       !body(*operator_status).contains("\"metadata_in_flight\":2") ||
@@ -215,6 +263,70 @@ int main() {
       body(*operator_status).contains("\"last_error\":[null]") ||
       !body(*operator_status).contains("\"state\":\"running\""))
     return 20;
+
+  auto reader_metrics = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/metrics",
+       .headers = {{"authorization", credential("reader", secret)}}});
+  if (!reader_metrics || reader_metrics->status != 403)
+    return 23;
+  auto operator_metrics = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/metrics",
+       .headers = {{"authorization", credential("operator", admin_secret)}}});
+  if (!operator_metrics || operator_metrics->status != 200 ||
+      operator_metrics->headers["content-type"] !=
+          "text/plain; version=0.0.4; charset=utf-8" ||
+      !body(*operator_metrics)
+           .contains("sakuin_service_info{state=\"running\",version=\"" +
+                     std::string{core::version} + "\"} 1\n") ||
+      !body(*operator_metrics)
+           .contains("# TYPE sakuin_dht_cycles_total counter\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_cycles_total{family=\"ipv4\"} 42\n") ||
+      !body(*operator_metrics)
+           .contains(
+               "sakuin_dht_observations_stored_total{family=\"ipv4\"} 99\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_bootstrap_complete{family=\"ipv4\"} 1\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_search_source_generation 7\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_search_records_indexed_total 21\n"))
+    return 24;
+  if (!body(*operator_metrics).contains("sakuin_service_ready 1\n"))
+    return 31;
+  auto metrics_with_post = handler.handle(
+      {.method = api::HttpMethod::Post,
+       .target = "/v1/metrics",
+       .headers = {{"authorization", credential("operator", admin_secret)}}});
+  if (!metrics_with_post || metrics_with_post->status != 405 ||
+      metrics_with_post->headers["allow"] != "GET")
+    return 25;
+
+  auto maintenance = handler.handle(
+      {.method = api::HttpMethod::Post,
+       .target = "/v1/operations/storage-maintenance?verify=true",
+       .headers = {{"authorization", credential("operator", admin_secret)}}});
+  if (!maintenance || maintenance->status != 202 ||
+      maintenance->headers["location"] != "/v1/status" ||
+      maintenance_requests != std::vector{true} ||
+      !body(*maintenance).contains("\"verification\":true"))
+    return 26;
+  auto invalid_maintenance = handler.handle(
+      {.method = api::HttpMethod::Post,
+       .target = "/v1/operations/storage-maintenance?verify=1",
+       .headers = {{"authorization", credential("operator", admin_secret)}}});
+  if (!invalid_maintenance || invalid_maintenance->status != 400 ||
+      maintenance_requests.size() != 1)
+    return 27;
+  auto maintenance_with_get = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/v1/operations/storage-maintenance",
+       .headers = {{"authorization", credential("operator", admin_secret)}}});
+  if (!maintenance_with_get || maintenance_with_get->status != 405 ||
+      maintenance_with_get->headers["allow"] != "POST")
+    return 28;
 
   auto refreshed = handler.handle(
       {.method = api::HttpMethod::Post,
@@ -237,6 +349,10 @@ int main() {
     return 12;
   api::SearchHttpHandler limited_handler{**authenticator, index,
                                          governor->get()};
+  auto unavailable_readiness = limited_handler.handle(
+      {.method = api::HttpMethod::Get, .target = "/v1/ready"});
+  if (!unavailable_readiness || unavailable_readiness->status != 503)
+    return 32;
   const auto authenticated = [&] {
     return api::HttpRequest{
         .method = api::HttpMethod::Get,

@@ -64,18 +64,36 @@ bootstrap list.
 
 ```bash
 curl http://127.0.0.1:8080/v1/health
+curl http://127.0.0.1:8080/v1/ready
+curl http://127.0.0.1:8080/openapi.json
 curl -H "Authorization: Bearer YOUR_TOKEN" \
   "http://127.0.0.1:8080/v1/search?q=ubuntu"
 curl -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
   http://127.0.0.1:8080/v1/status
+curl -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
+  http://127.0.0.1:8080/metrics
 curl -X POST -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
   http://127.0.0.1:8080/v1/operations/search-refresh
+curl -X POST -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
+  "http://127.0.0.1:8080/v1/operations/storage-maintenance?verify=true"
 ```
+
+The detailed status response and Prometheus `sakuin_service_info` metric include
+the running release version. Native binaries also report it with
+`sakuin --version` and `sakuin-api-key --version`.
+
+`/openapi.json` publishes the native JSON API contract for client generation
+and interactive API tools. It contains no credentials and is available without
+authentication. Torznab clients should continue to discover their XML contract
+through `/api?t=caps`.
 
 Useful commands from a repository checkout:
 
 ```bash
 ./scripts/deploy.sh status YOUR_OPERATOR_TOKEN
+./scripts/deploy.sh metrics YOUR_OPERATOR_TOKEN
+./scripts/deploy.sh maintenance YOUR_OPERATOR_TOKEN
+./scripts/deploy.sh maintenance YOUR_OPERATOR_TOKEN verify
 ./scripts/deploy.sh logs
 ./scripts/deploy.sh verify
 ./scripts/deploy.sh key reader-2 search
@@ -94,6 +112,23 @@ Torznab clients can use `http://127.0.0.1:8080/api` as the indexer URL and the
 complete `sakuin_...` reader token as `apikey`. Sakuin currently advertises and
 implements generic `t=search`; results use magnet links because Sakuin indexes
 metadata rather than hosting `.torrent` files.
+
+Prometheus can scrape `/metrics` (or `/v1/metrics`) with the operator token as
+an `Authorization: Bearer` header. The endpoint reports service uptime, DHT
+activity and queues, search and duplicate generations, materialization, and
+storage-maintenance counters without including peer addresses or error text.
+
+`/v1/health` is a liveness check for the HTTP process. `/v1/ready` stays at
+HTTP 503 until the composed service and every enabled DHT address-family worker
+are running, then returns HTTP 200. Neither endpoint exposes operator details
+or requires a credential, so container orchestrators can use them directly.
+
+When automatic storage maintenance is enabled, operators can enqueue
+compaction, retention, and garbage collection with
+`POST /v1/operations/storage-maintenance`. Add `?verify=true` to include a full
+checksum and record verification pass. The endpoint returns `202` immediately;
+the existing maintenance owner thread performs the work, and progress is
+visible through `/v1/status`, `/metrics`, and service logs.
 
 ## Native usage
 
