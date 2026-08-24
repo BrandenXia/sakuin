@@ -230,6 +230,8 @@ int main() {
        .target = "/v1/status",
        .headers = {{"authorization", credential("operator", admin_secret)}}});
   if (!operator_status || operator_status->status != 200 ||
+      !body(*operator_status)
+           .contains("\"version\":\"" + std::string{core::version} + "\"") ||
       !body(*operator_status).contains("\"cycles\":42") ||
       !body(*operator_status).contains("\"routing_nodes\":13") ||
       !body(*operator_status).contains("\"metadata_in_flight\":2") ||
@@ -251,6 +253,9 @@ int main() {
   if (!operator_metrics || operator_metrics->status != 200 ||
       operator_metrics->headers["content-type"] !=
           "text/plain; version=0.0.4; charset=utf-8" ||
+      !body(*operator_metrics)
+           .contains("sakuin_service_info{state=\"running\",version=\"" +
+                     std::string{core::version} + "\"} 1\n") ||
       !body(*operator_metrics)
            .contains("# TYPE sakuin_dht_cycles_total counter\n") ||
       !body(*operator_metrics)

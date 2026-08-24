@@ -130,5 +130,11 @@ int main() {
           output, error) != 2 ||
       !output.str().empty())
     return 10;
+  output.str({});
+  error.str({});
+  if (run({"--version"}, output, error) != 0 ||
+      output.str() != "sakuin-api-key " + std::string{core::version} + '\n' ||
+      !error.str().empty())
+    return 11;
   return 0;
 }

@@ -200,6 +200,10 @@ index generations, materialization, and maintenance without exposing runtime
 or Asio types. Search and duplicate data is returned through domain views
 rather than exposing manifests or segment paths.
 
+Tagged release builds inject one shared build version into both executables.
+The daemon exposes it through the authenticated status response and the bounded
+`sakuin_service_info` metric; local builds use the explicit `dev` identity.
+
 The unauthenticated `/v1/health` route is a narrow HTTP liveness probe.
 `/v1/ready` reports success only after the service state is running and every
 enabled DHT family worker is running. It returns no component details; those

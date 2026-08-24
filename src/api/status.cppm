@@ -8,6 +8,7 @@ import std;
 
 import sakuin.core.bytes;
 import sakuin.core.result;
+import sakuin.core.version;
 
 export namespace sakuin::api {
 
@@ -37,6 +38,7 @@ struct DhtFamilyStatus {
 };
 
 struct ServiceStatus {
+  std::string version{core::version};
   std::string state{"starting"};
   std::int64_t started_at_ms{};
   std::uint64_t uptime_ms{};
@@ -129,6 +131,7 @@ core::Result<core::ByteBuffer> json_readiness(bool ready) {
 core::Result<core::ByteBuffer> json_status(const ServiceStatus &status) {
   try {
     nlohmann::json document{
+        {"version", status.version},
         {"state", status.state},
         {"started_at_ms", status.started_at_ms},
         {"uptime_ms", status.uptime_ms},

@@ -35,6 +35,7 @@ constexpr std::string_view usage = R"usage(Usage:
   sakuin [--config PATH] [--key=value ...]
   sakuin worker [--config PATH] [--key=value ...]
   sakuin admin compact|verify|gc [--config PATH] [--key=value ...]
+  sakuin --version
 
 Configuration precedence: defaults, TOML, SAKUIN_* environment, command line.
 Send SIGHUP to reload API credentials and refresh derived indexes.
@@ -375,6 +376,10 @@ int main(int argc, char **argv) {
     return fail(arguments.error().message, 2);
   if (arguments->help) {
     std::cout << usage;
+    return 0;
+  }
+  if (arguments->version) {
+    std::cout << "sakuin " << core::version << '\n';
     return 0;
   }
 
