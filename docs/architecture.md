@@ -205,6 +205,12 @@ text format. Both require an operator credential. Labels are bounded to service
 state and IP address family; peer addresses and error messages are omitted to
 avoid sensitive output and unbounded time-series cardinality.
 
+When maintenance is enabled, authenticated operators may enqueue a pass through
+`POST /v1/operations/storage-maintenance`, optionally including verification.
+The HTTP request only signals the maintenance coordinator and returns `202`;
+compaction, retention, garbage collection, and verification remain serialized
+on the maintenance owner thread rather than blocking an Asio request thread.
+
 The `/api` compatibility route implements Torznab capabilities and generic
 search responses as UTF-8 XML/RSS. It publishes the `Other` category because
 classification is not yet available, and returns magnet links because the

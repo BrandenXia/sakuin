@@ -61,6 +61,8 @@ public:
   void request_search_refresh(std::uint64_t committed_generation) noexcept;
   core::Result<search::SearchRebuildResult> refresh_search();
   core::Result<void> reload_credentials();
+  core::Result<void>
+  set_maintenance_requester(std::function<core::Result<void>(bool)> requester);
 
 private:
   struct Impl;
@@ -406,6 +408,20 @@ core::Result<void> LocalApiService::reload_credentials() {
     return std::unexpected(loaded.error());
   impl_->authenticator->replace(std::move(*loaded));
   impl_->credential_store = std::move(*reopened);
+  return {};
+}
+
+core::Result<void> LocalApiService::set_maintenance_requester(
+    std::function<core::Result<void>(bool)> requester) {
+  if (impl_->active.load(std::memory_order_acquire))
+    return std::unexpected(core::Error{
+        core::ErrorCode::Conflict,
+        "Maintenance requester must be configured before the API starts"});
+  if (!requester)
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidArgument,
+                    "Maintenance requester callback must not be empty"});
+  impl_->handler->set_maintenance_requester(std::move(requester));
   return {};
 }
 

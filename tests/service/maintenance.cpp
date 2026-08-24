@@ -66,9 +66,8 @@ int main() {
   configuration.segment_target_bytes = 32;
   configuration.compression = config::CompressionCodec::None;
   configuration.compaction_minimum_segments = 2;
-  configuration.maintenance.interval = std::chrono::milliseconds{10};
-  configuration.maintenance.verification_interval =
-      std::chrono::milliseconds{20};
+  configuration.maintenance.interval = std::chrono::hours{24};
+  configuration.maintenance.verification_interval = std::chrono::hours{24};
 
   auto storage = service::LocalCanonicalStorage::open(configuration);
   if (!storage)
@@ -109,10 +108,13 @@ int main() {
         if (dataset == service::LocalDataset::Observations)
           observation_generation = generation;
       }};
-  if (!coordinator.start() || !observer.wait_for_verification())
+  if (coordinator.request_run(true))
+    return 11;
+  if (!coordinator.start() || !coordinator.request_run(true) ||
+      !observer.wait_for_verification())
     return 4;
   coordinator.stop();
-  if (coordinator.running())
+  if (coordinator.running() || coordinator.request_run(false))
     return 5;
   if (observation_generation == 0)
     return 6;

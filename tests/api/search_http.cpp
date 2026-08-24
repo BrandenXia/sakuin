@@ -95,15 +95,21 @@ int main() {
   status.snapshot.search_source_generation = 7;
   status.snapshot.search_records_indexed = 21;
   std::size_t refreshes{};
-  api::SearchHttpHandler handler{**authenticator,
-                                 index,
-                                 nullptr,
-                                 &duplicates,
-                                 &status,
-                                 [&refreshes]() -> core::Result<void> {
-                                   ++refreshes;
-                                   return {};
-                                 }};
+  std::vector<bool> maintenance_requests;
+  api::SearchHttpHandler handler{
+      **authenticator,
+      index,
+      nullptr,
+      &duplicates,
+      &status,
+      [&refreshes]() -> core::Result<void> {
+        ++refreshes;
+        return {};
+      },
+      [&maintenance_requests](bool verify) -> core::Result<void> {
+        maintenance_requests.push_back(verify);
+        return {};
+      }};
   auto health =
       handler.handle({.method = api::HttpMethod::Get, .target = "/v1/health"});
   if (!health || health->status != 200 ||
@@ -254,6 +260,30 @@ int main() {
   if (!metrics_with_post || metrics_with_post->status != 405 ||
       metrics_with_post->headers["allow"] != "GET")
     return 25;
+
+  auto maintenance = handler.handle(
+      {.method = api::HttpMethod::Post,
+       .target = "/v1/operations/storage-maintenance?verify=true",
+       .headers = {{"authorization", credential("operator", admin_secret)}}});
+  if (!maintenance || maintenance->status != 202 ||
+      maintenance->headers["location"] != "/v1/status" ||
+      maintenance_requests != std::vector{true} ||
+      !body(*maintenance).contains("\"verification\":true"))
+    return 26;
+  auto invalid_maintenance = handler.handle(
+      {.method = api::HttpMethod::Post,
+       .target = "/v1/operations/storage-maintenance?verify=1",
+       .headers = {{"authorization", credential("operator", admin_secret)}}});
+  if (!invalid_maintenance || invalid_maintenance->status != 400 ||
+      maintenance_requests.size() != 1)
+    return 27;
+  auto maintenance_with_get = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/v1/operations/storage-maintenance",
+       .headers = {{"authorization", credential("operator", admin_secret)}}});
+  if (!maintenance_with_get || maintenance_with_get->status != 405 ||
+      maintenance_with_get->headers["allow"] != "POST")
+    return 28;
 
   auto refreshed = handler.handle(
       {.method = api::HttpMethod::Post,

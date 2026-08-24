@@ -108,6 +108,18 @@ metrics)
     -H "Authorization: Bearer ${2}" \
     http://127.0.0.1:8080/metrics
   ;;
+maintenance)
+  [[ -n "${2:-}" ]] || fail "usage: $0 maintenance OPERATOR_TOKEN [verify]"
+  maintenance_url=http://127.0.0.1:8080/v1/operations/storage-maintenance
+  if [[ "${3:-}" == "verify" ]]; then
+    maintenance_url="${maintenance_url}?verify=true"
+  elif [[ -n "${3:-}" ]]; then
+    fail "usage: $0 maintenance OPERATOR_TOKEN [verify]"
+  fi
+  "${compose[@]}" exec -T sakuin curl --fail --silent --show-error \
+    --request POST -H "Authorization: Bearer ${2}" "${maintenance_url}"
+  printf '\n'
+  ;;
 verify)
   "${compose[@]}" exec -T sakuin sakuin admin verify
   ;;
@@ -119,6 +131,6 @@ key)
   "${compose[@]}" kill --signal SIGHUP sakuin >/dev/null 2>&1 || true
   ;;
 *)
-  fail "usage: $0 [up|down|logs|status [OPERATOR_TOKEN]|metrics OPERATOR_TOKEN|verify|key KEY_ID [PERMISSIONS]]"
+  fail "usage: $0 [up|down|logs|status [OPERATOR_TOKEN]|metrics OPERATOR_TOKEN|maintenance OPERATOR_TOKEN [verify]|verify|key KEY_ID [PERMISSIONS]]"
   ;;
 esac
