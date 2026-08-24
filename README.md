@@ -72,6 +72,8 @@ curl -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
   http://127.0.0.1:8080/metrics
 curl -X POST -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
   http://127.0.0.1:8080/v1/operations/search-refresh
+curl -X POST -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
+  "http://127.0.0.1:8080/v1/operations/storage-maintenance?verify=true"
 ```
 
 Useful commands from a repository checkout:
@@ -79,6 +81,8 @@ Useful commands from a repository checkout:
 ```bash
 ./scripts/deploy.sh status YOUR_OPERATOR_TOKEN
 ./scripts/deploy.sh metrics YOUR_OPERATOR_TOKEN
+./scripts/deploy.sh maintenance YOUR_OPERATOR_TOKEN
+./scripts/deploy.sh maintenance YOUR_OPERATOR_TOKEN verify
 ./scripts/deploy.sh logs
 ./scripts/deploy.sh verify
 ./scripts/deploy.sh key reader-2 search
@@ -102,6 +106,13 @@ Prometheus can scrape `/metrics` (or `/v1/metrics`) with the operator token as
 an `Authorization: Bearer` header. The endpoint reports service uptime, DHT
 activity and queues, search and duplicate generations, materialization, and
 storage-maintenance counters without including peer addresses or error text.
+
+When automatic storage maintenance is enabled, operators can enqueue
+compaction, retention, and garbage collection with
+`POST /v1/operations/storage-maintenance`. Add `?verify=true` to include a full
+checksum and record verification pass. The endpoint returns `202` immediately;
+the existing maintenance owner thread performs the work, and progress is
+visible through `/v1/status`, `/metrics`, and service logs.
 
 ## Native usage
 

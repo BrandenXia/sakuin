@@ -100,6 +100,8 @@ std::string_view reason_phrase(unsigned status) {
     return "OK";
   case 201:
     return "Created";
+  case 202:
+    return "Accepted";
   case 204:
     return "No Content";
   case 400:

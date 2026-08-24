@@ -21,15 +21,24 @@ export namespace sakuin::api {
 
 class SearchHttpHandler final : public HttpHandler {
 public:
-  SearchHttpHandler(ApiKeyAuthenticator &authenticator,
-                    search::SearchIndex &index,
-                    ApiRequestGovernor *governor = nullptr,
-                    index::DuplicateIndexView *duplicates = nullptr,
-                    StatusProvider *status = nullptr,
-                    std::function<core::Result<void>()> refresh_search = {})
+  SearchHttpHandler(
+      ApiKeyAuthenticator &authenticator, search::SearchIndex &index,
+      ApiRequestGovernor *governor = nullptr,
+      index::DuplicateIndexView *duplicates = nullptr,
+      StatusProvider *status = nullptr,
+      std::function<core::Result<void>()> refresh_search = {},
+      std::function<core::Result<void>(bool)> request_maintenance = {})
       : authenticator_(&authenticator), index_(&index), governor_(governor),
         duplicates_(duplicates), status_(status),
-        refresh_search_(std::move(refresh_search)) {}
+        refresh_search_(std::move(refresh_search)),
+        request_maintenance_(std::move(request_maintenance)) {}
+
+  // Composition hook used before the HTTP server starts. Maintenance is
+  // constructed after the API because its commits notify search refreshes.
+  void
+  set_maintenance_requester(std::function<core::Result<void>(bool)> requester) {
+    request_maintenance_ = std::move(requester);
+  }
 
   core::Result<HttpResponse> handle(HttpRequest request) override;
 
@@ -40,6 +49,7 @@ private:
   index::DuplicateIndexView *duplicates_;
   StatusProvider *status_;
   std::function<core::Result<void>()> refresh_search_;
+  std::function<core::Result<void>(bool)> request_maintenance_;
 };
 
 } // namespace sakuin::api
@@ -394,6 +404,25 @@ core::Result<core::InfoHash> info_hash(std::string_view encoded) {
   return result;
 }
 
+core::Result<bool> maintenance_verification(std::string_view encoded) {
+  if (encoded.empty())
+    return false;
+  auto parameters = query_parameters(encoded);
+  if (!parameters)
+    return std::unexpected(parameters.error());
+  if (parameters->size() != 1 || !parameters->contains("verify"))
+    return std::unexpected(core::Error{
+        core::ErrorCode::InvalidQuery,
+        "Storage maintenance only accepts the verify query parameter"});
+  const auto &value = parameters->at("verify");
+  if (value == "true")
+    return true;
+  if (value == "false")
+    return false;
+  return std::unexpected(core::Error{core::ErrorCode::InvalidQuery,
+                                     "verify must be true or false"});
+}
+
 } // namespace
 
 core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
@@ -462,8 +491,9 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
   const bool status_route = path == "/v1/status";
   const bool metrics_route = path == "/metrics" || path == "/v1/metrics";
   const bool refresh_route = path == "/v1/operations/search-refresh";
+  const bool maintenance_route = path == "/v1/operations/storage-maintenance";
   if (path != "/v1/search" && !duplicate_route && !status_route &&
-      !metrics_route && !refresh_route)
+      !metrics_route && !refresh_route && !maintenance_route)
     return error_response(404, "not_found", "Route not found");
   if (duplicate_route && !duplicates_)
     return error_response(404, "not_found", "Duplicate index is disabled");
@@ -472,9 +502,13 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
   if (refresh_route && !refresh_search_)
     return error_response(404, "not_found",
                           "Search refresh operation is unavailable");
-  if ((refresh_route && request.method != HttpMethod::Post) ||
-      (!refresh_route && request.method != HttpMethod::Get))
-    return method_not_allowed(refresh_route ? "POST" : "GET");
+  if (maintenance_route && !request_maintenance_)
+    return error_response(404, "not_found",
+                          "Storage maintenance operation is unavailable");
+  const bool post_route = refresh_route || maintenance_route;
+  if ((post_route && request.method != HttpMethod::Post) ||
+      (!post_route && request.method != HttpMethod::Get))
+    return method_not_allowed(post_route ? "POST" : "GET");
   if (!request.body.empty())
     return error_response(400, "invalid_request",
                           "This endpoint does not accept a request body");
@@ -488,9 +522,9 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
     return std::unexpected(principal.error());
   if (!*principal)
     return unauthorized();
-  const auto required_permission =
-      status_route || metrics_route || refresh_route ? Permission::Admin
-                                                     : Permission::Search;
+  const auto required_permission = status_route || metrics_route || post_route
+                                       ? Permission::Admin
+                                       : Permission::Search;
   if (!(**principal).allows(required_permission))
     return forbidden(required_permission == Permission::Admin
                          ? "Admin permission is required"
@@ -530,6 +564,22 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
         R"json({"operation":"search_refresh","status":"completed"})json"};
     const auto bytes = std::as_bytes(std::span{completed});
     return json_response(200, {bytes.begin(), bytes.end()});
+  }
+  if (maintenance_route) {
+    auto verify = maintenance_verification(query);
+    if (!verify)
+      return error_response(400, "invalid_query", verify.error().message);
+    auto requested = request_maintenance_(*verify);
+    if (!requested)
+      return std::unexpected(requested.error());
+    const std::string_view response =
+        *verify
+            ? R"json({"operation":"storage_maintenance","status":"accepted","verification":true})json"
+            : R"json({"operation":"storage_maintenance","status":"accepted","verification":false})json";
+    const auto bytes = std::as_bytes(std::span{response});
+    auto accepted = json_response(202, {bytes.begin(), bytes.end()});
+    accepted.headers["location"] = "/v1/status";
+    return accepted;
   }
 
   if (path == "/v1/search") {
