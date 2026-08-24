@@ -200,6 +200,11 @@ index generations, materialization, and maintenance without exposing runtime
 or Asio types. Search and duplicate data is returned through domain views
 rather than exposing manifests or segment paths.
 
+The unauthenticated `/v1/health` route is a narrow HTTP liveness probe.
+`/v1/ready` reports success only after the service state is running and every
+enabled DHT family worker is running. It returns no component details; those
+remain behind the authenticated status and metrics routes.
+
 `/metrics` and `/v1/metrics` serialize that same snapshot using the Prometheus
 text format. Both require an operator credential. Labels are bounded to service
 state and IP address family; peer addresses and error messages are omitted to

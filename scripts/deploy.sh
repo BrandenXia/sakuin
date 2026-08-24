@@ -54,17 +54,17 @@ initialize_credentials() {
   fi
 }
 
-wait_for_health() {
+wait_for_ready() {
   local attempt
   for ((attempt = 1; attempt <= 30; ++attempt)); do
     if "${compose[@]}" exec -T sakuin \
-      curl --fail --silent http://127.0.0.1:8080/v1/health >/dev/null 2>&1; then
+      curl --fail --silent http://127.0.0.1:8080/v1/ready >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
   done
   "${compose[@]}" logs --tail=100 sakuin >&2 || true
-  fail "Sakuin did not become healthy within 30 seconds"
+  fail "Sakuin did not become ready within 30 seconds"
 }
 
 deploy() {
@@ -73,11 +73,11 @@ deploy() {
   "${compose[@]}" pull
   initialize_credentials
   "${compose[@]}" up --detach
-  wait_for_health
+  wait_for_ready
   if [[ -z "${api_port}" ]]; then
     api_port="$(env_value SAKUIN_API_PORT)"
   fi
-  printf 'Sakuin is healthy at http://127.0.0.1:%s\n' "${api_port:-8080}"
+  printf 'Sakuin is ready at http://127.0.0.1:%s\n' "${api_port:-8080}"
 }
 
 command="${1:-up}"

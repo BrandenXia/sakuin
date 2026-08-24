@@ -64,6 +64,7 @@ bootstrap list.
 
 ```bash
 curl http://127.0.0.1:8080/v1/health
+curl http://127.0.0.1:8080/v1/ready
 curl -H "Authorization: Bearer YOUR_TOKEN" \
   "http://127.0.0.1:8080/v1/search?q=ubuntu"
 curl -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
@@ -106,6 +107,11 @@ Prometheus can scrape `/metrics` (or `/v1/metrics`) with the operator token as
 an `Authorization: Bearer` header. The endpoint reports service uptime, DHT
 activity and queues, search and duplicate generations, materialization, and
 storage-maintenance counters without including peer addresses or error text.
+
+`/v1/health` is a liveness check for the HTTP process. `/v1/ready` stays at
+HTTP 503 until the composed service and every enabled DHT address-family worker
+are running, then returns HTTP 200. Neither endpoint exposes operator details
+or requires a credential, so container orchestrators can use them directly.
 
 When automatic storage maintenance is enabled, operators can enqueue
 compaction, retention, and garbage collection with
