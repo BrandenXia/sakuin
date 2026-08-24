@@ -28,6 +28,7 @@ public:
   begin_update(std::uint64_t source_generation) override;
   core::Result<SearchResult> search(const SearchQuery &query) const override;
   std::uint64_t source_generation() const noexcept override;
+  ClassificationIndexStats classification_stats() const noexcept override;
 
 private:
   friend class MemoryRebuildSession;
@@ -42,12 +43,15 @@ private:
   struct State {
     std::uint64_t source_generation{};
     std::vector<IndexedRecord> records;
+    ClassificationIndexStats classification;
   };
 
   core::Result<void> publish(std::shared_ptr<const State> replacement);
   core::Result<void>
   publish_updates(std::uint64_t source_generation,
                   std::span<const model::TorrentRecord> updates);
+  ClassificationIndexStats
+  summarize(std::span<const IndexedRecord> records) const noexcept;
 
   mutable std::shared_mutex mutex_;
   SearchClassificationOptions options_;
@@ -210,7 +214,11 @@ private:
 };
 
 InMemorySearchIndex::InMemorySearchIndex(SearchClassificationOptions options)
-    : options_(std::move(options)), state_(std::make_shared<const State>()) {}
+    : options_(std::move(options)) {
+  auto initial = std::make_shared<State>();
+  initial->classification.enabled = options_.enabled;
+  state_ = std::move(initial);
+}
 
 core::Result<std::unique_ptr<SearchRebuildSession>>
 InMemorySearchIndex::begin_rebuild(std::uint64_t source_generation) {
@@ -263,6 +271,7 @@ core::Result<void> InMemorySearchIndex::publish_updates(
     else
       *existing = std::move(indexed);
   }
+  replacement->classification = summarize(replacement->records);
   state_ = std::move(replacement);
   return {};
 }
@@ -288,7 +297,25 @@ core::Result<void> MemoryRebuildSession::commit() {
         owner_->options_.adult_minimum);
     state->records.push_back(std::move(indexed));
   }
+  state->classification = owner_->summarize(state->records);
   return owner_->publish(std::move(state));
+}
+
+ClassificationIndexStats InMemorySearchIndex::summarize(
+    std::span<const IndexedRecord> records) const noexcept {
+  ClassificationIndexStats result{.enabled = options_.enabled,
+                                  .total_records = records.size()};
+  for (const auto &record : records) {
+    ++result.states[std::to_underlying(record.classification.state)];
+    if (record.classification.input_truncated)
+      ++result.input_truncated;
+    if (classification::label_confidence(record.classification,
+                                         classification::ContentLabel::Adult))
+      ++result.adult_labeled;
+    for (const auto category : record.categories)
+      ++result.categories[std::to_underlying(category)];
+  }
+  return result;
 }
 
 core::Result<SearchResult>
@@ -371,6 +398,12 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
 std::uint64_t InMemorySearchIndex::source_generation() const noexcept {
   std::shared_lock lock{mutex_};
   return state_->source_generation;
+}
+
+ClassificationIndexStats
+InMemorySearchIndex::classification_stats() const noexcept {
+  std::shared_lock lock{mutex_};
+  return state_->classification;
 }
 
 } // namespace sakuin::search

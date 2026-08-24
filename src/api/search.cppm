@@ -636,13 +636,19 @@ core::Result<HttpResponse> SearchHttpHandler::handle(HttpRequest request) {
   }
 
   if (status_route) {
-    auto body = json_status(status_->status());
+    auto status = status_->status();
+    status.search_source_generation = index_->source_generation();
+    status.search_classification = index_->classification_stats();
+    auto body = json_status(status);
     if (!body)
       return std::unexpected(body.error());
     return json_response(200, std::move(*body));
   }
   if (metrics_route) {
-    auto body = prometheus_metrics(status_->status());
+    auto status = status_->status();
+    status.search_source_generation = index_->source_generation();
+    status.search_classification = index_->classification_stats();
+    auto body = prometheus_metrics(status);
     if (!body)
       return std::unexpected(body.error());
     return HttpResponse{

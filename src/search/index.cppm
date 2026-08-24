@@ -54,6 +54,33 @@ struct SearchResult {
   std::uint64_t source_generation{};
 };
 
+inline constexpr std::size_t ClassificationStateCount =
+    std::to_underlying(classification::ClassificationState::Unknown) + 1U;
+inline constexpr std::size_t MediaCategoryCount =
+    std::to_underlying(classification::MediaCategory::Other) + 1U;
+
+struct ClassificationIndexStats {
+  bool enabled{};
+  std::uint32_t algorithm_version{classification::AlgorithmVersion};
+  std::uint64_t total_records{};
+  std::array<std::uint64_t, ClassificationStateCount> states{};
+  std::uint64_t input_truncated{};
+  // Counts every Adult label produced by the classifier. The Adult semantic
+  // category below applies the configured confidence threshold separately.
+  std::uint64_t adult_labeled{};
+  std::array<std::uint64_t, MediaCategoryCount> categories{};
+
+  std::uint64_t
+  state_count(classification::ClassificationState state) const noexcept {
+    return states[std::to_underlying(state)];
+  }
+
+  std::uint64_t
+  category_count(classification::MediaCategory category) const noexcept {
+    return categories[std::to_underlying(category)];
+  }
+};
+
 class SearchRebuildSession {
 public:
   virtual ~SearchRebuildSession() = default;
@@ -88,6 +115,7 @@ public:
   begin_update(std::uint64_t source_generation) = 0;
   virtual core::Result<SearchResult> search(const SearchQuery &query) const = 0;
   virtual std::uint64_t source_generation() const noexcept = 0;
+  virtual ClassificationIndexStats classification_stats() const noexcept = 0;
 
 protected:
   SearchIndex() = default;

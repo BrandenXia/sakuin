@@ -333,6 +333,38 @@ core::Result<core::ByteBuffer> openapi_document() {
         "required": ["operation", "status", "verification"],
         "properties": {"operation": {"const": "storage_maintenance"}, "status": {"const": "accepted"}, "verification": {"type": "boolean"}}
       },
+      "ClassificationIndexStats": {
+        "type": "object",
+        "required": ["enabled", "algorithm_version", "total_records", "states", "input_truncated", "adult_labeled", "categories"],
+        "properties": {
+          "enabled": {"type": "boolean"},
+          "algorithm_version": {"type": "integer", "minimum": 1},
+          "total_records": {"type": "integer", "minimum": 0},
+          "states": {
+            "type": "object",
+            "required": ["awaiting_metadata", "classified", "ambiguous", "unknown"],
+            "additionalProperties": false,
+            "properties": {
+              "awaiting_metadata": {"type": "integer", "minimum": 0},
+              "classified": {"type": "integer", "minimum": 0},
+              "ambiguous": {"type": "integer", "minimum": 0},
+              "unknown": {"type": "integer", "minimum": 0}
+            }
+          },
+          "input_truncated": {"type": "integer", "minimum": 0},
+          "adult_labeled": {"type": "integer", "minimum": 0},
+          "categories": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}
+        }
+      },
+      "SearchStatus": {
+        "type": "object",
+        "required": ["source_generation", "records_indexed", "classification"],
+        "properties": {
+          "source_generation": {"type": "integer", "minimum": 0},
+          "records_indexed": {"type": "integer", "minimum": 0},
+          "classification": {"$ref": "#/components/schemas/ClassificationIndexStats"}
+        }
+      },
       "ServiceStatus": {
         "type": "object",
         "required": ["version", "state", "started_at_ms", "uptime_ms", "dht", "search", "materialization", "duplicates", "maintenance", "last_service_error"],
@@ -342,7 +374,7 @@ core::Result<core::ByteBuffer> openapi_document() {
           "started_at_ms": {"type": "integer"},
           "uptime_ms": {"type": "integer", "minimum": 0},
           "dht": {"type": "object"},
-          "search": {"type": "object"},
+          "search": {"$ref": "#/components/schemas/SearchStatus"},
           "materialization": {"type": "object"},
           "duplicates": {"type": "object"},
           "maintenance": {"type": "object"},

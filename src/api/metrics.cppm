@@ -3,8 +3,10 @@ export module sakuin.api.metrics;
 import std;
 
 import sakuin.api.status;
+import sakuin.classification;
 import sakuin.core.bytes;
 import sakuin.core.result;
+import sakuin.search.index;
 
 export namespace sakuin::api {
 
@@ -93,6 +95,60 @@ void family_samples(std::string &output, std::string_view name,
            static_cast<double>(*family.last_error_ms) / 1000.0);
 }
 
+std::string_view category_name(classification::MediaCategory category) {
+  using enum classification::MediaCategory;
+  switch (category) {
+  case Movie:
+    return "movie";
+  case MovieSd:
+    return "movie_sd";
+  case MovieHd:
+    return "movie_hd";
+  case MovieUhd:
+    return "movie_uhd";
+  case Series:
+    return "series";
+  case SeriesSd:
+    return "series_sd";
+  case SeriesHd:
+    return "series_hd";
+  case SeriesUhd:
+    return "series_uhd";
+  case SeriesAnime:
+    return "series_anime";
+  case Audio:
+    return "audio";
+  case Audiobook:
+    return "audiobook";
+  case Application:
+    return "application";
+  case Books:
+    return "books";
+  case Ebook:
+    return "ebook";
+  case Adult:
+    return "adult";
+  case Other:
+    return "other";
+  }
+  std::unreachable();
+}
+
+std::string_view state_name(classification::ClassificationState state) {
+  using enum classification::ClassificationState;
+  switch (state) {
+  case AwaitingMetadata:
+    return "awaiting_metadata";
+  case Classified:
+    return "classified";
+  case Ambiguous:
+    return "ambiguous";
+  case Unknown:
+    return "unknown";
+  }
+  std::unreachable();
+}
+
 } // namespace
 
 core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
@@ -172,6 +228,43 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "Torrent records processed by search refreshes.", "counter");
     sample(output, "sakuin_search_records_indexed_total", {},
            status.search_records_indexed);
+    metadata(output, "sakuin_classification_enabled",
+             "Whether torrent classification is enabled.", "gauge");
+    sample(output, "sakuin_classification_enabled", {},
+           status.search_classification.enabled ? 1 : 0);
+    metadata(output, "sakuin_classification_algorithm_version",
+             "Classifier algorithm version represented by the search index.",
+             "gauge");
+    sample(output, "sakuin_classification_algorithm_version", {},
+           status.search_classification.algorithm_version);
+    metadata(output, "sakuin_classification_records",
+             "Current search-index records by classification state.", "gauge");
+    for (std::size_t index = 0; index < search::ClassificationStateCount;
+         ++index) {
+      const auto state =
+          static_cast<classification::ClassificationState>(index);
+      sample(output, "sakuin_classification_records",
+             "state=\"" + std::string{state_name(state)} + "\"",
+             status.search_classification.state_count(state));
+    }
+    metadata(output, "sakuin_classification_input_truncated_records",
+             "Current records classified from bounded, truncated input.",
+             "gauge");
+    sample(output, "sakuin_classification_input_truncated_records", {},
+           status.search_classification.input_truncated);
+    metadata(output, "sakuin_classification_adult_labeled_records",
+             "Current records carrying any classifier-produced Adult label.",
+             "gauge");
+    sample(output, "sakuin_classification_adult_labeled_records", {},
+           status.search_classification.adult_labeled);
+    metadata(output, "sakuin_classification_category_records",
+             "Current search-index records by semantic category.", "gauge");
+    for (std::size_t index = 0; index < search::MediaCategoryCount; ++index) {
+      const auto category = static_cast<classification::MediaCategory>(index);
+      sample(output, "sakuin_classification_category_records",
+             "category=\"" + std::string{category_name(category)} + "\"",
+             status.search_classification.category_count(category));
+    }
     metadata(output, "sakuin_materialization_observations_processed_total",
              "Observations processed by torrent materialization.", "counter");
     sample(output, "sakuin_materialization_observations_processed_total", {},

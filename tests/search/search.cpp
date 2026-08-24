@@ -181,5 +181,29 @@ int main() {
       !std::ranges::contains(movie_page->hits.front().categories,
                              classification::MediaCategory::Movie))
     return 18;
+  const auto classification_stats = classified_index.classification_stats();
+  if (!classification_stats.enabled ||
+      classification_stats.total_records != 2 ||
+      classification_stats.adult_labeled != 1 ||
+      classification_stats.category_count(
+          classification::MediaCategory::Movie) != 2 ||
+      classification_stats.category_count(
+          classification::MediaCategory::MovieHd) != 2 ||
+      classification_stats.category_count(
+          classification::MediaCategory::Adult) != 1)
+    return 19;
+
+  search::InMemorySearchIndex disabled_index({.enabled = false});
+  auto disabled_rebuild = disabled_index.begin_rebuild(1);
+  if (!disabled_rebuild || !(*disabled_rebuild)->append(adult_movie) ||
+      !(*disabled_rebuild)->commit())
+    return 20;
+  const auto disabled_stats = disabled_index.classification_stats();
+  if (disabled_stats.enabled || disabled_stats.total_records != 1 ||
+      disabled_stats.adult_labeled != 0 ||
+      disabled_stats.state_count(
+          classification::ClassificationState::Unknown) != 1 ||
+      disabled_stats.category_count(classification::MediaCategory::Other) != 1)
+    return 21;
   return 0;
 }

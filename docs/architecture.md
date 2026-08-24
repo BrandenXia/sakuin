@@ -200,6 +200,13 @@ index generations, materialization, and maintenance without exposing runtime
 or Asio types. Search and duplicate data is returned through domain views
 rather than exposing manifests or segment paths.
 
+Classification observability is derived from the currently published search
+snapshot. Status exposes state and category distributions, bounded-input
+truncation, and Adult label counts. Prometheus exports the same data as gauges
+with fixed state/category label sets. Adult label and Adult category counts are
+descriptive: the latter reflects the configured confidence threshold, while
+neither metric changes the operator-selected visibility policy.
+
 Tagged release builds inject one shared build version into both executables.
 The daemon exposes it through the authenticated status response and the bounded
 `sakuin_service_info` metric; local builds use the explicit `dev` identity.

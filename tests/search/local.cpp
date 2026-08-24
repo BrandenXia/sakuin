@@ -58,7 +58,8 @@ int main() {
     if (!index || (*index)->source_generation() != 7)
       return 3;
     auto found = (*index)->search({.text = "linux", .limit = 10});
-    if (!found || found->total_matches != 1)
+    const auto stats = (*index)->classification_stats();
+    if (!found || found->total_matches != 1 || stats.total_records != 2)
       return 4;
     auto update = (*index)->begin_update(8);
     const auto replacement = record(1, "Kernel Archive", 300);

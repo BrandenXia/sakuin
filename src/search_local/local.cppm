@@ -44,6 +44,7 @@ public:
   begin_update(std::uint64_t source_generation) override;
   core::Result<SearchResult> search(const SearchQuery &query) const override;
   std::uint64_t source_generation() const noexcept override;
+  ClassificationIndexStats classification_stats() const noexcept override;
 
   const std::filesystem::path &path() const noexcept { return path_; }
 
@@ -330,6 +331,11 @@ LocalSearchIndex::search(const SearchQuery &query) const {
 
 std::uint64_t LocalSearchIndex::source_generation() const noexcept {
   return memory_.source_generation();
+}
+
+ClassificationIndexStats
+LocalSearchIndex::classification_stats() const noexcept {
+  return memory_.classification_stats();
 }
 
 core::Result<void>
