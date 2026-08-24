@@ -102,6 +102,12 @@ status)
     printf '\n'
   fi
   ;;
+metrics)
+  [[ -n "${2:-}" ]] || fail "usage: $0 metrics OPERATOR_TOKEN"
+  "${compose[@]}" exec -T sakuin curl --fail --silent --show-error \
+    -H "Authorization: Bearer ${2}" \
+    http://127.0.0.1:8080/metrics
+  ;;
 verify)
   "${compose[@]}" exec -T sakuin sakuin admin verify
   ;;
@@ -113,6 +119,6 @@ key)
   "${compose[@]}" kill --signal SIGHUP sakuin >/dev/null 2>&1 || true
   ;;
 *)
-  fail "usage: $0 [up|down|logs|status [OPERATOR_TOKEN]|verify|key KEY_ID [PERMISSIONS]]"
+  fail "usage: $0 [up|down|logs|status [OPERATOR_TOKEN]|metrics OPERATOR_TOKEN|verify|key KEY_ID [PERMISSIONS]]"
   ;;
 esac
