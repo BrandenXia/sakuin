@@ -103,7 +103,9 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
     metadata(output, "sakuin_service_info",
              "Static information about the Sakuin service state.", "gauge");
     sample(output, "sakuin_service_info",
-           "state=\"" + escaped_label(status.state) + "\"", 1);
+           "state=\"" + escaped_label(status.state) + "\",version=\"" +
+               escaped_label(status.version) + "\"",
+           1);
     metadata(output, "sakuin_service_ready",
              "Whether the composed service is ready to receive traffic.",
              "gauge");

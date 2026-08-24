@@ -4,6 +4,12 @@ set_languages("c++23")
 
 set_policy("build.c++.modules", true)
 
+option("sakuin_version")
+  set_default("dev")
+  set_showmenu(true)
+  set_description("Version embedded in Sakuin binaries")
+option_end()
+
 add_requires("openssl")
 add_requires("zstd")
 add_requires("asio")
@@ -16,6 +22,14 @@ target("sakuin-core")
   set_kind("static")
   add_files("src/core/**.cpp")
   add_files("src/core/**.cppm", {public = true})
+  add_options("sakuin_version")
+  on_load(function (target)
+    local version = get_config("sakuin_version") or "dev"
+    if not version:match("^[%w%.%+%-]+$") then
+      raise("sakuin_version may only contain letters, digits, '.', '+', and '-'")
+    end
+    target:add("defines", 'SAKUIN_VERSION="' .. version .. '"')
+  end)
   add_packages("openssl")
 
 target("sakuin-config")

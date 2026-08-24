@@ -77,6 +77,10 @@ curl -X POST -H "Authorization: Bearer YOUR_OPERATOR_TOKEN" \
   "http://127.0.0.1:8080/v1/operations/storage-maintenance?verify=true"
 ```
 
+The detailed status response and Prometheus `sakuin_service_info` metric include
+the running release version. Native binaries also report it with
+`sakuin --version` and `sakuin-api-key --version`.
+
 Useful commands from a repository checkout:
 
 ```bash

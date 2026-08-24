@@ -14,6 +14,7 @@ struct DaemonArguments {
   std::optional<AdminCommand> admin_command;
   bool worker_mode{};
   bool help{};
+  bool version{};
 };
 
 // Separates daemon-owned options from the --key=value configuration overlay
@@ -62,6 +63,10 @@ parse_daemon_arguments(std::span<const std::string_view> arguments) {
       result.help = true;
       continue;
     }
+    if (argument == "--version" || argument == "-V") {
+      result.version = true;
+      continue;
+    }
     std::optional<std::string_view> configuration_file;
     if (argument == "--config") {
       if (++index == arguments.size())
@@ -86,8 +91,8 @@ parse_daemon_arguments(std::span<const std::string_view> arguments) {
     if (!argument.starts_with("--") || !argument.contains('='))
       return std::unexpected(core::Error{
           core::ErrorCode::InvalidArgument,
-          "Daemon arguments must be worker, admin, --config PATH, --help, or "
-          "--key=value"});
+          "Daemon arguments must be worker, admin, --config PATH, --help, "
+          "--version, or --key=value"});
     result.configuration_overrides.emplace_back(argument);
   }
   return result;
