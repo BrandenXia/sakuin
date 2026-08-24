@@ -56,4 +56,3 @@ EXPOSE 8080/tcp 6881/udp
 STOPSIGNAL SIGTERM
 
 ENTRYPOINT ["sakuin"]
-CMD ["--config=/etc/sakuin/sakuin.toml"]
