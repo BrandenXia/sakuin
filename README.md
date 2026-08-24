@@ -113,7 +113,8 @@ complete `sakuin_...` reader token as `apikey`. Sakuin advertises generic,
 movie, TV, music/audio, and book search, with standard Torznab categories.
 Results use magnet links because Sakuin indexes metadata rather than hosting
 `.torrent` files. Adult classification is only a label: visibility is an
-operator setting and defaults to including every result.
+operator setting and defaults to including every result. Native JSON search
+also returns bounded rule evidence so classifications can be audited.
 
 Prometheus can scrape `/metrics` (or `/v1/metrics`) with the operator token as
 an `Authorization: Bearer` header. The endpoint reports service uptime, DHT

@@ -275,16 +275,26 @@ core::Result<core::ByteBuffer> openapi_document() {
       },
       "Classification": {
         "type": "object",
-        "required": ["state", "kind", "confidence", "labels", "categories", "resolution", "algorithm_version", "input_truncated"],
+        "required": ["state", "kind", "confidence", "labels", "categories", "evidence", "resolution", "algorithm_version", "input_truncated"],
         "properties": {
           "state": {"type": "string", "enum": ["awaiting_metadata", "classified", "ambiguous", "unknown"]},
           "kind": {"type": "string", "enum": ["unknown", "movie", "series", "music", "audiobook", "ebook", "game", "application", "mixed"]},
           "confidence": {"type": "string", "enum": ["unknown", "low", "medium", "high"]},
           "labels": {"type": "array", "items": {"type": "object", "required": ["name", "confidence"], "properties": {"name": {"type": "string", "enum": ["adult", "anime"]}, "confidence": {"type": "string", "enum": ["unknown", "low", "medium", "high"]}}}},
           "categories": {"type": "array", "items": {"type": "string", "enum": ["movie", "movie_sd", "movie_hd", "movie_uhd", "series", "series_sd", "series_hd", "series_uhd", "series_anime", "audio", "audiobook", "application", "books", "ebook", "adult", "other"]}},
+          "evidence": {"type": "array", "items": {"$ref": "#/components/schemas/ClassificationEvidence"}},
           "resolution": {"type": ["string", "null"], "enum": ["sd", "720p", "1080p", "2160p", null]},
           "algorithm_version": {"type": "integer", "minimum": 1},
           "input_truncated": {"type": "boolean"}
+        }
+      },
+      "ClassificationEvidence": {
+        "type": "object",
+        "required": ["code", "subject", "weight"],
+        "properties": {
+          "code": {"type": "string", "enum": ["video_payload_dominant", "audio_payload_dominant", "ebook_payload_dominant", "game_payload_dominant", "application_payload_dominant", "multiple_payload_families", "single_dominant_video", "season_episode_token", "release_year_token", "music_release_token", "audiobook_token", "ebook_token", "game_token", "application_token", "adult_token", "anime_token", "resolution_token"]},
+          "subject": {"type": "string", "enum": ["movie", "series", "music", "audiobook", "ebook", "game", "application", "mixed", "adult", "anime", "resolution"]},
+          "weight": {"type": "integer"}
         }
       },
       "SearchResult": {
