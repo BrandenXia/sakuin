@@ -1,0 +1,36 @@
+name: LLVM crash reduction
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install compiler tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential clang-20 clang-tools-20 cmake \
+            libc++-20-dev libc++abi-20-dev lld-20 ninja-build perl \
+            pkg-config unzip zip
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: v3.0.9
+
+      - name: Build integration dependency closure
+        run: |
+          xmake f --yes --mode=release --toolchain=clang-20 \
+            --cc=/usr/lib/llvm-20/bin/clang \
+            --cxx=/usr/lib/llvm-20/bin/clang++ \
+            --ld=/usr/lib/llvm-20/bin/clang++ \
+            --sh=/usr/lib/llvm-20/bin/clang++ \
+            --sdk=/usr/lib/llvm-20 --runtimes=c++_shared \
+            --sakuin_version=repro
+          xmake build --yes --jobs=1 sakuin-integrations
