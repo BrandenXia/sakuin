@@ -63,6 +63,7 @@ struct DhtFamilyStatus {
   std::size_t metadata_backlog{};
   std::size_t bootstrap_candidates{};
   std::optional<bool> bootstrap_complete;
+  std::optional<bool> bootstrap_exhausted;
   std::optional<std::int64_t> last_cycle_ms;
   std::optional<std::int64_t> last_inbound_query_ms;
   std::optional<std::int64_t> last_error_ms;
@@ -160,6 +161,9 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
   result["bootstrap_complete"] =
       family.bootstrap_complete ? nlohmann::json(*family.bootstrap_complete)
                                 : nlohmann::json(nullptr);
+  result["bootstrap_exhausted"] =
+      family.bootstrap_exhausted ? nlohmann::json(*family.bootstrap_exhausted)
+                                 : nlohmann::json(nullptr);
   result["last_cycle_ms"] = family.last_cycle_ms
                                 ? nlohmann::json(*family.last_cycle_ms)
                                 : nlohmann::json(nullptr);

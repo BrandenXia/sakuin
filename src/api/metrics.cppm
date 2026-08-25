@@ -146,6 +146,9 @@ void family_samples(std::string &output, std::string_view name,
   if (family.bootstrap_complete)
     sample(output, "sakuin_dht_bootstrap_complete", labels,
            *family.bootstrap_complete ? 1 : 0);
+  if (family.bootstrap_exhausted)
+    sample(output, "sakuin_dht_bootstrap_exhausted", labels,
+           *family.bootstrap_exhausted ? 1 : 0);
   if (family.last_cycle_ms)
     sample(output, "sakuin_dht_last_cycle_timestamp_seconds", labels,
            static_cast<double>(*family.last_cycle_ms) / 1000.0);
@@ -343,7 +346,11 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
     metadata(output, "sakuin_dht_bootstrap_candidates",
              "Known bootstrap candidates.", "gauge");
     metadata(output, "sakuin_dht_bootstrap_complete",
-             "Whether DHT bootstrap has completed.", "gauge");
+             "Whether DHT bootstrap settled after a successful response.",
+             "gauge");
+    metadata(output, "sakuin_dht_bootstrap_exhausted",
+             "Whether DHT bootstrap settled without any successful response.",
+             "gauge");
     metadata(output, "sakuin_dht_last_cycle_timestamp_seconds",
              "Unix time of the last completed DHT cycle.", "gauge");
     metadata(output, "sakuin_dht_last_inbound_query_timestamp_seconds",

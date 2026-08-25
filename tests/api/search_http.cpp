@@ -127,6 +127,7 @@ int main() {
   status.snapshot.ipv4.inbound_get_peers_queries = 7;
   status.snapshot.ipv4.last_inbound_query_ms = 12'000;
   status.snapshot.ipv4.bootstrap_complete = true;
+  status.snapshot.ipv4.bootstrap_exhausted = false;
   status.snapshot.search_source_generation = 7;
   status.snapshot.search_records_indexed = 21;
   std::size_t refreshes{};
@@ -481,6 +482,7 @@ int main() {
       !body(*operator_status).contains("\"metadata_backlog\":7") ||
       !body(*operator_status).contains("\"metadata_fetches_succeeded\":8") ||
       !body(*operator_status).contains("\"metadata_sink_succeeded\":7") ||
+      !body(*operator_status).contains("\"bootstrap_exhausted\":false") ||
       !body(*operator_status).contains("\"total_records\":2") ||
       !body(*operator_status).contains("\"adult_labeled\":0") ||
       !body(*operator_status).contains("\"movie\":1") ||
@@ -514,6 +516,8 @@ int main() {
                "sakuin_dht_observations_stored_total{family=\"ipv4\"} 99\n") ||
       !body(*operator_metrics)
            .contains("sakuin_dht_bootstrap_complete{family=\"ipv4\"} 1\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_bootstrap_exhausted{family=\"ipv4\"} 0\n") ||
       !body(*operator_metrics)
            .contains("sakuin_dht_discovery_queries_started_total{family="
                      "\"ipv4\"} 17\n") ||
