@@ -71,12 +71,12 @@ int main() {
   record.files.push_back({.path = "linux.iso", .size = 4096});
   model::TorrentRecord movie;
   movie.info_hash.bytes.fill(0x33);
-  movie.name = "Example Movie 2024 1080p";
+  movie.name = "Example Anime Movie 2024 1080p";
   movie.total_size = 1'000'000;
   movie.first_seen = core::Timestamp{std::chrono::milliseconds{30}};
   movie.last_seen = core::Timestamp{std::chrono::milliseconds{40}};
   movie.files.push_back(
-      {.path = "Example.Movie.2024.1080p.mkv", .size = 1'000'000});
+      {.path = "Example.Anime.Movie.2024.1080p.mkv", .size = 1'000'000});
   if (!(*rebuild)->append(record) || !(*rebuild)->append(movie) ||
       !(*rebuild)->commit())
     return 4;
@@ -153,6 +153,8 @@ int main() {
       !body(*openapi).contains("\"version\":\"" + std::string{core::version} +
                                "\"") ||
       !body(*openapi).contains("\"/v1/search\"") ||
+      !body(*openapi).contains("\"classification_state\"") ||
+      !body(*openapi).contains("\"minimum_label_confidence\"") ||
       !body(*openapi).contains("\"bearerAuth\"") ||
       body(*openapi).contains("sakuin_reader_"))
     return 33;
@@ -204,11 +206,66 @@ int main() {
   auto category_filtered = handler.handle(std::move(category_query));
   if (!category_filtered || category_filtered->status != 200 ||
       !body(*category_filtered).contains("\"total_matches\":1") ||
-      !body(*category_filtered).contains("Example Movie 2024 1080p") ||
+      !body(*category_filtered).contains("Example Anime Movie 2024 1080p") ||
       !body(*category_filtered).contains("\"code\":\"release_year_token\"") ||
       !body(*category_filtered).contains("\"subject\":\"movie\"") ||
       !body(*category_filtered).contains("\"weight\":"))
     return 38;
+
+  api::HttpRequest classification_query{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?classification_state=classified&content_kind="
+                "movie&minimum_kind_confidence=high&limit=10",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto classification_filtered =
+      handler.handle(std::move(classification_query));
+  if (!classification_filtered || classification_filtered->status != 200 ||
+      !body(*classification_filtered).contains("\"total_matches\":1") ||
+      !body(*classification_filtered)
+           .contains("Example Anime Movie 2024 1080p"))
+    return 40;
+
+  api::HttpRequest unknown_classification_query{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?classification_state=unknown&content_kind=unknown",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto unknown_classification =
+      handler.handle(std::move(unknown_classification_query));
+  if (!unknown_classification || unknown_classification->status != 200 ||
+      !body(*unknown_classification).contains("\"total_matches\":1") ||
+      !body(*unknown_classification).contains("Linux Distribution"))
+    return 41;
+
+  api::HttpRequest label_query{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?label=anime&minimum_label_confidence=medium",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto label_filtered = handler.handle(std::move(label_query));
+  if (!label_filtered || label_filtered->status != 200 ||
+      !body(*label_filtered).contains("\"total_matches\":1") ||
+      !body(*label_filtered).contains("Example Anime Movie 2024 1080p"))
+    return 42;
+
+  api::HttpRequest invalid_classification{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?content_kind=video",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto invalid_classification_result =
+      handler.handle(std::move(invalid_classification));
+  if (!invalid_classification_result ||
+      invalid_classification_result->status != 400 ||
+      !body(*invalid_classification_result).contains("invalid_query"))
+    return 43;
+
+  api::HttpRequest orphan_label_confidence{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?minimum_label_confidence=high",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto orphan_label_result = handler.handle(std::move(orphan_label_confidence));
+  if (!orphan_label_result || orphan_label_result->status != 400 ||
+      !body(*orphan_label_result)
+           .contains("minimum_label_confidence requires at least one label"))
+    return 44;
 
   api::HttpRequest invalid{
       .method = api::HttpMethod::Get,

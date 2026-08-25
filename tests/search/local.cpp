@@ -1,5 +1,6 @@
 import std;
 
+import sakuin.classification;
 import sakuin.core;
 import sakuin.model.torrent;
 import sakuin.search.checkpoint;
@@ -47,10 +48,13 @@ int main() {
     if (!index || (*index)->source_generation() != 0)
       return 1;
     auto rebuild = (*index)->begin_rebuild(7);
+    auto anime_movie = record(3, "Example Anime Movie 2024", 300);
+    anime_movie.files.front().path = "Example.Anime.Movie.2024.mkv";
     const std::array records{record(1, "Linux Archive", 100),
-                             record(2, "Nature Archive", 200)};
+                             record(2, "Nature Archive", 200), anime_movie};
     if (!rebuild || !(*rebuild)->append(records[0]) ||
-        !(*rebuild)->append(records[1]) || !(*rebuild)->commit())
+        !(*rebuild)->append(records[1]) || !(*rebuild)->append(records[2]) ||
+        !(*rebuild)->commit())
       return 2;
   }
   {
@@ -58,8 +62,19 @@ int main() {
     if (!index || (*index)->source_generation() != 7)
       return 3;
     auto found = (*index)->search({.text = "linux", .limit = 10});
+    auto classified = (*index)->search(
+        {.classification_state =
+             classification::ClassificationState::Classified,
+         .content_kind = classification::ContentKind::Movie,
+         .minimum_kind_confidence = classification::Confidence::High,
+         .labels = {classification::ContentLabel::Anime},
+         .minimum_label_confidence = classification::Confidence::High,
+         .limit = 10});
     const auto stats = (*index)->classification_stats();
-    if (!found || found->total_matches != 1 || stats.total_records != 2)
+    if (!found || found->total_matches != 1 || !classified ||
+        classified->total_matches != 1 ||
+        classified->hits.front().name != "Example Anime Movie 2024" ||
+        stats.total_records != 3)
       return 4;
     auto update = (*index)->begin_update(8);
     const auto replacement = record(1, "Kernel Archive", 300);

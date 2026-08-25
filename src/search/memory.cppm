@@ -142,6 +142,15 @@ bool contains_category(
   return std::ranges::find(categories, expected) != categories.end();
 }
 
+bool contains_labels(const classification::Classification &classified,
+                     std::span<const classification::ContentLabel> labels,
+                     classification::Confidence minimum) {
+  return std::ranges::all_of(labels, [&](const auto label) {
+    const auto confidence = classification::label_confidence(classified, label);
+    return confidence && classification::at_least(*confidence, minimum);
+  });
+}
+
 } // namespace
 
 class MemoryRebuildSession final : public SearchRebuildSession {
@@ -362,6 +371,15 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
          record.first_seen < *query.first_seen_at_or_after) ||
         (query.last_seen_at_or_before &&
          record.last_seen > *query.last_seen_at_or_before) ||
+        (query.classification_state &&
+         indexed.classification.state != *query.classification_state) ||
+        (query.content_kind &&
+         indexed.classification.kind != *query.content_kind) ||
+        (query.minimum_kind_confidence &&
+         !classification::at_least(indexed.classification.kind_confidence,
+                                   *query.minimum_kind_confidence)) ||
+        !contains_labels(indexed.classification, query.labels,
+                         query.minimum_label_confidence) ||
         (query.adult_content == AdultContentMode::Exclude && adult) ||
         (query.adult_content == AdultContentMode::Only && !adult) ||
         (!query.categories.empty() &&

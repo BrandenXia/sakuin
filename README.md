@@ -117,6 +117,10 @@ Results use magnet links because Sakuin indexes metadata rather than hosting
 `.torrent` files. Adult classification is only a label: visibility is an
 operator setting and defaults to including every result. Native JSON search
 also returns bounded rule evidence so classifications can be audited.
+For classifier review workflows, `/v1/search` can filter by exact state and
+kind, minimum confidence, and required labels; the published OpenAPI document
+lists the accepted values. These facets never bypass the operator's Adult
+visibility setting.
 
 Prometheus can scrape `/metrics` (or `/v1/metrics`) with the operator token as
 an `Authorization: Bearer` header. The endpoint reports service uptime, DHT

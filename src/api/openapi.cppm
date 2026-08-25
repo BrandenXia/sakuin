@@ -94,6 +94,11 @@ core::Result<core::ByteBuffer> openapi_document() {
           {"$ref": "#/components/parameters/FirstSeenAfter"},
           {"$ref": "#/components/parameters/LastSeenBefore"},
           {"$ref": "#/components/parameters/Category"},
+          {"$ref": "#/components/parameters/ClassificationState"},
+          {"$ref": "#/components/parameters/ContentKind"},
+          {"$ref": "#/components/parameters/MinimumKindConfidence"},
+          {"$ref": "#/components/parameters/ClassificationLabel"},
+          {"$ref": "#/components/parameters/MinimumLabelConfidence"},
           {"$ref": "#/components/parameters/Offset"},
           {"$ref": "#/components/parameters/Limit"}
         ],
@@ -240,6 +245,11 @@ core::Result<core::ByteBuffer> openapi_document() {
       "FirstSeenAfter": {"name": "first_seen_at_or_after_ms", "in": "query", "schema": {"type": "integer"}},
       "LastSeenBefore": {"name": "last_seen_at_or_before_ms", "in": "query", "schema": {"type": "integer"}},
       "Category": {"name": "category", "in": "query", "description": "Comma-separated semantic categories, matched with OR semantics.", "schema": {"type": "string", "examples": ["movie,movie_uhd", "series_anime", "ebook"]}},
+      "ClassificationState": {"name": "classification_state", "in": "query", "description": "Exact classifier lifecycle state.", "schema": {"type": "string", "enum": ["awaiting_metadata", "classified", "ambiguous", "unknown"]}},
+      "ContentKind": {"name": "content_kind", "in": "query", "description": "Exact classifier content kind.", "schema": {"type": "string", "enum": ["unknown", "movie", "series", "music", "audiobook", "ebook", "game", "application", "mixed"]}},
+      "MinimumKindConfidence": {"name": "minimum_kind_confidence", "in": "query", "schema": {"type": "string", "enum": ["low", "medium", "high"]}},
+      "ClassificationLabel": {"name": "label", "in": "query", "description": "Comma-separated classifier labels. Every label must be present; Adult visibility policy still applies.", "schema": {"type": "string", "examples": ["anime", "adult,anime"]}},
+      "MinimumLabelConfidence": {"name": "minimum_label_confidence", "in": "query", "description": "Minimum confidence for every requested label. Requires label; omitted means low.", "schema": {"type": "string", "enum": ["low", "medium", "high"]}},
       "Offset": {"name": "offset", "in": "query", "schema": {"type": "integer", "minimum": 0, "default": 0}},
       "Limit": {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 50}},
       "InfoHash": {"name": "infohash", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[0-9A-Fa-f]{40}$"}}
