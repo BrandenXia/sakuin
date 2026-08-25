@@ -335,6 +335,45 @@ int main() {
       !body(*caps).contains("<category id=\"2000\" name=\"Movies\"") ||
       !body(*caps).contains("<subcat id=\"4050\" name=\"Games\""))
     return 16;
+  auto canonical_caps = handler.handle(
+      {.method = api::HttpMethod::Get, .target = "/torznab/api?t=caps"});
+  if (!canonical_caps || canonical_caps->status != 200 ||
+      body(*canonical_caps) != body(*caps))
+    return 48;
+  const std::array all_categories{
+      classification::MediaCategory::Movie,
+      classification::MediaCategory::MovieSd,
+      classification::MediaCategory::MovieHd,
+      classification::MediaCategory::MovieUhd,
+      classification::MediaCategory::Series,
+      classification::MediaCategory::SeriesSd,
+      classification::MediaCategory::SeriesHd,
+      classification::MediaCategory::SeriesUhd,
+      classification::MediaCategory::SeriesAnime,
+      classification::MediaCategory::Audio,
+      classification::MediaCategory::Audiobook,
+      classification::MediaCategory::Application,
+      classification::MediaCategory::Game,
+      classification::MediaCategory::Books,
+      classification::MediaCategory::Ebook,
+      classification::MediaCategory::Adult,
+      classification::MediaCategory::Other,
+  };
+  search::SearchHit category_coverage_hit{
+      .name = "Category coverage",
+      .categories = std::vector<classification::MediaCategory>{
+          all_categories.begin(), all_categories.end()}};
+  const auto category_coverage_feed = body(api::torznab_search_response(
+      {.hits = {std::move(category_coverage_hit)}, .total_matches = 1}, 0));
+  for (const auto category_id :
+       std::array{2000, 2030, 2040, 2045, 5000, 5030, 5040, 5045, 5070, 3000,
+                  3030, 4000, 4050, 7000, 7020, 6000, 8000}) {
+    const auto id = std::to_string(category_id);
+    if (!body(*caps).contains("id=\"" + id + "\"") ||
+        !category_coverage_feed.contains(
+            "<torznab:attr name=\"category\" value=\"" + id + "\" />"))
+      return 49;
+  }
   auto game_request = api::parse_torznab_request("t=search&cat=4050");
   if (!game_request || game_request->category_filter_matches_nothing ||
       game_request->query.categories !=

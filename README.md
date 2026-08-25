@@ -89,7 +89,7 @@ the running release version. Native binaries also report it with
 `/openapi.json` publishes the native JSON API contract for client generation
 and interactive API tools. It contains no credentials and is available without
 authentication. Torznab clients should continue to discover their XML contract
-through `/api?t=caps`.
+through `/torznab/api?t=caps`.
 
 Useful commands from a repository checkout:
 
@@ -120,10 +120,18 @@ non-default provider. Keep the data volume: manifests, locks, derived indexes,
 and bounded transfer staging remain local. Temporary AWS session credentials
 can include `AWS_SESSION_TOKEN`.
 
-Torznab clients can use `http://127.0.0.1:8080/api` as the indexer URL and the
-complete `sakuin_...` reader token as `apikey`. Sakuin advertises generic,
-movie, TV, music/audio, and book search, with standard Torznab categories,
-including distinct PC application and game results.
+Torznab clients can use `http://127.0.0.1:8080/torznab/api` as the indexer URL
+and the complete `sakuin_...` reader token as `apikey`. In Prowlarr's Generic
+Torznab form, enter `http://127.0.0.1:8080` as the URL and `/torznab/api` as the
+advanced API Path. Sakuin advertises generic, movie, TV, music/audio, and book
+search, with standard Torznab categories, including distinct PC application
+and game results.
+
+If Prowlarr shows `Unknown` categories after a Sakuin upgrade, change its API
+Path from the legacy `/api` alias to `/torznab/api`, test, and save the indexer.
+This gives Prowlarr a fresh capability cache immediately; restarting Prowlarr
+also clears its in-memory cache.
+
 Results use magnet links because Sakuin indexes metadata rather than hosting
 `.torrent` files. Adult classification is only a label: visibility is an
 operator setting and defaults to including every result. Native JSON search

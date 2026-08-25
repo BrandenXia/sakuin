@@ -27,7 +27,7 @@ core::Result<core::ByteBuffer> openapi_document() {
   "info": {
     "title": "Sakuin API",
     "version": "dev",
-    "description": "Native JSON search and operations API. Torznab XML discovery is available separately through /api?t=caps."
+    "description": "Native JSON search and operations API. Torznab XML discovery is available separately through /torznab/api?t=caps."
   },
   "servers": [{"url": "/"}],
   "tags": [
