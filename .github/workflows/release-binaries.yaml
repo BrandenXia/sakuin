@@ -1,6 +1,7 @@
 name: Release binaries and container image
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -52,7 +53,12 @@ jobs:
 
       - name: Build release binaries
         run: |
-          release_version="${GITHUB_REF_NAME#v}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            release_version="${GITHUB_REF_NAME#v}"
+          else
+            release_version="ci"
+          fi
+          echo "RELEASE_VERSION=${release_version}" >> "${GITHUB_ENV}"
           xmake f --yes --mode=release --toolchain=clang-20 \
             --cc=/usr/lib/llvm-20/bin/clang \
             --cxx=/usr/lib/llvm-20/bin/clang++ \
@@ -60,17 +66,17 @@ jobs:
             --sh=/usr/lib/llvm-20/bin/clang++ \
             --sdk=/usr/lib/llvm-20 --runtimes=c++_shared \
             --sakuin_version="${release_version}"
-          xmake build --yes --jobs=2 sakuin
-          xmake build --yes --jobs=2 sakuin-api-key
+          xmake build --yes --jobs=1 sakuin
+          xmake build --yes --jobs=1 sakuin-api-key
 
       - name: Smoke-test the command line
         run: |
           xmake run sakuin --help
           test "$(xmake run sakuin --version)" = \
-            "sakuin ${GITHUB_REF_NAME#v}"
+            "sakuin ${RELEASE_VERSION}"
           xmake run sakuin-api-key --help
           test "$(xmake run sakuin-api-key --version)" = \
-            "sakuin-api-key ${GITHUB_REF_NAME#v}"
+            "sakuin-api-key ${RELEASE_VERSION}"
 
       - name: Package release bundle
         run: ./scripts/package-linux.sh
