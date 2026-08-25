@@ -60,7 +60,9 @@ completed initializer and its token-bearing logs with
 `docker compose rm --force sakuin-init`. Data is kept in the `sakuin-data`
 Docker volume. The API is available at `http://127.0.0.1:8080` by default; UDP
 port 6881 is exposed for the DHT. The image includes a small public DHT
-bootstrap list.
+bootstrap list. The bundled Compose network is dual-stack and Sakuin uses both
+IPv4 and IPv6 by default; set `SAKUIN_ENABLE_IPV6=false` in an adjacent `.env`
+file only when the Docker host cannot route IPv6.
 
 ```bash
 curl http://127.0.0.1:8080/v1/health
@@ -120,6 +122,9 @@ Prometheus can scrape `/metrics` (or `/v1/metrics`) with the operator token as
 an `Authorization: Bearer` header. The endpoint reports service uptime, DHT
 activity and queues, search and duplicate generations, materialization, and
 storage-maintenance counters without including peer addresses or error text.
+It also distinguishes inbound DHT query methods from responses and reports
+active routing-discovery work, which makes passive reachability and crawler
+progress visible without packet captures.
 Classifier coverage, ambiguity, bounded-input truncation, and semantic category
 counts are included so operators can assess classification quality in place.
 

@@ -65,6 +65,27 @@ void family_samples(std::string &output, std::string_view name,
          family.metadata_candidates_accepted);
   sample(output, "sakuin_dht_routing_probes_accepted_total", labels,
          family.routing_probes_accepted);
+  sample(output, "sakuin_dht_discovery_queries_started_total", labels,
+         family.discovery_queries_started);
+  sample(output, "sakuin_dht_inbound_messages_total", labels,
+         family.inbound_messages);
+  sample(output, "sakuin_dht_inbound_queries_total", labels,
+         family.inbound_queries);
+  sample(output, "sakuin_dht_inbound_query_methods_total",
+         labels + ",method=\"ping\"", family.inbound_ping_queries);
+  sample(output, "sakuin_dht_inbound_query_methods_total",
+         labels + ",method=\"find_node\"", family.inbound_find_node_queries);
+  sample(output, "sakuin_dht_inbound_query_methods_total",
+         labels + ",method=\"get_peers\"", family.inbound_get_peers_queries);
+  sample(output, "sakuin_dht_inbound_query_methods_total",
+         labels + ",method=\"announce_peer\"",
+         family.inbound_announce_peer_queries);
+  sample(output, "sakuin_dht_inbound_query_methods_total",
+         labels + ",method=\"unknown\"", family.inbound_unknown_queries);
+  sample(output, "sakuin_dht_inbound_responses_total", labels,
+         family.inbound_responses);
+  sample(output, "sakuin_dht_inbound_protocol_errors_total", labels,
+         family.inbound_protocol_errors);
   sample(output, "sakuin_dht_queries_expired_total", labels,
          family.queries_expired);
   sample(output, "sakuin_dht_datagrams_attempted_total", labels,
@@ -76,6 +97,8 @@ void family_samples(std::string &output, std::string_view name,
   sample(output, "sakuin_dht_routing_nodes", labels, family.routing_nodes);
   sample(output, "sakuin_dht_outstanding_queries", labels,
          family.outstanding_queries);
+  sample(output, "sakuin_dht_discovery_in_flight", labels,
+         family.discovery_in_flight);
   sample(output, "sakuin_dht_pending_actions", labels, family.pending_actions);
   sample(output, "sakuin_dht_metadata_queued", labels, family.metadata_queued);
   sample(output, "sakuin_dht_metadata_in_flight", labels,
@@ -90,6 +113,9 @@ void family_samples(std::string &output, std::string_view name,
   if (family.last_cycle_ms)
     sample(output, "sakuin_dht_last_cycle_timestamp_seconds", labels,
            static_cast<double>(*family.last_cycle_ms) / 1000.0);
+  if (family.last_inbound_query_ms)
+    sample(output, "sakuin_dht_last_inbound_query_timestamp_seconds", labels,
+           static_cast<double>(*family.last_inbound_query_ms) / 1000.0);
   if (family.last_error_ms)
     sample(output, "sakuin_dht_last_error_timestamp_seconds", labels,
            static_cast<double>(*family.last_error_ms) / 1000.0);
@@ -189,6 +215,18 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "Metadata acquisition candidates accepted.", "counter");
     metadata(output, "sakuin_dht_routing_probes_accepted_total",
              "Routing probes accepted.", "counter");
+    metadata(output, "sakuin_dht_discovery_queries_started_total",
+             "Periodic DHT routing-discovery queries started.", "counter");
+    metadata(output, "sakuin_dht_inbound_messages_total",
+             "Valid inbound KRPC messages received.", "counter");
+    metadata(output, "sakuin_dht_inbound_queries_total",
+             "Valid inbound KRPC queries received.", "counter");
+    metadata(output, "sakuin_dht_inbound_query_methods_total",
+             "Valid inbound KRPC queries by method.", "counter");
+    metadata(output, "sakuin_dht_inbound_responses_total",
+             "Valid inbound KRPC responses received.", "counter");
+    metadata(output, "sakuin_dht_inbound_protocol_errors_total",
+             "Valid inbound KRPC protocol-error messages received.", "counter");
     metadata(output, "sakuin_dht_queries_expired_total",
              "DHT queries expired before completion.", "counter");
     metadata(output, "sakuin_dht_datagrams_attempted_total",
@@ -201,6 +239,8 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "Nodes currently present in the routing table.", "gauge");
     metadata(output, "sakuin_dht_outstanding_queries",
              "DHT queries currently awaiting responses.", "gauge");
+    metadata(output, "sakuin_dht_discovery_in_flight",
+             "Periodic routing-discovery queries awaiting responses.", "gauge");
     metadata(output, "sakuin_dht_pending_actions",
              "DHT actions waiting to be dispatched.", "gauge");
     metadata(output, "sakuin_dht_metadata_queued",
@@ -215,6 +255,8 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "Whether DHT bootstrap has completed.", "gauge");
     metadata(output, "sakuin_dht_last_cycle_timestamp_seconds",
              "Unix time of the last completed DHT cycle.", "gauge");
+    metadata(output, "sakuin_dht_last_inbound_query_timestamp_seconds",
+             "Unix time of the last valid inbound DHT query.", "gauge");
     metadata(output, "sakuin_dht_last_error_timestamp_seconds",
              "Unix time of the last DHT worker error.", "gauge");
     family_samples(output, "ipv4", status.ipv4);

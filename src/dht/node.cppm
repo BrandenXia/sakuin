@@ -51,6 +51,14 @@ struct DhtNodeOptions {
   std::optional<runtime::AddressFamily> address_family;
 };
 
+enum class InboundMessageType { Query, Response, ProtocolError };
+
+struct InboundMessageReport {
+  InboundMessageType type{InboundMessageType::Query};
+  krpc::QueryKind query_kind{krpc::QueryKind::Unknown};
+  core::Timestamp received_at;
+};
+
 struct DhtActions {
   std::vector<DatagramSend> sends;
   std::optional<model::ObservationRecord> observation;
@@ -58,6 +66,7 @@ struct DhtActions {
   std::vector<RoutingProbe> probes_required;
   std::optional<QueryCompletion> query_completion;
   std::optional<ObservedAddressReport> observed_address;
+  std::optional<InboundMessageReport> inbound_message;
 };
 
 class DhtNode {
@@ -323,6 +332,8 @@ core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
   DhtActions actions;
   const auto *query = std::get_if<krpc::Query>(&*decoded);
   if (const auto *response_message = std::get_if<krpc::Response>(&*decoded)) {
+    actions.inbound_message = InboundMessageReport{
+        .type = InboundMessageType::Response, .received_at = received_at};
     auto pending = take_pending(response_message->transaction, datagram.source);
     if (!pending)
       return actions;
@@ -364,6 +375,8 @@ core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
     return actions;
   }
   if (const auto *error_message = std::get_if<krpc::Error>(&*decoded)) {
+    actions.inbound_message = InboundMessageReport{
+        .type = InboundMessageType::ProtocolError, .received_at = received_at};
     auto pending = take_pending(error_message->transaction, datagram.source);
     if (!pending)
       return actions;
@@ -378,6 +391,11 @@ core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
                         .protocol_error = *error_message};
     return actions;
   }
+
+  actions.inbound_message =
+      InboundMessageReport{.type = InboundMessageType::Query,
+                           .query_kind = query->kind,
+                           .received_at = received_at};
 
   auto routing_update =
       routing_.observe(NodeContact{.id = query->sender,

@@ -2,6 +2,7 @@ export module sakuin.dht;
 
 export import sakuin.dht.bencode;
 export import sakuin.dht.bootstrap;
+export import sakuin.dht.discovery;
 export import sakuin.dht.identity;
 export import sakuin.dht.krpc;
 export import sakuin.dht.metadata_candidate;
