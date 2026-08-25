@@ -344,6 +344,12 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
   std::vector<SearchHit> matches;
   for (const auto &indexed : state->records) {
     const auto &record = indexed.record;
+    // Observation materialization creates records before BEP 9 metadata is
+    // available. Keep those placeholders in the derived index for later
+    // enrichment and operational accounting, but do not expose an unknown
+    // size as a real zero-byte torrent through native or Torznab search.
+    if (!record.name || record.files.empty())
+      continue;
     const bool adult = contains_category(indexed.categories,
                                          classification::MediaCategory::Adult);
     if ((query.minimum_size && record.total_size < *query.minimum_size) ||

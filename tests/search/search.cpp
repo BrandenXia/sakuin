@@ -205,5 +205,29 @@ int main() {
           classification::ClassificationState::Unknown) != 1 ||
       disabled_stats.category_count(classification::MediaCategory::Other) != 1)
     return 21;
+
+  search::InMemorySearchIndex completeness_index;
+  auto completeness_rebuild = completeness_index.begin_rebuild(1);
+  auto placeholder = torrent(6, "placeholder", 0, {"placeholder"}, 60);
+  placeholder.name.reset();
+  placeholder.files.clear();
+  const auto zero_byte = torrent(7, "Empty File", 0, {"empty.txt"}, 70);
+  if (!completeness_rebuild ||
+      !(*completeness_rebuild)->append(placeholder) ||
+      !(*completeness_rebuild)->append(zero_byte) ||
+      !(*completeness_rebuild)->commit())
+    return 22;
+  auto complete = completeness_index.search({.limit = 10});
+  std::string placeholder_hash;
+  for (std::size_t index = 0; index < core::InfoHash{}.bytes.size(); ++index)
+    placeholder_hash += "06";
+  auto placeholder_by_hash = completeness_index.search(
+      {.text = std::move(placeholder_hash), .limit = 10});
+  if (!complete || complete->total_matches != 1 ||
+      complete->hits.front().name != "Empty File" ||
+      complete->hits.front().total_size != 0 ||
+      complete->hits.front().file_count != 1 || !placeholder_by_hash ||
+      placeholder_by_hash->total_matches != 0)
+    return 23;
   return 0;
 }
