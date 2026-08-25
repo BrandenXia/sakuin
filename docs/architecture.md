@@ -251,8 +251,9 @@ on the maintenance owner thread rather than blocking an Asio request thread.
 
 The `/api` compatibility route implements Torznab capabilities and UTF-8
 XML/RSS search responses. Semantic classifications map to the advertised
-Movies, TV, Audio, PC, Books, XXX, and Other category families. Generic and
-specialized movie, TV, music/audio, and book searches apply category filters
+Movies, TV, Audio, PC, Books, XXX, and Other category families. Applications
+use PC while games use its standard Games subcategory. Generic and specialized
+movie, TV, music/audio, and book searches apply category filters
 inside the derived index before totals and pagination. Unknown category IDs are
 ignored as Torznab specifies; a request containing only unknown IDs is empty.
 Results use magnet links because the canonical store retains decoded torrent

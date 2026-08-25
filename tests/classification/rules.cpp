@@ -101,6 +101,9 @@ int main() {
   if (game.kind != ContentKind::Game ||
       game.kind_confidence != Confidence::High)
     return 7;
+  if (!std::ranges::contains(sakuin::classification::media_categories(game),
+                             MediaCategory::Game))
+    return 19;
 
   const auto application = classify(
       record("Example Software", {FileRecord{"example.rpm", 120'000'000}}));

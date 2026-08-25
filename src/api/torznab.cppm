@@ -224,6 +224,8 @@ std::optional<classification::MediaCategory> semantic_category(unsigned id) {
     return Audiobook;
   case 4000:
     return Application;
+  case 4050:
+    return Game;
   case 5000:
     return Series;
   case 5030:
@@ -274,6 +276,8 @@ TorznabCategory torznab_category(classification::MediaCategory category) {
     return {3030, "Audio/Audiobook"};
   case Application:
     return {4000, "PC"};
+  case Game:
+    return {4050, "PC/Games"};
   case Books:
     return {7000, "Books"};
   case Ebook:
@@ -352,8 +356,16 @@ core::Result<TorznabRequest> parse_torznab_request(std::string_view encoded) {
           end != entry.data() + entry.size())
         return std::unexpected(core::Error{core::ErrorCode::InvalidQuery,
                                            "cat must contain integer IDs"});
-      if (const auto semantic = semantic_category(value))
+      if (const auto semantic = semantic_category(value);
+          semantic &&
+          !std::ranges::contains(result.query.categories, *semantic))
         result.query.categories.push_back(*semantic);
+      // A parent PC request includes its advertised Games child without
+      // conflating Game with Application in Sakuin's semantic API.
+      if (value == 4000 &&
+          !std::ranges::contains(result.query.categories,
+                                 classification::MediaCategory::Game))
+        result.query.categories.push_back(classification::MediaCategory::Game);
       if (separator == std::string_view::npos)
         break;
       remaining.remove_prefix(separator + 1);
@@ -390,7 +402,7 @@ HttpResponse torznab_capabilities(search::AdultContentMode adult_content) {
   <categories>
     <category id="2000" name="Movies"><subcat id="2030" name="SD" /><subcat id="2040" name="HD" /><subcat id="2045" name="UHD" /></category>
     <category id="3000" name="Audio"><subcat id="3030" name="Audiobook" /></category>
-    <category id="4000" name="PC" />
+    <category id="4000" name="PC"><subcat id="4050" name="Games" /></category>
     <category id="5000" name="TV"><subcat id="5030" name="SD" /><subcat id="5040" name="HD" /><subcat id="5045" name="UHD" /><subcat id="5070" name="Anime" /></category>
 )xml";
   if (adult_content != search::AdultContentMode::Exclude)
