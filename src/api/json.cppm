@@ -64,6 +64,8 @@ algorithm_name(index::DuplicateFingerprintAlgorithm algorithm) {
     return "exact_file_layout_v1";
   case index::DuplicateFingerprintAlgorithm::NormalizedMetadataV1:
     return "normalized_metadata_v1";
+  case index::DuplicateFingerprintAlgorithm::PayloadLayoutV1:
+    return "payload_layout_v1";
   }
   std::unreachable();
 }

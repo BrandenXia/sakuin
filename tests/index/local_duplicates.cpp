@@ -32,6 +32,17 @@ sakuin::model::TorrentRecord record(std::uint8_t hash, std::string name,
           .files = {{.path = std::move(path), .size = 42}}};
 }
 
+sakuin::model::TorrentRecord payload_record(std::uint8_t hash,
+                                            std::string prefix) {
+  return {.info_hash = info_hash(hash),
+          .first_seen = {},
+          .last_seen = {},
+          .name = prefix,
+          .total_size = 100,
+          .files = {{.path = prefix + "/document.txt", .size = 10},
+                    {.path = prefix + "/archive.bin", .size = 90}}};
+}
+
 } // namespace
 
 int main() {
@@ -49,7 +60,9 @@ int main() {
   const std::array records{record(1, "Example", "payload.bin"),
                            record(2, "Other", "payload.bin"),
                            record(3, " example ", "PAYLOAD.BIN"),
-                           record(4, "Unique", "different.bin")};
+                           record(4, "Unique", "different.bin"),
+                           payload_record(6, "first"),
+                           payload_record(7, "renamed")};
   auto write = torrents.begin_write();
   if (!write || !(*write)->append(records) || !(*write)->commit())
     return 2;
@@ -60,19 +73,24 @@ int main() {
   const auto path = directory.path / "derived" / "duplicates.bin";
   auto rebuilt = index::LocalDuplicateIndex::rebuild(path, **snapshot);
   if (!rebuilt || (*rebuilt)->stats().source_generation != 1 ||
-      (*rebuilt)->stats().records_indexed != 4 ||
-      (*rebuilt)->stats().fingerprints != 8 || (*rebuilt)->stats().groups != 2)
+      (*rebuilt)->stats().records_indexed != 6 ||
+      (*rebuilt)->stats().fingerprints != 14 || (*rebuilt)->stats().groups != 3)
     return 4;
   auto exact = (*rebuilt)->groups(
       index::DuplicateFingerprintAlgorithm::ExactFileLayoutV1);
   if (!exact || exact->size() != 1 || exact->front().torrents.size() != 2)
+    return 5;
+  auto payload =
+      (*rebuilt)->groups(index::DuplicateFingerprintAlgorithm::PayloadLayoutV1);
+  if (!payload || payload->size() != 1 || payload->front().torrents.size() != 2)
     return 5;
 
   rebuilt->reset();
   auto reopened = index::LocalDuplicateIndex::open(path);
   if (!reopened || (*reopened)->stats().source_generation != 1 ||
       (*reopened)->matches(info_hash(1)).size() != 2 ||
-      (*reopened)->matches(info_hash(4)).size() != 0)
+      (*reopened)->matches(info_hash(4)).size() != 0 ||
+      (*reopened)->matches(info_hash(6)).size() != 1)
     return 6;
 
   {
@@ -93,7 +111,7 @@ int main() {
     return 8;
   auto initial_sync = (*repaired)->synchronize(torrents);
   if (!initial_sync || !initial_sync->full_rebuild ||
-      initial_sync->records_processed != 4 ||
+      initial_sync->records_processed != 6 ||
       !(*repaired)->cursor().initialized)
     return 9;
   const std::array update{record(5, "Unique", "different.bin")};
@@ -117,7 +135,7 @@ int main() {
   auto after_compaction = (*current)->synchronize(torrents);
   if (!after_compaction || !after_compaction->full_rebuild ||
       after_compaction->source_generation != 3 ||
-      after_compaction->records_processed != 5)
+      after_compaction->records_processed != 7)
     return 14;
   auto empty = index::LocalDuplicateIndex::open(directory.path / "missing.bin");
   if (!empty || (*empty)->stats().source_generation != 0 ||
