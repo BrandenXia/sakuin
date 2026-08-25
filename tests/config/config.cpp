@@ -42,6 +42,14 @@ maximum_queued_write_bytes = 524288
 storage_conflict_attempts = 5
 storage_retry_delay_ms = 250
 
+[network.dht.metadata.discovery]
+enabled = true
+maximum_pending = 4096
+maximum_in_flight = 12
+parallelism_per_hash = 4
+maximum_queries_per_hash = 32
+retry_delay_ms = 120000
+
 [network.traffic]
 window_ms = 3600000
 outbound_bytes = 1000000
@@ -168,6 +176,8 @@ tls_server_name = "coordinator.internal"
                 std::string{"/var/lib/sakuin/api-credentials"}},
       std::pair{std::string{"SAKUIN_DHT_METADATA_MAXIMUM_IN_FLIGHT"},
                 std::string{"48"}},
+      std::pair{std::string{"SAKUIN_DHT_METADATA_DISCOVERY_MAXIMUM_IN_FLIGHT"},
+                std::string{"10"}},
       std::pair{std::string{"SAKUIN_DHT_ROUTING_MAXIMUM_QUEUED"},
                 std::string{"768"}},
       std::pair{std::string{"SAKUIN_DHT_BOOTSTRAP_MAXIMUM_ATTEMPTS"},
@@ -258,6 +268,13 @@ tls_server_name = "coordinator.internal"
       loaded.network.dht.metadata.storage_conflict_attempts != 5 ||
       loaded.network.dht.metadata.storage_retry_delay !=
           std::chrono::milliseconds{250} ||
+      !loaded.network.dht.metadata.discovery.enabled ||
+      loaded.network.dht.metadata.discovery.maximum_pending != 4096 ||
+      loaded.network.dht.metadata.discovery.maximum_in_flight != 10 ||
+      loaded.network.dht.metadata.discovery.parallelism_per_hash != 4 ||
+      loaded.network.dht.metadata.discovery.maximum_queries_per_hash != 32 ||
+      loaded.network.dht.metadata.discovery.retry_delay !=
+          std::chrono::minutes{2} ||
       loaded.network.dht.identity.observation_quorum != 4 ||
       loaded.network.dht.routing.maximum_queued != 768 ||
       loaded.network.dht.routing.maximum_in_flight != 6 ||
@@ -395,6 +412,13 @@ tls_server_name = "coordinator.internal"
   invalid_compression.storage.compression_level = 23;
   if (config::validate(invalid_compression))
     return 11;
+  auto invalid_metadata_discovery = config::defaults();
+  invalid_metadata_discovery.network.dht.metadata.discovery
+      .parallelism_per_hash = invalid_metadata_discovery.network.dht.metadata
+                                  .discovery.maximum_in_flight +
+                              1;
+  if (config::validate(invalid_metadata_discovery))
+    return 22;
   auto invalid_tiering = config::defaults();
   invalid_tiering.storage.compaction_maximum_warm_segments = 0;
   if (config::validate(invalid_tiering))

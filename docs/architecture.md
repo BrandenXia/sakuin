@@ -162,6 +162,13 @@ quorum agrees on the node's observed external address.
 The runtime emits logical observations rather than writing segment internals.
 Metadata candidates pass through bounded queues, connection and idle timeouts,
 piece validation, metainfo hashing, retry policy, and storage conflict handling.
+An observation also feeds a bounded, iterative peer-discovery planner. It
+queries routing contacts with `get_peers`, follows closer contacts returned in
+responses, and converts compact peer endpoints into metadata candidates. Each
+infohash has independent parallelism and query limits plus a cooldown, so
+improved metadata coverage does not require unbounded DHT fan-out. IPv4 and
+IPv6 traversals remain isolated even when a response contains contacts for both
+families.
 
 The local flow is:
 
@@ -223,7 +230,9 @@ search, duplicate queries, and an authenticated search-refresh operation.
 Status snapshots
 aggregate DHT family cycles, bootstrap progress, datagram dispatch, derived
 index generations, materialization, maintenance, active routing discovery, and
-valid inbound KRPC traffic without exposing runtime or Asio types. Inbound
+active metadata-peer discovery without exposing runtime or Asio types. Peer
+discovery reports pending hashes, in-flight queries, discovered peers, and
+exhausted traversals per address family. Inbound
 query counts are split into `ping`, `find_node`, `get_peers`, `announce_peer`,
 and unknown methods; responses and protocol errors are counted separately.
 This provides direct evidence that published UDP ingress is reaching Sakuin,

@@ -113,7 +113,7 @@ core::Result<void> parse_metadata(const toml::table &table,
            "maximum_retry_delay_ms", "connect_timeout_ms", "idle_timeout_ms",
            "maximum_metadata_bytes", "maximum_outstanding_requests",
            "maximum_queued_write_bytes", "storage_conflict_attempts",
-           "storage_retry_delay_ms"},
+           "storage_retry_delay_ms", "discovery"},
           "network.dht.metadata.");
       !checked)
     return checked;
@@ -152,6 +152,41 @@ core::Result<void> parse_metadata(const toml::table &table,
         scalar<std::int64_t>(table, "storage_retry_delay_ms",
                              "network.dht.metadata.storage_retry_delay_ms",
                              overlay)})
+    if (!result)
+      return result;
+  auto discovery =
+      optional_table(table, "discovery", "network.dht.metadata.discovery");
+  if (!discovery)
+    return std::unexpected(discovery.error());
+  if (!*discovery)
+    return {};
+  if (auto checked = check_keys(
+          **discovery,
+          {"enabled", "maximum_pending", "maximum_in_flight",
+           "parallelism_per_hash", "maximum_queries_per_hash",
+           "retry_delay_ms"},
+          "network.dht.metadata.discovery.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<bool>(**discovery, "enabled",
+                     "network.dht.metadata.discovery.enabled", overlay),
+        scalar<std::int64_t>(
+            **discovery, "maximum_pending",
+            "network.dht.metadata.discovery.maximum_pending", overlay),
+        scalar<std::int64_t>(
+            **discovery, "maximum_in_flight",
+            "network.dht.metadata.discovery.maximum_in_flight", overlay),
+        scalar<std::int64_t>(
+            **discovery, "parallelism_per_hash",
+            "network.dht.metadata.discovery.parallelism_per_hash", overlay),
+        scalar<std::int64_t>(
+            **discovery, "maximum_queries_per_hash",
+            "network.dht.metadata.discovery.maximum_queries_per_hash",
+            overlay),
+        scalar<std::int64_t>(
+            **discovery, "retry_delay_ms",
+            "network.dht.metadata.discovery.retry_delay_ms", overlay)})
     if (!result)
       return result;
   return {};
@@ -852,6 +887,18 @@ core::Result<ConfigOverlay> environment_overlay(
        "network.dht.metadata.storage_conflict_attempts"},
       {"SAKUIN_DHT_METADATA_STORAGE_RETRY_DELAY_MS",
        "network.dht.metadata.storage_retry_delay_ms"},
+      {"SAKUIN_DHT_METADATA_DISCOVERY_ENABLED",
+       "network.dht.metadata.discovery.enabled"},
+      {"SAKUIN_DHT_METADATA_DISCOVERY_MAXIMUM_PENDING",
+       "network.dht.metadata.discovery.maximum_pending"},
+      {"SAKUIN_DHT_METADATA_DISCOVERY_MAXIMUM_IN_FLIGHT",
+       "network.dht.metadata.discovery.maximum_in_flight"},
+      {"SAKUIN_DHT_METADATA_DISCOVERY_PARALLELISM_PER_HASH",
+       "network.dht.metadata.discovery.parallelism_per_hash"},
+      {"SAKUIN_DHT_METADATA_DISCOVERY_MAXIMUM_QUERIES_PER_HASH",
+       "network.dht.metadata.discovery.maximum_queries_per_hash"},
+      {"SAKUIN_DHT_METADATA_DISCOVERY_RETRY_DELAY_MS",
+       "network.dht.metadata.discovery.retry_delay_ms"},
       {"SAKUIN_TRAFFIC_WINDOW_MS", "network.traffic.window_ms"},
       {"SAKUIN_TRAFFIC_INBOUND_BYTES", "network.traffic.inbound_bytes"},
       {"SAKUIN_TRAFFIC_OUTBOUND_BYTES", "network.traffic.outbound_bytes"},

@@ -16,6 +16,7 @@ import sakuin.dht.metadata_controller;
 import sakuin.dht.metadata_fetch;
 import sakuin.dht.node;
 import sakuin.dht.observation;
+import sakuin.dht.peer_discovery;
 import sakuin.dht.routing_maintenance;
 import sakuin.dht.runtime;
 import sakuin.dht.token;
@@ -104,6 +105,7 @@ private:
   std::unique_ptr<dht::BootstrapPlanner> bootstrap_;
   std::unique_ptr<dht::RoutingMaintenancePlanner> routing_;
   std::unique_ptr<dht::RoutingDiscoveryPlanner> discovery_;
+  std::unique_ptr<dht::PeerDiscoveryPlanner> peer_discovery_;
   integration::DhtRuntimeWakeup wakeup_;
   std::unique_ptr<integration::TorrentMetadataAcquisition> metadata_;
   std::unique_ptr<dht::MetadataAcquisitionController> external_metadata_;
@@ -313,6 +315,16 @@ AsioDhtFamilyRuntime::create(
     return std::unexpected(discovery.error());
   result->discovery_ = std::move(*discovery);
 
+  if (configuration.metadata.enabled &&
+      configuration.metadata.discovery.enabled) {
+    auto peer_discovery = dht::PeerDiscoveryPlanner::create(
+        *result->node_,
+        integration::peer_discovery_options(configuration.metadata.discovery));
+    if (!peer_discovery)
+      return std::unexpected(peer_discovery.error());
+    result->peer_discovery_ = std::move(*peer_discovery);
+  }
+
   const auto wake_owner = [owner = result.get()] { owner->wakeup_.notify(); };
   if (configuration.metadata.enabled) {
     if (dependencies.metadata_results) {
@@ -345,6 +357,7 @@ AsioDhtFamilyRuntime::create(
        .bootstrap = result->bootstrap_.get(),
        .routing = result->routing_.get(),
        .discovery = result->discovery_.get(),
+       .peer_discovery = result->peer_discovery_.get(),
        .identity = result->identity_.get()},
       {.wake_owner = wake_owner});
   if (!pump)

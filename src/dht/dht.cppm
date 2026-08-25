@@ -13,6 +13,7 @@ export import sakuin.dht.metadata_fetch;
 export import sakuin.dht.metadata_queue;
 export import sakuin.dht.node;
 export import sakuin.dht.observation;
+export import sakuin.dht.peer_discovery;
 export import sakuin.dht.routing;
 export import sakuin.dht.routing_maintenance;
 export import sakuin.dht.runtime;

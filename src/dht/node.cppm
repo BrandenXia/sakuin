@@ -24,6 +24,7 @@ inline constexpr runtime::TrafficClassId inbound = 1;
 inline constexpr runtime::TrafficClassId protocol_response = 2;
 inline constexpr runtime::TrafficClassId routing_maintenance = 3;
 inline constexpr runtime::TrafficClassId discovery = 4;
+inline constexpr runtime::TrafficClassId metadata_discovery = 5;
 } // namespace traffic_class
 
 struct DatagramSend {
@@ -37,6 +38,8 @@ struct QueryCompletion {
   core::ByteBuffer transaction;
   krpc::QueryKind kind{krpc::QueryKind::Unknown};
   runtime::DatagramEndpoint remote;
+  std::vector<NodeContact> contacts;
+  std::vector<runtime::StreamEndpoint> peers;
   std::optional<krpc::Error> protocol_error;
 };
 
@@ -99,6 +102,9 @@ public:
   bool cancel_query(core::ByteView transaction,
                     const runtime::DatagramEndpoint &remote);
   std::size_t outstanding_queries() const noexcept;
+  std::optional<runtime::AddressFamily> address_family() const noexcept {
+    return options_.address_family;
+  }
 
   RoutingTable &routing_table() noexcept { return routing_; }
   const RoutingTable &routing_table() const noexcept { return routing_; }
@@ -140,6 +146,8 @@ private:
 
 namespace sakuin::dht {
 namespace {
+
+constexpr std::size_t MaximumPeersPerResponse = 256;
 
 std::string transaction_key(core::ByteView transaction) {
   return {reinterpret_cast<const char *>(transaction.data()),
@@ -196,6 +204,8 @@ DhtNode::begin_query(runtime::DatagramEndpoint remote, krpc::Query query,
   }
   const auto traffic = query.kind == krpc::QueryKind::Ping
                            ? traffic_class::routing_maintenance
+                       : query.kind == krpc::QueryKind::GetPeers
+                           ? traffic_class::metadata_discovery
                            : traffic_class::discovery;
   return DatagramSend{.destination = remote,
                       .payload = std::move(*packet),
@@ -347,6 +357,7 @@ core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
     if (update.probe)
       actions.probes_required.push_back(std::move(*update.probe));
 
+    std::vector<NodeContact> discovered_contacts;
     for (const auto [name, family] :
          {std::pair{std::string_view{"nodes"}, runtime::AddressFamily::IPv4},
           std::pair{std::string_view{"nodes6"},
@@ -363,15 +374,51 @@ core::Result<DhtActions> DhtNode::handle(runtime::Datagram datagram,
       if (!contacts)
         return std::unexpected(contacts.error());
       for (auto &contact : *contacts) {
+        discovered_contacts.push_back(contact);
         auto contact_update = routing_.observe(std::move(contact));
         if (contact_update.probe)
           actions.probes_required.push_back(std::move(*contact_update.probe));
       }
     }
+    std::vector<runtime::StreamEndpoint> peers;
+    if (pending->kind == krpc::QueryKind::GetPeers) {
+      const auto found = response_message->values.find("values");
+      if (found != response_message->values.end()) {
+        const auto *values = found->second.list();
+        if (!values)
+          return std::unexpected(
+              core::Error{core::ErrorCode::InvalidArgument,
+                          "KRPC get_peers values field must be a list"});
+        if (values->size() > MaximumPeersPerResponse)
+          return std::unexpected(
+              core::Error{core::ErrorCode::InvalidArgument,
+                          "KRPC get_peers response contains too many peers"});
+        peers.reserve(values->size());
+        for (const auto &value : *values) {
+          if (!value.string())
+            return std::unexpected(
+                core::Error{core::ErrorCode::InvalidArgument,
+                            "KRPC compact peer must be a byte string"});
+          auto endpoint = krpc::decode_compact_endpoint(*value.string());
+          if (!endpoint)
+            return std::unexpected(endpoint.error());
+          if (endpoint->address.family != pending->remote.address.family)
+            return std::unexpected(core::Error{
+                core::ErrorCode::InvalidArgument,
+                "KRPC compact peer does not match the query address family"});
+          runtime::StreamEndpoint peer{.address = endpoint->address,
+                                       .port = endpoint->port};
+          if (!std::ranges::contains(peers, peer))
+            peers.push_back(std::move(peer));
+        }
+      }
+    }
     actions.query_completion =
         QueryCompletion{.transaction = std::move(pending->transaction),
                         .kind = pending->kind,
-                        .remote = pending->remote};
+                        .remote = pending->remote,
+                        .contacts = std::move(discovered_contacts),
+                        .peers = std::move(peers)};
     return actions;
   }
   if (const auto *error_message = std::get_if<krpc::Error>(&*decoded)) {

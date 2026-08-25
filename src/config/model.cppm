@@ -21,6 +21,15 @@ struct DhtIdentityConfig {
   std::optional<std::string> fixed_ipv6_node_id;
 };
 
+struct MetadataDiscoveryConfig {
+  bool enabled{true};
+  std::size_t maximum_pending{8'192};
+  std::size_t maximum_in_flight{16};
+  std::size_t parallelism_per_hash{3};
+  std::size_t maximum_queries_per_hash{24};
+  core::Duration retry_delay{std::chrono::minutes{5}};
+};
+
 struct MetadataAcquisitionConfig {
   bool enabled{true};
   std::size_t maximum_in_flight{64};
@@ -35,6 +44,7 @@ struct MetadataAcquisitionConfig {
   std::size_t maximum_queued_write_bytes{1024U * 1024U};
   std::size_t storage_conflict_attempts{3};
   core::Duration storage_retry_delay{std::chrono::seconds{1}};
+  MetadataDiscoveryConfig discovery;
 };
 
 struct RoutingMaintenanceConfig {
@@ -453,6 +463,40 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.network.dht.metadata.storage_retry_delay = *value;
+    } else if (name == "network.dht.metadata.discovery.enabled") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.discovery.enabled = *value;
+    } else if (name == "network.dht.metadata.discovery.maximum_pending") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.discovery.maximum_pending = *value;
+    } else if (name ==
+               "network.dht.metadata.discovery.maximum_in_flight") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.discovery.maximum_in_flight = *value;
+    } else if (name ==
+               "network.dht.metadata.discovery.parallelism_per_hash") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.discovery.parallelism_per_hash = *value;
+    } else if (name ==
+               "network.dht.metadata.discovery.maximum_queries_per_hash") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.discovery.maximum_queries_per_hash = *value;
+    } else if (name ==
+               "network.dht.metadata.discovery.retry_delay_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.discovery.retry_delay = *value;
     } else if (name == "network.traffic.window_ms") {
       auto value = duration_ms(text, name);
       if (!value)
@@ -967,6 +1011,21 @@ core::Result<void> validate(const AppConfig &config) {
       metadata.storage_retry_delay <= core::Duration::zero())
     return std::unexpected(
         invalid("DHT metadata acquisition limits are invalid"));
+  const auto &metadata_discovery = metadata.discovery;
+  if (metadata_discovery.maximum_pending == 0 ||
+      metadata_discovery.maximum_pending > 1'000'000 ||
+      metadata_discovery.maximum_in_flight == 0 ||
+      metadata_discovery.maximum_in_flight >
+          config.network.dht.maximum_in_flight ||
+      metadata_discovery.parallelism_per_hash == 0 ||
+      metadata_discovery.parallelism_per_hash >
+          metadata_discovery.maximum_in_flight ||
+      metadata_discovery.maximum_queries_per_hash <
+          metadata_discovery.parallelism_per_hash ||
+      metadata_discovery.maximum_queries_per_hash > 4'096 ||
+      metadata_discovery.retry_delay <= core::Duration::zero())
+    return std::unexpected(
+        invalid("DHT active metadata-discovery limits are invalid"));
   if (config.network.traffic.window <= core::Duration::zero() ||
       (config.network.traffic.inbound_bytes == 0) ||
       (config.network.traffic.outbound_bytes == 0) ||
