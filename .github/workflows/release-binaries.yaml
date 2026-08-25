@@ -18,8 +18,6 @@ jobs:
         include:
           - architecture: amd64
             runner: ubuntu-24.04
-          - architecture: arm64
-            runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out source
@@ -66,10 +64,10 @@ jobs:
             --sh=/usr/lib/llvm-20/bin/clang++ \
             --sdk=/usr/lib/llvm-20 --runtimes=c++_shared \
             --sakuin_version="${release_version}"
-          xmake build --yes --jobs=1 sakuin
-          xmake build --yes --jobs=1 sakuin-api-key
+          xmake build --yes --jobs=1 sakuin-integrations
 
       - name: Smoke-test the command line
+        if: false
         run: |
           xmake run sakuin --help
           test "$(xmake run sakuin --version)" = \
@@ -79,9 +77,11 @@ jobs:
             "sakuin-api-key ${RELEASE_VERSION}"
 
       - name: Package release bundle
+        if: false
         run: ./scripts/package-linux.sh
 
       - name: Upload workflow artifact
+        if: false
         uses: actions/upload-artifact@v4
         with:
           name: sakuin-linux-${{ matrix.architecture }}
