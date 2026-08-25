@@ -274,6 +274,10 @@ int main() {
       {.method = api::HttpMethod::Get,
        .target = "/api?t=movie&q=example&limit=10&apikey=" + token});
   if (!torznab_movie ||
+      !body(*torznab_movie).contains("<category>2000</category>") ||
+      !body(*torznab_movie).contains("<category>2040</category>") ||
+      body(*torznab_movie).contains("<category>Movies</category>") ||
+      body(*torznab_movie).contains("<category>Movies/HD</category>") ||
       !body(*torznab_movie).contains("name=\"category\" value=\"2000\"") ||
       !body(*torznab_movie).contains("name=\"category\" value=\"2040\"") ||
       !body(*torznab_movie).contains("total=\"1\""))

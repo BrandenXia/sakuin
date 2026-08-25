@@ -429,7 +429,7 @@ HttpResponse torznab_search_response(const search::SearchResult &result,
            "</pubDate>";
     for (const auto category : hit.categories) {
       const auto wire = torznab_category(category);
-      xml += "<category>" + xml_escape(wire.name) + "</category>";
+      xml += "<category>" + std::to_string(wire.id) + "</category>";
     }
     xml += "<description>Indexed from "
            "the BitTorrent DHT</description><enclosure url=\"" +
