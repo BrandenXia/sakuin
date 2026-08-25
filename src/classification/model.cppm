@@ -6,7 +6,7 @@ import sakuin.core.ids;
 
 export namespace sakuin::classification {
 
-inline constexpr std::uint32_t AlgorithmVersion{1};
+inline constexpr std::uint32_t AlgorithmVersion{2};
 
 enum class ContentKind {
   Unknown,
@@ -85,6 +85,7 @@ enum class EvidenceCode {
   EbookToken,
   GameToken,
   ApplicationToken,
+  FuzzySemanticToken,
   AdultToken,
   AnimeToken,
   ResolutionToken,

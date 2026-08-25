@@ -302,7 +302,7 @@ core::Result<core::ByteBuffer> openapi_document() {
         "type": "object",
         "required": ["code", "subject", "weight"],
         "properties": {
-          "code": {"type": "string", "enum": ["video_payload_dominant", "audio_payload_dominant", "ebook_payload_dominant", "game_payload_dominant", "application_payload_dominant", "multiple_payload_families", "single_dominant_video", "season_episode_token", "release_year_token", "music_release_token", "audiobook_token", "ebook_token", "game_token", "application_token", "adult_token", "anime_token", "resolution_token"]},
+          "code": {"type": "string", "enum": ["video_payload_dominant", "audio_payload_dominant", "ebook_payload_dominant", "game_payload_dominant", "application_payload_dominant", "multiple_payload_families", "single_dominant_video", "season_episode_token", "release_year_token", "music_release_token", "audiobook_token", "ebook_token", "game_token", "application_token", "fuzzy_semantic_token", "adult_token", "anime_token", "resolution_token"]},
           "subject": {"type": "string", "enum": ["movie", "series", "music", "audiobook", "ebook", "game", "application", "mixed", "adult", "anime", "resolution"]},
           "weight": {"type": "integer"}
         }

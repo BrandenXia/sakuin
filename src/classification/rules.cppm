@@ -142,6 +142,63 @@ bool has_any_token(const TokenProfile &tokens, const Range &values) {
   });
 }
 
+// Restricted Damerau-Levenshtein distance of exactly one. Length is rejected
+// before scanning, so work stays proportional to the small built-in signal
+// token rather than an untrusted path length.
+bool one_edit_apart(std::string_view left, std::string_view right) {
+  if (left == right || left.size() + 1 < right.size() ||
+      right.size() + 1 < left.size())
+    return false;
+  if (left.size() == right.size()) {
+    std::array<std::size_t, 2> mismatch{};
+    std::size_t count{};
+    for (std::size_t index = 0; index < left.size(); ++index) {
+      if (left[index] == right[index])
+        continue;
+      if (count == mismatch.size())
+        return false;
+      mismatch[count++] = index;
+    }
+    if (count == 1)
+      return true;
+    return count == 2 && mismatch[1] == mismatch[0] + 1 &&
+           left[mismatch[0]] == right[mismatch[1]] &&
+           left[mismatch[1]] == right[mismatch[0]];
+  }
+
+  const auto shorter = left.size() < right.size() ? left : right;
+  const auto longer = left.size() < right.size() ? right : left;
+  std::size_t short_index{};
+  std::size_t long_index{};
+  bool skipped{};
+  while (short_index < shorter.size() && long_index < longer.size()) {
+    if (shorter[short_index] == longer[long_index]) {
+      ++short_index;
+      ++long_index;
+      continue;
+    }
+    if (skipped)
+      return false;
+    skipped = true;
+    ++long_index;
+  }
+  return true;
+}
+
+template <std::ranges::input_range Range>
+bool has_fuzzy_semantic_token(const TokenProfile &tokens,
+                              const Range &signals) {
+  constexpr std::size_t MinimumSignalBytes{8};
+  return std::ranges::any_of(signals, [&](const auto candidate) {
+    const std::string_view signal{candidate};
+    if (signal.size() < MinimumSignalBytes)
+      return false;
+    return std::ranges::any_of(tokens.values, [&](const auto &token) {
+      return one_edit_apart(token, signal);
+    });
+  });
+}
+
 bool season_episode_token(std::string_view token) {
   if (token.size() >= 6 && token.front() == 's') {
     const auto episode = token.find('e', 2);
@@ -306,16 +363,25 @@ Classification classify(const model::TorrentRecord &record,
   constexpr std::array game_tokens{"game", "games", "rom", "roms"};
   constexpr std::array application_tokens{"application", "applications",
                                           "software", "installer", "setup"};
-  if (audio_dominant && has_any_token(tokens, music_tokens))
+  if (audio_dominant && has_any_token(tokens, music_tokens)) {
     add(ContentKind::Music, 30, EvidenceCode::MusicReleaseToken);
-  if (has_any_token(tokens, audiobook_tokens))
+  } else if (audio_dominant && has_fuzzy_semantic_token(tokens, music_tokens)) {
+    add(ContentKind::Music, 20, EvidenceCode::FuzzySemanticToken);
+  }
+  if (has_any_token(tokens, audiobook_tokens)) {
     add(ContentKind::Audiobook, 130, EvidenceCode::AudiobookToken);
+  } else if (has_fuzzy_semantic_token(tokens, audiobook_tokens)) {
+    add(ContentKind::Audiobook, 100, EvidenceCode::FuzzySemanticToken);
+  }
   if (has_any_token(tokens, ebook_tokens))
     add(ContentKind::Ebook, 55, EvidenceCode::EbookToken);
   if (has_any_token(tokens, game_tokens))
     add(ContentKind::Game, 60, EvidenceCode::GameToken);
-  if (has_any_token(tokens, application_tokens))
+  if (has_any_token(tokens, application_tokens)) {
     add(ContentKind::Application, 55, EvidenceCode::ApplicationToken);
+  } else if (has_fuzzy_semantic_token(tokens, application_tokens)) {
+    add(ContentKind::Application, 45, EvidenceCode::FuzzySemanticToken);
+  }
 
   constexpr std::array anime_tokens{"anime", "hentai", "subsplease"};
   if (has_any_token(tokens, anime_tokens)) {

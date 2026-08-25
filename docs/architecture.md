@@ -277,6 +277,13 @@ state. They also include each bounded evidence code, subject, and signed rule
 weight so clients and operators can explain a classification without inspecting
 classifier internals. The rules inspect bounded untrusted strings without
 opening paths, extracting archives, or performing network lookups.
+Strong content-kind signals also tolerate one insertion, deletion,
+substitution, or adjacent transposition using a bounded deterministic matcher.
+Fuzzy evidence is weighted below an exact token and is exposed separately for
+auditing. Short signals, structured episode/resolution tokens, and Adult or
+Anime labels remain exact-only to limit false positives. The built-in rules
+require no operator setup; optional custom rule packs can layer on this model
+later without becoming required configuration.
 
 Classifier changes are checked against a version-controlled regression corpus
 with explicit expected state, kind, minimum confidence, label requirements, and
