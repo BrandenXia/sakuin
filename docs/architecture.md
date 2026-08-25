@@ -168,7 +168,11 @@ responses, and converts compact peer endpoints into metadata candidates. Each
 infohash has independent parallelism and query limits plus a cooldown, so
 improved metadata coverage does not require unbounded DHT fan-out. IPv4 and
 IPv6 traversals remain isolated even when a response contains contacts for both
-families.
+families. A persistent round-robin cursor grants at most one new query to a
+hash per scheduling pass, preventing early queue entries and fast responders
+from monopolizing the global discovery window. The default window uses half of
+the DHT node's global outstanding-query allowance, leaving capacity for
+bootstrap and routing maintenance while increasing discovery throughput.
 
 Existing canonical records without fetched metadata are also fed into this
 planner by a bounded backfill scan. The scan starts with a complete keyed view,

@@ -32,7 +32,7 @@ struct MetadataDiscoveryBackfillConfig {
 struct MetadataDiscoveryConfig {
   bool enabled{true};
   std::size_t maximum_pending{8'192};
-  std::size_t maximum_in_flight{16};
+  std::size_t maximum_in_flight{64};
   std::size_t parallelism_per_hash{3};
   std::size_t maximum_queries_per_hash{24};
   core::Duration retry_delay{std::chrono::minutes{5}};

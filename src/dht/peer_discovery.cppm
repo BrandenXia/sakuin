@@ -16,7 +16,7 @@ export namespace sakuin::dht {
 
 struct PeerDiscoveryOptions {
   std::size_t maximum_pending{8'192};
-  std::size_t maximum_in_flight{16};
+  std::size_t maximum_in_flight{64};
   std::size_t parallelism_per_hash{3};
   std::size_t maximum_queries_per_hash{24};
   core::Duration retry_delay{std::chrono::minutes{5}};
@@ -88,6 +88,9 @@ private:
   DhtNode *node_;
   PeerDiscoveryOptions options_;
   std::vector<Entry> entries_;
+  // The next hash to receive a query. Keeping this cursor across polls avoids
+  // allowing early queue entries or fast responders to monopolize capacity.
+  std::size_t schedule_cursor_{};
   std::deque<Cooldown> cooldowns_;
   std::vector<PeerMetadataCandidate> ready_;
   std::size_t exhausted_since_poll_{};
@@ -174,6 +177,8 @@ PeerDiscoveryPlanner::find(core::ByteView transaction,
 
 void PeerDiscoveryPlanner::finish(std::vector<Entry>::iterator entry,
                                   core::Timestamp now) {
+  const auto erased =
+      static_cast<std::size_t>(std::distance(entries_.begin(), entry));
   for (const auto &query : entry->outstanding)
     node_->cancel_query(query.transaction, query.remote);
   if (cooldowns_.size() >= options_.maximum_pending)
@@ -184,6 +189,14 @@ void PeerDiscoveryPlanner::finish(std::vector<Entry>::iterator entry,
            now + std::chrono::duration_cast<core::Timestamp::duration>(
                      options_.retry_delay)});
   entries_.erase(entry);
+  if (entries_.empty()) {
+    schedule_cursor_ = 0;
+  } else {
+    if (erased < schedule_cursor_)
+      --schedule_cursor_;
+    if (schedule_cursor_ >= entries_.size())
+      schedule_cursor_ = 0;
+  }
 }
 
 core::Result<PeerDiscoveryStep>
@@ -197,7 +210,12 @@ PeerDiscoveryPlanner::poll(core::Timestamp now) {
 
   auto capacity = options_.maximum_in_flight -
                   std::min(in_flight(), options_.maximum_in_flight);
-  for (std::size_t index = 0; index < entries_.size() && capacity != 0;) {
+  std::size_t visits_without_query{};
+  while (capacity != 0 && !entries_.empty() &&
+         visits_without_query < entries_.size()) {
+    if (schedule_cursor_ >= entries_.size())
+      schedule_cursor_ = 0;
+    const auto index = schedule_cursor_;
     auto &entry = entries_[index];
     auto routing_contacts = node_->routing_table().closest(
         target_id(entry.info_hash), node_->routing_table().size());
@@ -211,15 +229,15 @@ PeerDiscoveryPlanner::poll(core::Timestamp now) {
     std::ranges::sort(entry.frontier, [&](const auto &left, const auto &right) {
       return closer_to(left.id, right.id, target);
     });
-    while (capacity != 0 &&
-           entry.outstanding.size() < options_.parallelism_per_hash &&
-           entry.attempts < options_.maximum_queries_per_hash) {
-      const auto contact =
-          std::ranges::find_if(entry.frontier, [&](const auto &item) {
-            return !std::ranges::contains(entry.queried, item.endpoint);
-          });
-      if (contact == entry.frontier.end())
-        break;
+    const auto contact =
+        std::ranges::find_if(entry.frontier, [&](const auto &item) {
+          return !std::ranges::contains(entry.queried, item.endpoint);
+        });
+    const bool can_query =
+        entry.outstanding.size() < options_.parallelism_per_hash &&
+        entry.attempts < options_.maximum_queries_per_hash &&
+        contact != entry.frontier.end();
+    if (can_query) {
       auto query = node_->get_peers(contact->endpoint, entry.info_hash, now);
       if (!query) {
         for (const auto &created : step.sends) {
@@ -249,6 +267,9 @@ PeerDiscoveryPlanner::poll(core::Timestamp now) {
       ++step.queries_started;
       step.sends.push_back(std::move(*query));
       --capacity;
+      visits_without_query = 0;
+      schedule_cursor_ = (index + 1) % entries_.size();
+      continue;
     }
 
     const bool no_more_contacts =
@@ -260,9 +281,11 @@ PeerDiscoveryPlanner::poll(core::Timestamp now) {
          no_more_contacts)) {
       ++step.exhausted;
       finish(entries_.begin() + static_cast<std::ptrdiff_t>(index), now);
+      visits_without_query = 0;
       continue;
     }
-    ++index;
+    schedule_cursor_ = (index + 1) % entries_.size();
+    ++visits_without_query;
   }
   step.pending = pending();
   step.in_flight = in_flight();
