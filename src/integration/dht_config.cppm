@@ -12,6 +12,7 @@ import sakuin.dht.krpc;
 import sakuin.dht.node;
 import sakuin.dht.peer_discovery;
 import sakuin.dht.routing_maintenance;
+import sakuin.integration.metadata_backfill;
 import sakuin.runtime.datagram;
 
 export namespace sakuin::integration {
@@ -25,6 +26,8 @@ dht::RoutingMaintenanceOptions routing_maintenance_options(
     const config::RoutingMaintenanceConfig &config) noexcept;
 dht::PeerDiscoveryOptions
 peer_discovery_options(const config::MetadataDiscoveryConfig &config) noexcept;
+MetadataDiscoveryBackfillOptions metadata_discovery_backfill_options(
+    const config::MetadataDiscoveryBackfillConfig &config) noexcept;
 std::optional<dht::Bep42IdentityPolicyOptions>
 bep42_identity_policy_options(const config::DhtIdentityConfig &config) noexcept;
 core::Result<dht::krpc::NodeId>
@@ -101,6 +104,14 @@ peer_discovery_options(const config::MetadataDiscoveryConfig &config) noexcept {
           .parallelism_per_hash = config.parallelism_per_hash,
           .maximum_queries_per_hash = config.maximum_queries_per_hash,
           .retry_delay = config.retry_delay};
+}
+
+MetadataDiscoveryBackfillOptions metadata_discovery_backfill_options(
+    const config::MetadataDiscoveryBackfillConfig &config) noexcept {
+  return {.maximum_records_per_poll = config.maximum_records_per_poll,
+          .refresh_interval = config.refresh_interval,
+          .full_rescan_interval = config.full_rescan_interval,
+          .backpressure_retry_delay = config.retry_delay};
 }
 
 std::optional<dht::Bep42IdentityPolicyOptions> bep42_identity_policy_options(

@@ -160,33 +160,66 @@ core::Result<void> parse_metadata(const toml::table &table,
     return std::unexpected(discovery.error());
   if (!*discovery)
     return {};
-  if (auto checked = check_keys(
-          **discovery,
-          {"enabled", "maximum_pending", "maximum_in_flight",
-           "parallelism_per_hash", "maximum_queries_per_hash",
-           "retry_delay_ms"},
-          "network.dht.metadata.discovery.");
+  if (auto checked =
+          check_keys(**discovery,
+                     {"enabled", "maximum_pending", "maximum_in_flight",
+                      "parallelism_per_hash", "maximum_queries_per_hash",
+                      "retry_delay_ms", "backfill"},
+                     "network.dht.metadata.discovery.");
       !checked)
     return checked;
   for (auto result :
        {scalar<bool>(**discovery, "enabled",
                      "network.dht.metadata.discovery.enabled", overlay),
-        scalar<std::int64_t>(
-            **discovery, "maximum_pending",
-            "network.dht.metadata.discovery.maximum_pending", overlay),
-        scalar<std::int64_t>(
-            **discovery, "maximum_in_flight",
-            "network.dht.metadata.discovery.maximum_in_flight", overlay),
+        scalar<std::int64_t>(**discovery, "maximum_pending",
+                             "network.dht.metadata.discovery.maximum_pending",
+                             overlay),
+        scalar<std::int64_t>(**discovery, "maximum_in_flight",
+                             "network.dht.metadata.discovery.maximum_in_flight",
+                             overlay),
         scalar<std::int64_t>(
             **discovery, "parallelism_per_hash",
             "network.dht.metadata.discovery.parallelism_per_hash", overlay),
         scalar<std::int64_t>(
             **discovery, "maximum_queries_per_hash",
-            "network.dht.metadata.discovery.maximum_queries_per_hash",
+            "network.dht.metadata.discovery.maximum_queries_per_hash", overlay),
+        scalar<std::int64_t>(**discovery, "retry_delay_ms",
+                             "network.dht.metadata.discovery.retry_delay_ms",
+                             overlay)})
+    if (!result)
+      return result;
+  auto backfill = optional_table(**discovery, "backfill",
+                                 "network.dht.metadata.discovery.backfill");
+  if (!backfill)
+    return std::unexpected(backfill.error());
+  if (!*backfill)
+    return {};
+  if (auto checked = check_keys(**backfill,
+                                {"enabled", "maximum_records_per_poll",
+                                 "refresh_interval_ms",
+                                 "full_rescan_interval_ms", "retry_delay_ms"},
+                                "network.dht.metadata.discovery.backfill.");
+      !checked)
+    return checked;
+  for (auto result :
+       {scalar<bool>(**backfill, "enabled",
+                     "network.dht.metadata.discovery.backfill.enabled",
+                     overlay),
+        scalar<std::int64_t>(
+            **backfill, "maximum_records_per_poll",
+            "network.dht.metadata.discovery.backfill.maximum_records_per_poll",
             overlay),
         scalar<std::int64_t>(
-            **discovery, "retry_delay_ms",
-            "network.dht.metadata.discovery.retry_delay_ms", overlay)})
+            **backfill, "refresh_interval_ms",
+            "network.dht.metadata.discovery.backfill.refresh_interval_ms",
+            overlay),
+        scalar<std::int64_t>(
+            **backfill, "full_rescan_interval_ms",
+            "network.dht.metadata.discovery.backfill.full_rescan_interval_ms",
+            overlay),
+        scalar<std::int64_t>(
+            **backfill, "retry_delay_ms",
+            "network.dht.metadata.discovery.backfill.retry_delay_ms", overlay)})
     if (!result)
       return result;
   return {};
@@ -899,6 +932,16 @@ core::Result<ConfigOverlay> environment_overlay(
        "network.dht.metadata.discovery.maximum_queries_per_hash"},
       {"SAKUIN_DHT_METADATA_DISCOVERY_RETRY_DELAY_MS",
        "network.dht.metadata.discovery.retry_delay_ms"},
+      {"SAKUIN_DHT_METADATA_DISCOVERY_BACKFILL_ENABLED",
+       "network.dht.metadata.discovery.backfill.enabled"},
+      {"SAKUIN_DHT_METADATA_DISCOVERY_BACKFILL_MAXIMUM_RECORDS_PER_POLL",
+       "network.dht.metadata.discovery.backfill.maximum_records_per_poll"},
+      {"SAKUIN_DHT_METADATA_DISCOVERY_BACKFILL_REFRESH_INTERVAL_MS",
+       "network.dht.metadata.discovery.backfill.refresh_interval_ms"},
+      {"SAKUIN_DHT_METADATA_DISCOVERY_BACKFILL_FULL_RESCAN_INTERVAL_MS",
+       "network.dht.metadata.discovery.backfill.full_rescan_interval_ms"},
+      {"SAKUIN_DHT_METADATA_DISCOVERY_BACKFILL_RETRY_DELAY_MS",
+       "network.dht.metadata.discovery.backfill.retry_delay_ms"},
       {"SAKUIN_TRAFFIC_WINDOW_MS", "network.traffic.window_ms"},
       {"SAKUIN_TRAFFIC_INBOUND_BYTES", "network.traffic.inbound_bytes"},
       {"SAKUIN_TRAFFIC_OUTBOUND_BYTES", "network.traffic.outbound_bytes"},

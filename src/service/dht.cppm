@@ -23,6 +23,7 @@ import sakuin.dht.token;
 import sakuin.integration.dht_config;
 import sakuin.integration.dht_runtime;
 import sakuin.integration.dht_worker;
+import sakuin.integration.metadata_backfill;
 import sakuin.integration.metadata_config;
 import sakuin.runtime.asio;
 import sakuin.runtime.asio_resolver;
@@ -106,6 +107,7 @@ private:
   std::unique_ptr<dht::RoutingMaintenancePlanner> routing_;
   std::unique_ptr<dht::RoutingDiscoveryPlanner> discovery_;
   std::unique_ptr<dht::PeerDiscoveryPlanner> peer_discovery_;
+  std::unique_ptr<integration::MetadataDiscoveryBackfill> metadata_backfill_;
   integration::DhtRuntimeWakeup wakeup_;
   std::unique_ptr<integration::TorrentMetadataAcquisition> metadata_;
   std::unique_ptr<dht::MetadataAcquisitionController> external_metadata_;
@@ -323,6 +325,16 @@ AsioDhtFamilyRuntime::create(
     if (!peer_discovery)
       return std::unexpected(peer_discovery.error());
     result->peer_discovery_ = std::move(*peer_discovery);
+    if (configuration.metadata.discovery.backfill.enabled &&
+        dependencies.torrents) {
+      auto backfill = integration::MetadataDiscoveryBackfill::create(
+          *dependencies.torrents, *result->peer_discovery_,
+          integration::metadata_discovery_backfill_options(
+              configuration.metadata.discovery.backfill));
+      if (!backfill)
+        return std::unexpected(backfill.error());
+      result->metadata_backfill_ = std::move(*backfill);
+    }
   }
 
   const auto wake_owner = [owner = result.get()] { owner->wakeup_.notify(); };
@@ -358,6 +370,7 @@ AsioDhtFamilyRuntime::create(
        .routing = result->routing_.get(),
        .discovery = result->discovery_.get(),
        .peer_discovery = result->peer_discovery_.get(),
+       .metadata_backfill = result->metadata_backfill_.get(),
        .identity = result->identity_.get()},
       {.wake_owner = wake_owner});
   if (!pump)

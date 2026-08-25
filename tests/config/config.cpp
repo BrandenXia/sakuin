@@ -50,6 +50,13 @@ parallelism_per_hash = 4
 maximum_queries_per_hash = 32
 retry_delay_ms = 120000
 
+[network.dht.metadata.discovery.backfill]
+enabled = true
+maximum_records_per_poll = 128
+refresh_interval_ms = 45000
+full_rescan_interval_ms = 900000
+retry_delay_ms = 750
+
 [network.traffic]
 window_ms = 3600000
 outbound_bytes = 1000000
@@ -178,6 +185,10 @@ tls_server_name = "coordinator.internal"
                 std::string{"48"}},
       std::pair{std::string{"SAKUIN_DHT_METADATA_DISCOVERY_MAXIMUM_IN_FLIGHT"},
                 std::string{"10"}},
+      std::pair{
+          std::string{"SAKUIN_DHT_METADATA_DISCOVERY_BACKFILL_MAXIMUM_RECORDS_"
+                      "PER_POLL"},
+          std::string{"192"}},
       std::pair{std::string{"SAKUIN_DHT_ROUTING_MAXIMUM_QUEUED"},
                 std::string{"768"}},
       std::pair{std::string{"SAKUIN_DHT_BOOTSTRAP_MAXIMUM_ATTEMPTS"},
@@ -275,6 +286,15 @@ tls_server_name = "coordinator.internal"
       loaded.network.dht.metadata.discovery.maximum_queries_per_hash != 32 ||
       loaded.network.dht.metadata.discovery.retry_delay !=
           std::chrono::minutes{2} ||
+      !loaded.network.dht.metadata.discovery.backfill.enabled ||
+      loaded.network.dht.metadata.discovery.backfill.maximum_records_per_poll !=
+          192 ||
+      loaded.network.dht.metadata.discovery.backfill.refresh_interval !=
+          std::chrono::seconds{45} ||
+      loaded.network.dht.metadata.discovery.backfill.full_rescan_interval !=
+          std::chrono::minutes{15} ||
+      loaded.network.dht.metadata.discovery.backfill.retry_delay !=
+          std::chrono::milliseconds{750} ||
       loaded.network.dht.identity.observation_quorum != 4 ||
       loaded.network.dht.routing.maximum_queued != 768 ||
       loaded.network.dht.routing.maximum_in_flight != 6 ||
@@ -419,6 +439,11 @@ tls_server_name = "coordinator.internal"
                               1;
   if (config::validate(invalid_metadata_discovery))
     return 22;
+  auto invalid_metadata_backfill = config::defaults();
+  invalid_metadata_backfill.network.dht.metadata.discovery.backfill
+      .maximum_records_per_poll = 0;
+  if (config::validate(invalid_metadata_backfill))
+    return 23;
   auto invalid_tiering = config::defaults();
   invalid_tiering.storage.compaction_maximum_warm_segments = 0;
   if (config::validate(invalid_tiering))

@@ -54,6 +54,16 @@ parallelism_per_hash = 3
 maximum_queries_per_hash = 24
 retry_delay_ms = 300000
 
+[network.dht.metadata.discovery.backfill]
+# Incrementally revisit canonical records that still lack metadata. The scan
+# uses a dataset change cursor and pauses when discovery is saturated.
+enabled = true
+maximum_records_per_poll = 256
+refresh_interval_ms = 60000
+# Retry unchanged placeholders periodically as peers appear and disappear.
+full_rescan_interval_ms = 1800000
+retry_delay_ms = 1000
+
 [network.traffic]
 window_ms = 3600000
 # Remote workers reserve quota in bounded chunks to avoid a coordinator round

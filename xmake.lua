@@ -466,6 +466,13 @@ target("sakuin-peer-discovery-tests")
   add_deps("sakuin-core", "sakuin-runtime", "sakuin-dht")
   add_tests("peer-discovery")
 
+target("sakuin-metadata-backfill-tests")
+  set_kind("binary")
+  add_files("tests/dht/metadata_backfill.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-storage", "sakuin-dht",
+           "sakuin-integrations")
+  add_tests("metadata-backfill")
+
 target("sakuin-dht-identity-tests")
   set_kind("binary")
   add_files("tests/dht/identity.cpp")
