@@ -26,15 +26,16 @@ class DhtRuntimeDriver final : private runtime::DatagramReceiver {
 public:
   using Clock = std::function<core::Timestamp()>;
 
-  DhtRuntimeDriver(DhtNode &node, runtime::DatagramTransport &transport,
-                   DhtRuntimeEvents &events,
-                   Clock clock = [] { return std::chrono::system_clock::now(); })
+  DhtRuntimeDriver(
+      DhtNode &node, runtime::DatagramTransport &transport,
+      DhtRuntimeEvents &events,
+      Clock clock = [] { return std::chrono::system_clock::now(); })
       : node_(&node), transport_(&transport), events_(&events),
         clock_(std::move(clock)) {}
-  DhtRuntimeDriver(DhtNode &node, runtime::DatagramTransport &transport,
-                   DhtRuntimeEvents &events,
-                   runtime::TrafficGovernor &traffic,
-                   Clock clock = [] { return std::chrono::system_clock::now(); })
+  DhtRuntimeDriver(
+      DhtNode &node, runtime::DatagramTransport &transport,
+      DhtRuntimeEvents &events, runtime::TrafficGovernor &traffic,
+      Clock clock = [] { return std::chrono::system_clock::now(); })
       : node_(&node), transport_(&transport), events_(&events),
         clock_(std::move(clock)), traffic_(&traffic) {}
   ~DhtRuntimeDriver() override;
@@ -113,7 +114,7 @@ void DhtRuntimeDriver::report(core::Error error) noexcept {
 void DhtRuntimeDriver::publish(DhtActions actions) noexcept {
   if (!actions.observation && actions.probes_required.empty() &&
       !actions.metadata_candidate && !actions.query_completion &&
-      !actions.observed_address)
+      !actions.observed_address && !actions.inbound_message)
     return;
   try {
     events_->on_actions(std::move(actions));
@@ -130,9 +131,9 @@ core::Result<core::Timestamp> DhtRuntimeDriver::now() const {
   try {
     return clock_();
   } catch (const std::exception &exception) {
-    return std::unexpected(core::Error{
-        core::ErrorCode::Internal,
-        std::string{"DHT clock failed: "} + exception.what()});
+    return std::unexpected(
+        core::Error{core::ErrorCode::Internal,
+                    std::string{"DHT clock failed: "} + exception.what()});
   } catch (...) {
     return std::unexpected(
         core::Error{core::ErrorCode::Internal, "DHT clock failed"});
@@ -142,11 +143,11 @@ core::Result<core::Timestamp> DhtRuntimeDriver::now() const {
 core::Result<void> DhtRuntimeDriver::send_at(DatagramSend send,
                                              core::Timestamp current) {
   if (traffic_) {
-    const auto decision = traffic_->admit(
-        {.direction = runtime::TrafficDirection::Outbound,
-         .traffic_class = send.traffic_class,
-         .bytes = send.payload.size()},
-        current);
+    const auto decision =
+        traffic_->admit({.direction = runtime::TrafficDirection::Outbound,
+                         .traffic_class = send.traffic_class,
+                         .bytes = send.payload.size()},
+                        current);
     if (!decision.allowed) {
       if (send.query_transaction)
         node_->cancel_query(*send.query_transaction, send.destination);
@@ -170,11 +171,11 @@ void DhtRuntimeDriver::on_datagram(runtime::Datagram datagram) {
     return;
   }
   if (traffic_) {
-    const auto decision = traffic_->admit(
-        {.direction = runtime::TrafficDirection::Inbound,
-         .traffic_class = traffic_class::inbound,
-         .bytes = datagram.payload.size()},
-        *current);
+    const auto decision =
+        traffic_->admit({.direction = runtime::TrafficDirection::Inbound,
+                         .traffic_class = traffic_class::inbound,
+                         .bytes = datagram.payload.size()},
+                        *current);
     if (!decision.allowed) {
       report({core::ErrorCode::QuotaExceeded,
               "DHT inbound traffic quota denied a datagram"});

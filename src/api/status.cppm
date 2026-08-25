@@ -6,9 +6,11 @@ export module sakuin.api.status;
 
 import std;
 
+import sakuin.classification;
 import sakuin.core.bytes;
 import sakuin.core.result;
 import sakuin.core.version;
+import sakuin.search.index;
 
 export namespace sakuin::api {
 
@@ -20,12 +22,23 @@ struct DhtFamilyStatus {
   std::uint64_t observations_stored{};
   std::uint64_t metadata_candidates_accepted{};
   std::uint64_t routing_probes_accepted{};
+  std::uint64_t discovery_queries_started{};
+  std::uint64_t inbound_messages{};
+  std::uint64_t inbound_queries{};
+  std::uint64_t inbound_ping_queries{};
+  std::uint64_t inbound_find_node_queries{};
+  std::uint64_t inbound_get_peers_queries{};
+  std::uint64_t inbound_announce_peer_queries{};
+  std::uint64_t inbound_unknown_queries{};
+  std::uint64_t inbound_responses{};
+  std::uint64_t inbound_protocol_errors{};
   std::uint64_t queries_expired{};
   std::uint64_t datagrams_attempted{};
   std::uint64_t datagrams_accepted{};
   std::uint64_t datagrams_failed{};
   std::size_t routing_nodes{};
   std::size_t outstanding_queries{};
+  std::size_t discovery_in_flight{};
   std::size_t pending_actions{};
   std::size_t metadata_queued{};
   std::size_t metadata_in_flight{};
@@ -33,6 +46,7 @@ struct DhtFamilyStatus {
   std::size_t bootstrap_candidates{};
   std::optional<bool> bootstrap_complete;
   std::optional<std::int64_t> last_cycle_ms;
+  std::optional<std::int64_t> last_inbound_query_ms;
   std::optional<std::int64_t> last_error_ms;
   std::optional<std::string> last_error;
 };
@@ -46,6 +60,7 @@ struct ServiceStatus {
   DhtFamilyStatus ipv6;
   std::uint64_t search_source_generation{};
   std::uint64_t search_records_indexed{};
+  search::ClassificationIndexStats search_classification;
   std::uint64_t materialized_observations{};
   std::uint64_t materialized_torrent_updates{};
   std::uint64_t duplicate_source_generation{};
@@ -79,12 +94,23 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
       {"observations_stored", family.observations_stored},
       {"metadata_candidates_accepted", family.metadata_candidates_accepted},
       {"routing_probes_accepted", family.routing_probes_accepted},
+      {"discovery_queries_started", family.discovery_queries_started},
+      {"inbound_messages", family.inbound_messages},
+      {"inbound_queries", family.inbound_queries},
+      {"inbound_ping_queries", family.inbound_ping_queries},
+      {"inbound_find_node_queries", family.inbound_find_node_queries},
+      {"inbound_get_peers_queries", family.inbound_get_peers_queries},
+      {"inbound_announce_peer_queries", family.inbound_announce_peer_queries},
+      {"inbound_unknown_queries", family.inbound_unknown_queries},
+      {"inbound_responses", family.inbound_responses},
+      {"inbound_protocol_errors", family.inbound_protocol_errors},
       {"queries_expired", family.queries_expired},
       {"datagrams_attempted", family.datagrams_attempted},
       {"datagrams_accepted", family.datagrams_accepted},
       {"datagrams_failed", family.datagrams_failed},
       {"routing_nodes", family.routing_nodes},
       {"outstanding_queries", family.outstanding_queries},
+      {"discovery_in_flight", family.discovery_in_flight},
       {"pending_actions", family.pending_actions},
       {"metadata_queued", family.metadata_queued},
       {"metadata_in_flight", family.metadata_in_flight},
@@ -96,12 +122,77 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
   result["last_cycle_ms"] = family.last_cycle_ms
                                 ? nlohmann::json(*family.last_cycle_ms)
                                 : nlohmann::json(nullptr);
+  result["last_inbound_query_ms"] =
+      family.last_inbound_query_ms
+          ? nlohmann::json(*family.last_inbound_query_ms)
+          : nlohmann::json(nullptr);
   result["last_error_ms"] = family.last_error_ms
                                 ? nlohmann::json(*family.last_error_ms)
                                 : nlohmann::json(nullptr);
   result["last_error"] = family.last_error ? nlohmann::json(*family.last_error)
                                            : nlohmann::json(nullptr);
   return result;
+}
+
+std::string_view category_name(classification::MediaCategory category) {
+  using enum classification::MediaCategory;
+  switch (category) {
+  case Movie:
+    return "movie";
+  case MovieSd:
+    return "movie_sd";
+  case MovieHd:
+    return "movie_hd";
+  case MovieUhd:
+    return "movie_uhd";
+  case Series:
+    return "series";
+  case SeriesSd:
+    return "series_sd";
+  case SeriesHd:
+    return "series_hd";
+  case SeriesUhd:
+    return "series_uhd";
+  case SeriesAnime:
+    return "series_anime";
+  case Audio:
+    return "audio";
+  case Audiobook:
+    return "audiobook";
+  case Application:
+    return "application";
+  case Books:
+    return "books";
+  case Ebook:
+    return "ebook";
+  case Adult:
+    return "adult";
+  case Other:
+    return "other";
+  }
+  std::unreachable();
+}
+
+nlohmann::json
+classification_json(const search::ClassificationIndexStats &classification) {
+  nlohmann::json categories = nlohmann::json::object();
+  for (std::size_t index = 0; index < search::MediaCategoryCount; ++index) {
+    const auto category = static_cast<classification::MediaCategory>(index);
+    categories[category_name(category)] =
+        classification.category_count(category);
+  }
+  using enum classification::ClassificationState;
+  return {{"enabled", classification.enabled},
+          {"algorithm_version", classification.algorithm_version},
+          {"total_records", classification.total_records},
+          {"states",
+           {{"awaiting_metadata", classification.state_count(AwaitingMetadata)},
+            {"classified", classification.state_count(Classified)},
+            {"ambiguous", classification.state_count(Ambiguous)},
+            {"unknown", classification.state_count(Unknown)}}},
+          {"input_truncated", classification.input_truncated},
+          {"adult_labeled", classification.adult_labeled},
+          {"categories", std::move(categories)}};
 }
 
 } // namespace
@@ -140,7 +231,9 @@ core::Result<core::ByteBuffer> json_status(const ServiceStatus &status) {
           {"ipv6", family_json(status.ipv6)}}},
         {"search",
          {{"source_generation", status.search_source_generation},
-          {"records_indexed", status.search_records_indexed}}},
+          {"records_indexed", status.search_records_indexed},
+          {"classification",
+           classification_json(status.search_classification)}}},
         {"materialization",
          {{"observations_processed", status.materialized_observations},
           {"torrent_updates", status.materialized_torrent_updates}}},

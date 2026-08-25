@@ -1,6 +1,6 @@
 [network]
 enable_ipv4 = true
-enable_ipv6 = false
+enable_ipv6 = true
 listen_port = 6881
 
 [network.dht]
@@ -30,6 +30,12 @@ enabled = true
 
 [indexing.duplicates]
 enabled = true
+
+[indexing.classification]
+enabled = true
+adult_detection_enabled = true
+adult_content_policy = "include"
+adult_minimum_confidence = "high"
 
 [api]
 enabled = true

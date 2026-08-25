@@ -29,11 +29,13 @@ export namespace sakuin::search {
 class LocalSearchIndex final : public SearchIndex {
 public:
   static core::Result<std::unique_ptr<LocalSearchIndex>>
-  open(std::filesystem::path path);
+  open(std::filesystem::path path,
+       SearchClassificationOptions classification = {});
   static std::unique_ptr<LocalSearchIndex>
-  create_empty(std::filesystem::path path) {
+  create_empty(std::filesystem::path path,
+               SearchClassificationOptions classification = {}) {
     return std::unique_ptr<LocalSearchIndex>{
-        new LocalSearchIndex{std::move(path)}};
+        new LocalSearchIndex{std::move(path), std::move(classification)}};
   }
 
   core::Result<std::unique_ptr<SearchRebuildSession>>
@@ -42,6 +44,7 @@ public:
   begin_update(std::uint64_t source_generation) override;
   core::Result<SearchResult> search(const SearchQuery &query) const override;
   std::uint64_t source_generation() const noexcept override;
+  ClassificationIndexStats classification_stats() const noexcept override;
 
   const std::filesystem::path &path() const noexcept { return path_; }
 
@@ -49,8 +52,9 @@ private:
   friend class LocalRebuildSession;
   friend class LocalUpdateSession;
 
-  explicit LocalSearchIndex(std::filesystem::path path)
-      : path_(std::move(path)) {}
+  explicit LocalSearchIndex(std::filesystem::path path,
+                            SearchClassificationOptions classification)
+      : path_(std::move(path)), memory_(std::move(classification)) {}
 
   core::Result<void> replace(std::uint64_t source_generation,
                              std::vector<model::TorrentRecord> records);
@@ -289,12 +293,13 @@ private:
 };
 
 core::Result<std::unique_ptr<LocalSearchIndex>>
-LocalSearchIndex::open(std::filesystem::path path) {
+LocalSearchIndex::open(std::filesystem::path path,
+                       SearchClassificationOptions classification) {
   auto stored = load(path);
   if (!stored)
     return std::unexpected(stored.error());
-  auto result =
-      std::unique_ptr<LocalSearchIndex>{new LocalSearchIndex{std::move(path)}};
+  auto result = std::unique_ptr<LocalSearchIndex>{
+      new LocalSearchIndex{std::move(path), std::move(classification)}};
   auto session = result->memory_.begin_rebuild(stored->source_generation);
   if (!session)
     return std::unexpected(session.error());
@@ -326,6 +331,11 @@ LocalSearchIndex::search(const SearchQuery &query) const {
 
 std::uint64_t LocalSearchIndex::source_generation() const noexcept {
   return memory_.source_generation();
+}
+
+ClassificationIndexStats
+LocalSearchIndex::classification_stats() const noexcept {
+  return memory_.classification_stats();
 }
 
 core::Result<void>

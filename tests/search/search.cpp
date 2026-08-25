@@ -1,5 +1,6 @@
 import std;
 
+import sakuin.classification;
 import sakuin.core;
 import sakuin.model.torrent;
 import sakuin.search;
@@ -149,5 +150,60 @@ int main() {
   if (!synchronized || !synchronized->full_rebuild ||
       synchronized->records_indexed != 3)
     return 13;
+
+  search::InMemorySearchIndex classified_index;
+  auto classified_rebuild = classified_index.begin_rebuild(1);
+  if (!classified_rebuild)
+    return 16;
+  const auto safe_movie = torrent(4, "Example Movie 2024 1080p", 1'000'000,
+                                  {"Example.Movie.2024.1080p.mkv"}, 40);
+  const auto adult_movie =
+      torrent(5, "Explicit Porn Movie 2024 1080p", 1'000'000,
+              {"Explicit.Porn.Movie.2024.1080p.mkv"}, 50);
+  if (!(*classified_rebuild)->append(safe_movie) ||
+      !(*classified_rebuild)->append(adult_movie) ||
+      !(*classified_rebuild)->commit())
+    return 17;
+  auto included = classified_index.search({.limit = 10});
+  auto excluded = classified_index.search(
+      {.adult_content = search::AdultContentMode::Exclude, .limit = 10});
+  auto only = classified_index.search(
+      {.adult_content = search::AdultContentMode::Only, .limit = 10});
+  auto movie_page = classified_index.search(
+      {.categories = {classification::MediaCategory::Movie},
+       .adult_content = search::AdultContentMode::Include,
+       .offset = 1,
+       .limit = 1});
+  if (!included || included->total_matches != 2 || !excluded ||
+      excluded->total_matches != 1 || !only || only->total_matches != 1 ||
+      !movie_page || movie_page->total_matches != 2 ||
+      movie_page->hits.size() != 1 ||
+      !std::ranges::contains(movie_page->hits.front().categories,
+                             classification::MediaCategory::Movie))
+    return 18;
+  const auto classification_stats = classified_index.classification_stats();
+  if (!classification_stats.enabled ||
+      classification_stats.total_records != 2 ||
+      classification_stats.adult_labeled != 1 ||
+      classification_stats.category_count(
+          classification::MediaCategory::Movie) != 2 ||
+      classification_stats.category_count(
+          classification::MediaCategory::MovieHd) != 2 ||
+      classification_stats.category_count(
+          classification::MediaCategory::Adult) != 1)
+    return 19;
+
+  search::InMemorySearchIndex disabled_index({.enabled = false});
+  auto disabled_rebuild = disabled_index.begin_rebuild(1);
+  if (!disabled_rebuild || !(*disabled_rebuild)->append(adult_movie) ||
+      !(*disabled_rebuild)->commit())
+    return 20;
+  const auto disabled_stats = disabled_index.classification_stats();
+  if (disabled_stats.enabled || disabled_stats.total_records != 1 ||
+      disabled_stats.adult_labeled != 0 ||
+      disabled_stats.state_count(
+          classification::ClassificationState::Unknown) != 1 ||
+      disabled_stats.category_count(classification::MediaCategory::Other) != 1)
+    return 21;
   return 0;
 }

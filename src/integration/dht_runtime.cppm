@@ -5,7 +5,9 @@ import std;
 import sakuin.core.result;
 import sakuin.core.time;
 import sakuin.dht.bootstrap;
+import sakuin.dht.discovery;
 import sakuin.dht.identity;
+import sakuin.dht.krpc;
 import sakuin.dht.metadata_controller;
 import sakuin.dht.node;
 import sakuin.dht.observation;
@@ -22,6 +24,7 @@ struct DhtRuntimePoll {
   std::vector<dht::DhtActions> actions;
   std::vector<core::Error> errors;
   std::optional<dht::RoutingMaintenanceStep> routing;
+  std::optional<dht::RoutingDiscoveryStep> discovery;
   std::optional<dht::BootstrapStep> bootstrap;
   // Remains set until the service owner successfully replaces this family's
   // node/runtime and commits the address on the identity policy.
@@ -31,6 +34,17 @@ struct DhtRuntimePoll {
   std::size_t observations_stored{};
   std::size_t metadata_candidates_accepted{};
   std::size_t routing_probes_accepted{};
+  std::size_t discovery_queries_started{};
+  std::size_t inbound_messages{};
+  std::size_t inbound_queries{};
+  std::size_t inbound_ping_queries{};
+  std::size_t inbound_find_node_queries{};
+  std::size_t inbound_get_peers_queries{};
+  std::size_t inbound_announce_peer_queries{};
+  std::size_t inbound_unknown_queries{};
+  std::size_t inbound_responses{};
+  std::size_t inbound_protocol_errors{};
+  std::optional<core::Timestamp> last_inbound_query;
   // Point-in-time gauges captured on the DHT owner thread.
   std::size_t routing_nodes{};
   std::size_t outstanding_queries{};
@@ -48,6 +62,7 @@ struct DhtRuntimeActionPumpServices {
   dht::DhtNode *node{};
   dht::BootstrapPlanner *bootstrap{};
   dht::RoutingMaintenancePlanner *routing{};
+  dht::RoutingDiscoveryPlanner *discovery{};
   dht::Bep42IdentityPolicy *identity{};
 };
 
@@ -88,8 +103,8 @@ private:
                        DhtRuntimeActionPumpOptions options)
       : observations_(&observations), metadata_(services.metadata),
         node_(services.node), bootstrap_(services.bootstrap),
-        routing_(services.routing), identity_(services.identity),
-        options_(options) {}
+        routing_(services.routing), discovery_(services.discovery),
+        identity_(services.identity), options_(options) {}
 
   static bool has_forward_actions(const dht::DhtActions &actions) noexcept;
 
@@ -98,6 +113,7 @@ private:
   dht::DhtNode *node_;
   dht::BootstrapPlanner *bootstrap_;
   dht::RoutingMaintenancePlanner *routing_;
+  dht::RoutingDiscoveryPlanner *discovery_;
   dht::Bep42IdentityPolicy *identity_;
   DhtRuntimeActionPumpOptions options_;
   mutable std::mutex incoming_mutex_;
@@ -148,7 +164,8 @@ DhtRuntimeActionPump::create(dht::ObservationSink &observations,
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
                     "DHT runtime action-pump pending limits must be nonzero"});
-  if ((services.bootstrap || services.routing) && !services.node)
+  if ((services.bootstrap || services.routing || services.discovery) &&
+      !services.node)
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
                     "DHT query planners require an owner-thread node"});
@@ -231,6 +248,40 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
   for (std::size_t index = 0; index < count; ++index) {
     auto actions = std::move(deferred_.front());
     deferred_.pop_front();
+
+    if (actions.inbound_message) {
+      ++result.inbound_messages;
+      switch (actions.inbound_message->type) {
+      case dht::InboundMessageType::Query:
+        ++result.inbound_queries;
+        result.last_inbound_query = actions.inbound_message->received_at;
+        switch (actions.inbound_message->query_kind) {
+        case dht::krpc::QueryKind::Ping:
+          ++result.inbound_ping_queries;
+          break;
+        case dht::krpc::QueryKind::FindNode:
+          ++result.inbound_find_node_queries;
+          break;
+        case dht::krpc::QueryKind::GetPeers:
+          ++result.inbound_get_peers_queries;
+          break;
+        case dht::krpc::QueryKind::AnnouncePeer:
+          ++result.inbound_announce_peer_queries;
+          break;
+        case dht::krpc::QueryKind::Unknown:
+          ++result.inbound_unknown_queries;
+          break;
+        }
+        break;
+      case dht::InboundMessageType::Response:
+        ++result.inbound_responses;
+        break;
+      case dht::InboundMessageType::ProtocolError:
+        ++result.inbound_protocol_errors;
+        break;
+      }
+      actions.inbound_message.reset();
+    }
 
     if (actions.observation) {
       try {
@@ -325,6 +376,17 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
             callback_error("Routing-maintenance completion"));
       }
     }
+    if (actions.query_completion && discovery_) {
+      try {
+        completion_consumed =
+            discovery_->consume(actions) || completion_consumed;
+      } catch (const std::exception &exception) {
+        result.errors.push_back(
+            callback_error("Routing-discovery completion", exception));
+      } catch (...) {
+        result.errors.push_back(callback_error("Routing-discovery completion"));
+      }
+    }
     if (completion_consumed)
       actions.query_completion.reset();
 
@@ -398,6 +460,16 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
           result.errors.push_back(callback_error("DHT bootstrap timeout"));
         }
       }
+      if (discovery_) {
+        try {
+          consumed = discovery_->consume_timeout(timeout) || consumed;
+        } catch (const std::exception &exception) {
+          result.errors.push_back(
+              callback_error("Routing-discovery timeout", exception));
+        } catch (...) {
+          result.errors.push_back(callback_error("Routing-discovery timeout"));
+        }
+      }
       if (!consumed)
         result.unhandled_timeouts.push_back(std::move(timeout));
     }
@@ -431,6 +503,22 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
       result.errors.push_back(callback_error("Routing-maintenance poll"));
     }
   }
+  if (discovery_) {
+    try {
+      auto step = discovery_->poll(now);
+      if (step) {
+        result.discovery_queries_started += step->queries_started;
+        result.discovery = std::move(*step);
+      } else {
+        result.errors.push_back(step.error());
+      }
+    } catch (const std::exception &exception) {
+      result.errors.push_back(
+          callback_error("Routing-discovery poll", exception));
+    } catch (...) {
+      result.errors.push_back(callback_error("Routing-discovery poll"));
+    }
+  }
   if (identity_) {
     if (auto proposed = identity_->proposed_external()) {
       result.identity_reconfiguration =
@@ -450,6 +538,8 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
     include_wakeup(result.bootstrap->next_wakeup);
   if (result.routing)
     include_wakeup(result.routing->next_wakeup);
+  if (result.discovery)
+    include_wakeup(result.discovery->next_wakeup);
   result.pending_actions = pending_count_.load(std::memory_order_acquire);
   if (node_) {
     result.routing_nodes = node_->routing_table().size();
@@ -470,6 +560,8 @@ DhtRuntimeActionPump::delivery_failed(const dht::DatagramSend &send,
     bool consumed = false;
     if (routing_)
       consumed = routing_->delivery_failed(send, now);
+    if (discovery_)
+      consumed = discovery_->delivery_failed(send) || consumed;
     if (bootstrap_)
       consumed = bootstrap_->delivery_failed(send, now) || consumed;
     return consumed;
@@ -515,6 +607,8 @@ DhtRuntimeDispatch dispatch_dht_runtime(DhtRuntimePoll &poll,
     drain(poll.bootstrap->sends);
   if (poll.routing)
     drain(poll.routing->sends);
+  if (poll.discovery)
+    drain(poll.discovery->sends);
   return result;
 }
 

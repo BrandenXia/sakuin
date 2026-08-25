@@ -7,6 +7,7 @@ import sakuin.api.credentials.store;
 import sakuin.api.rate_limit;
 import sakuin.api.search;
 import sakuin.api.status;
+import sakuin.classification;
 import sakuin.config.model;
 import sakuin.core.bytes;
 import sakuin.core.result;
@@ -45,7 +46,8 @@ public:
          storage::TorrentDataset &torrents, ApiServiceObserver &observer,
          std::optional<std::filesystem::path> search_state_directory = {},
          index::DuplicateIndexView *duplicates = nullptr,
-         api::StatusProvider *status = nullptr);
+         api::StatusProvider *status = nullptr,
+         config::ClassificationConfig classification = {});
 
   ~LocalApiService();
 
@@ -140,6 +142,41 @@ server_options(const config::ApiConfig &configuration,
         .private_key_file = *configuration.tls_private_key_file};
   }
   return result;
+}
+
+search::SearchClassificationOptions search_classification_options(
+    const config::ClassificationConfig &configuration) {
+  const auto adult_minimum = [&] {
+    switch (configuration.adult_minimum_confidence) {
+    case config::ClassificationConfidence::Low:
+      return classification::Confidence::Low;
+    case config::ClassificationConfidence::Medium:
+      return classification::Confidence::Medium;
+    case config::ClassificationConfidence::High:
+      return classification::Confidence::High;
+    }
+    std::unreachable();
+  }();
+  return {.enabled = configuration.enabled,
+          .classifier = {.adult_detection_enabled =
+                             configuration.adult_detection_enabled,
+                         .maximum_files_to_inspect =
+                             configuration.maximum_files_to_inspect,
+                         .maximum_path_bytes = configuration.maximum_path_bytes,
+                         .maximum_tokens = configuration.maximum_tokens},
+          .adult_minimum = adult_minimum};
+}
+
+search::AdultContentMode adult_content_mode(config::AdultContentPolicy policy) {
+  switch (policy) {
+  case config::AdultContentPolicy::Include:
+    return search::AdultContentMode::Include;
+  case config::AdultContentPolicy::Exclude:
+    return search::AdultContentMode::Exclude;
+  case config::AdultContentPolicy::Only:
+    return search::AdultContentMode::Only;
+  }
+  std::unreachable();
 }
 
 } // namespace
@@ -246,7 +283,8 @@ core::Result<std::unique_ptr<LocalApiService>> LocalApiService::create(
     const config::ApiConfig &configuration, storage::TorrentDataset &torrents,
     ApiServiceObserver &observer,
     std::optional<std::filesystem::path> search_state_directory,
-    index::DuplicateIndexView *duplicates, api::StatusProvider *status) {
+    index::DuplicateIndexView *duplicates, api::StatusProvider *status,
+    config::ClassificationConfig classification) {
   if (!configuration.enabled)
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
@@ -274,16 +312,20 @@ core::Result<std::unique_ptr<LocalApiService>> LocalApiService::create(
   result->credential_store = std::move(*store);
   result->authenticator =
       std::make_unique<ReloadableAuthenticator>(std::move(*loaded));
+  const auto classification_options =
+      search_classification_options(classification);
   if (search_state_directory) {
     const auto index_path = *search_state_directory / "index.v1";
-    auto local_index = search::LocalSearchIndex::open(index_path);
+    auto local_index =
+        search::LocalSearchIndex::open(index_path, classification_options);
     if (!local_index) {
       switch (local_index.error().code) {
       case core::ErrorCode::CorruptSegment:
       case core::ErrorCode::ChecksumMismatch:
       case core::ErrorCode::UnsupportedFormat:
       case core::ErrorCode::InvalidManifest:
-        result->index = search::LocalSearchIndex::create_empty(index_path);
+        result->index = search::LocalSearchIndex::create_empty(
+            index_path, classification_options);
         break;
       default:
         return std::unexpected(local_index.error());
@@ -298,7 +340,8 @@ core::Result<std::unique_ptr<LocalApiService>> LocalApiService::create(
         cursor->source_generation == result->index->source_generation())
       result->search_cursor = *cursor;
   } else {
-    result->index = std::make_unique<search::InMemorySearchIndex>();
+    result->index =
+        std::make_unique<search::InMemorySearchIndex>(classification_options);
   }
   if (configuration.rate_limit.enabled) {
     auto governor = api::FixedWindowRequestGovernor::create(
@@ -310,12 +353,15 @@ core::Result<std::unique_ptr<LocalApiService>> LocalApiService::create(
   }
   result->handler = std::make_unique<api::SearchHttpHandler>(
       *result->authenticator, *result->index, result->governor.get(),
-      duplicates, status, [impl = result.get()]() -> core::Result<void> {
+      duplicates, status,
+      [impl = result.get()]() -> core::Result<void> {
         auto refreshed = impl->refresh();
         if (!refreshed)
           return std::unexpected(refreshed.error());
         return {};
-      });
+      },
+      std::function<core::Result<void>(bool)>{},
+      adult_content_mode(classification.adult_content_policy));
   auto server =
       runtime::AsioHttpServer::create(server_options(configuration, *endpoint));
   if (!server)

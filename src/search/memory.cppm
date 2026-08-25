@@ -2,6 +2,7 @@ export module sakuin.search.memory;
 
 import std;
 
+import sakuin.classification;
 import sakuin.core.ids;
 import sakuin.core.result;
 import sakuin.model.torrent;
@@ -19,7 +20,7 @@ export namespace sakuin::search {
 // belongs in a replaceable backend rather than the canonical model.
 class InMemorySearchIndex final : public SearchIndex {
 public:
-  InMemorySearchIndex();
+  explicit InMemorySearchIndex(SearchClassificationOptions options = {});
 
   core::Result<std::unique_ptr<SearchRebuildSession>>
   begin_rebuild(std::uint64_t source_generation) override;
@@ -27,22 +28,33 @@ public:
   begin_update(std::uint64_t source_generation) override;
   core::Result<SearchResult> search(const SearchQuery &query) const override;
   std::uint64_t source_generation() const noexcept override;
+  ClassificationIndexStats classification_stats() const noexcept override;
 
 private:
   friend class MemoryRebuildSession;
   friend class MemoryUpdateSession;
 
+  struct IndexedRecord {
+    model::TorrentRecord record;
+    classification::Classification classification;
+    std::vector<classification::MediaCategory> categories;
+  };
+
   struct State {
     std::uint64_t source_generation{};
-    std::vector<model::TorrentRecord> records;
+    std::vector<IndexedRecord> records;
+    ClassificationIndexStats classification;
   };
 
   core::Result<void> publish(std::shared_ptr<const State> replacement);
   core::Result<void>
   publish_updates(std::uint64_t source_generation,
                   std::span<const model::TorrentRecord> updates);
+  ClassificationIndexStats
+  summarize(std::span<const IndexedRecord> records) const noexcept;
 
   mutable std::shared_mutex mutex_;
+  SearchClassificationOptions options_;
   std::shared_ptr<const State> state_;
 };
 
@@ -124,6 +136,12 @@ match_score(const model::TorrentRecord &record,
   return score;
 }
 
+bool contains_category(
+    std::span<const classification::MediaCategory> categories,
+    classification::MediaCategory expected) {
+  return std::ranges::find(categories, expected) != categories.end();
+}
+
 } // namespace
 
 class MemoryRebuildSession final : public SearchRebuildSession {
@@ -195,8 +213,12 @@ private:
   bool active_{true};
 };
 
-InMemorySearchIndex::InMemorySearchIndex()
-    : state_(std::make_shared<const State>()) {}
+InMemorySearchIndex::InMemorySearchIndex(SearchClassificationOptions options)
+    : options_(std::move(options)) {
+  auto initial = std::make_shared<State>();
+  initial->classification.enabled = options_.enabled;
+  state_ = std::move(initial);
+}
 
 core::Result<std::unique_ptr<SearchRebuildSession>>
 InMemorySearchIndex::begin_rebuild(std::uint64_t source_generation) {
@@ -233,14 +255,23 @@ core::Result<void> InMemorySearchIndex::publish_updates(
   replacement->source_generation = source_generation;
   for (const auto &update : updates) {
     const auto existing =
-        std::ranges::find_if(replacement->records, [&](const auto &record) {
-          return record.info_hash == update.info_hash;
+        std::ranges::find_if(replacement->records, [&](const auto &indexed) {
+          return indexed.record.info_hash == update.info_hash;
         });
+    classification::Classification classified{.info_hash = update.info_hash};
+    if (options_.enabled)
+      classified = classification::classify(update, options_.classifier);
+    IndexedRecord indexed{.record = update,
+                          .classification = std::move(classified)};
+    indexed.categories = classification::media_categories(
+        indexed.classification, options_.category_minimum,
+        options_.adult_minimum);
     if (existing == replacement->records.end())
-      replacement->records.push_back(update);
+      replacement->records.push_back(std::move(indexed));
     else
-      *existing = update;
+      *existing = std::move(indexed);
   }
+  replacement->classification = summarize(replacement->records);
   state_ = std::move(replacement);
   return {};
 }
@@ -253,8 +284,38 @@ core::Result<void> MemoryRebuildSession::commit() {
   active_ = false;
   auto state = std::make_shared<InMemorySearchIndex::State>();
   state->source_generation = generation_;
-  state->records = std::move(records_);
+  state->records.reserve(records_.size());
+  for (auto &record : records_) {
+    classification::Classification classified{.info_hash = record.info_hash};
+    if (owner_->options_.enabled)
+      classified =
+          classification::classify(record, owner_->options_.classifier);
+    InMemorySearchIndex::IndexedRecord indexed{
+        .record = std::move(record), .classification = std::move(classified)};
+    indexed.categories = classification::media_categories(
+        indexed.classification, owner_->options_.category_minimum,
+        owner_->options_.adult_minimum);
+    state->records.push_back(std::move(indexed));
+  }
+  state->classification = owner_->summarize(state->records);
   return owner_->publish(std::move(state));
+}
+
+ClassificationIndexStats InMemorySearchIndex::summarize(
+    std::span<const IndexedRecord> records) const noexcept {
+  ClassificationIndexStats result{.enabled = options_.enabled,
+                                  .total_records = records.size()};
+  for (const auto &record : records) {
+    ++result.states[std::to_underlying(record.classification.state)];
+    if (record.classification.input_truncated)
+      ++result.input_truncated;
+    if (classification::label_confidence(record.classification,
+                                         classification::ContentLabel::Adult))
+      ++result.adult_labeled;
+    for (const auto category : record.categories)
+      ++result.categories[std::to_underlying(category)];
+  }
+  return result;
 }
 
 core::Result<SearchResult>
@@ -281,7 +342,10 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
   }
 
   std::vector<SearchHit> matches;
-  for (const auto &record : state->records) {
+  for (const auto &indexed : state->records) {
+    const auto &record = indexed.record;
+    const bool adult = contains_category(indexed.categories,
+                                         classification::MediaCategory::Adult);
     if ((query.minimum_size && record.total_size < *query.minimum_size) ||
         (query.maximum_size && record.total_size > *query.maximum_size) ||
         (query.minimum_file_count &&
@@ -291,7 +355,13 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
         (query.first_seen_at_or_after &&
          record.first_seen < *query.first_seen_at_or_after) ||
         (query.last_seen_at_or_before &&
-         record.last_seen > *query.last_seen_at_or_before))
+         record.last_seen > *query.last_seen_at_or_before) ||
+        (query.adult_content == AdultContentMode::Exclude && adult) ||
+        (query.adult_content == AdultContentMode::Only && !adult) ||
+        (!query.categories.empty() &&
+         !std::ranges::any_of(query.categories, [&](const auto category) {
+           return contains_category(indexed.categories, category);
+         })))
       continue;
     const auto score = match_score(record, query_terms);
     if (!score)
@@ -302,7 +372,9 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
                                 .file_count = record.files.size(),
                                 .first_seen = record.first_seen,
                                 .last_seen = record.last_seen,
-                                .score = *score});
+                                .score = *score,
+                                .classification = indexed.classification,
+                                .categories = indexed.categories});
   }
   std::ranges::sort(matches, [](const auto &left, const auto &right) {
     if (left.score != right.score)
@@ -326,6 +398,12 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
 std::uint64_t InMemorySearchIndex::source_generation() const noexcept {
   std::shared_lock lock{mutex_};
   return state_->source_generation;
+}
+
+ClassificationIndexStats
+InMemorySearchIndex::classification_stats() const noexcept {
+  std::shared_lock lock{mutex_};
+  return state_->classification;
 }
 
 } // namespace sakuin::search

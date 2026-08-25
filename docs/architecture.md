@@ -168,13 +168,23 @@ A fresh public node needs at least one contact before it can bootstrap
 proactively. Explicit TOML, environment, and command-line contacts take
 precedence. When they are absent, Sakuin may load one `host:port` entry per
 line from a standalone bootstrap file; release bundles provide an initial
-public-router list that operators can replace. If no list is available, the
-node warns and permits passive discovery.
+public-router list that operators can replace. After bootstrap, a bounded
+routing-discovery planner periodically issues `find_node` queries toward
+rotating Kademlia distance buckets. This expands a sparse routing table beyond
+the bootstrap routers without creating an unbounded query fan-out. If no list
+is available, the node warns and permits passive discovery.
 
 DNS absence is evaluated per address family. An IPv4-only router therefore
 does not prevent a dual-stack node from starting its IPv6 family with other
 contacts, while startup still fails when none of the configured contacts
 resolve for any enabled family.
+
+The release Compose file creates a dual-stack bridge and enables both DHT
+families by default. Docker assigns the bridge an IPv6 subnet when none is
+specified and performs the host-side forwarding for the published UDP port.
+An external Compose network must be created with IPv6 enabled separately;
+Compose cannot change the address-family settings of an existing external
+network.
 
 ## Search and duplicate indexes
 
@@ -196,9 +206,21 @@ The HTTP service exposes health, detailed operator status, Prometheus metrics,
 search, duplicate queries, and an authenticated search-refresh operation.
 Status snapshots
 aggregate DHT family cycles, bootstrap progress, datagram dispatch, derived
-index generations, materialization, and maintenance without exposing runtime
-or Asio types. Search and duplicate data is returned through domain views
-rather than exposing manifests or segment paths.
+index generations, materialization, maintenance, active routing discovery, and
+valid inbound KRPC traffic without exposing runtime or Asio types. Inbound
+query counts are split into `ping`, `find_node`, `get_peers`, `announce_peer`,
+and unknown methods; responses and protocol errors are counted separately.
+This provides direct evidence that published UDP ingress is reaching Sakuin,
+while avoiding peer-address labels and their unbounded cardinality. Search and
+duplicate data is returned through domain views rather than exposing manifests
+or segment paths.
+
+Classification observability is derived from the currently published search
+snapshot. Status exposes state and category distributions, bounded-input
+truncation, and Adult label counts. Prometheus exports the same data as gauges
+with fixed state/category label sets. Adult label and Adult category counts are
+descriptive: the latter reflects the configured confidence threshold, while
+neither metric changes the operator-selected visibility policy.
 
 Tagged release builds inject one shared build version into both executables.
 The daemon exposes it through the authenticated status response and the bounded
@@ -225,11 +247,33 @@ The HTTP request only signals the maintenance coordinator and returns `202`;
 compaction, retention, garbage collection, and verification remain serialized
 on the maintenance owner thread rather than blocking an Asio request thread.
 
-The `/api` compatibility route implements Torznab capabilities and generic
-search responses as UTF-8 XML/RSS. It publishes the `Other` category because
-classification is not yet available, and returns magnet links because the
-canonical store retains decoded torrent metadata rather than downloadable
-`.torrent` payloads.
+The `/api` compatibility route implements Torznab capabilities and UTF-8
+XML/RSS search responses. Semantic classifications map to the advertised
+Movies, TV, Audio, PC, Books, XXX, and Other category families. Generic and
+specialized movie, TV, music/audio, and book searches apply category filters
+inside the derived index before totals and pagination. Unknown category IDs are
+ignored as Torznab specifies; a request containing only unknown IDs is empty.
+Results use magnet links because the canonical store retains decoded torrent
+metadata rather than downloadable `.torrent` payloads.
+
+Classification is a deterministic, rebuildable projection over torrent names,
+file paths, sizes, and layout. It records a semantic content kind, confidence,
+bounded evidence identifiers, and independent labels such as Anime and Adult;
+none of these derived values mutate canonical torrent metadata. Records without
+a fetched file list remain explicitly awaiting metadata rather than being
+treated as unknown. Adult detection defaults on, while search visibility is a
+separate operator choice (`include`, `exclude`, or `only`) that defaults to
+including all content. Operators also choose the minimum Adult-label confidence
+used by that policy (`low`, `medium`, or `high`, defaulting to `high`).
+Disabling detection suppresses only the label and never
+filters a torrent. The local search projection recomputes these values from
+canonical records when it opens or refreshes, so rule changes do not require a
+canonical storage migration. Native JSON results expose the derived kind,
+confidence, labels, categories, resolution, algorithm version, and truncation
+state. They also include each bounded evidence code, subject, and signed rule
+weight so clients and operators can explain a classification without inspecting
+classifier internals. The rules inspect bounded untrusted strings without
+opening paths, extracting archives, or performing network lookups.
 
 API credentials live in a separate operational store. The CLI generates the
 secret once and persists a salted verifier, owner-only pepper, and permission
@@ -341,5 +385,5 @@ xmake run sakuin-storage-benchmark 100000 65536
 - Coordinator recovery is durable on one host but not replicated.
 - Duplicate matching is deterministic metadata fingerprinting, not semantic or
   fuzzy similarity.
-- There is currently no browser UI or media classifier. Torznab support is
-  limited to generic search until classification is available.
+- There is currently no browser UI. Classification is deterministic and
+  metadata-based; it does not yet use fuzzy similarity or learned models.

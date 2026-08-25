@@ -72,6 +72,11 @@ target("sakuin-model")
   add_files("src/model/**.cppm", {public = true})
   add_deps("sakuin-core")
 
+target("sakuin-classification")
+  set_kind("static")
+  add_files("src/classification/**.cppm", {public = true})
+  add_deps("sakuin-core", "sakuin-model")
+
 target("sakuin-model-codecs")
   set_kind("static")
   add_files("src/codec/**.cppm", {public = true})
@@ -126,7 +131,7 @@ target("sakuin-service")
            "sakuin-api", "sakuin-api-credentials", "sakuin-http",
            "sakuin-runtime-http", "sakuin-runtime-asio-http", "sakuin-search",
            "sakuin-search-local", "sakuin-search-pipeline", "sakuin-index",
-           "sakuin-index-local")
+           "sakuin-index-local", "sakuin-classification")
 
 target("sakuin")
   set_kind("binary")
@@ -149,13 +154,13 @@ target("sakuin-index-local")
 target("sakuin-search")
   set_kind("static")
   add_files("src/search/**.cppm", {public = true})
-  add_deps("sakuin-core", "sakuin-model")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-classification")
 
 target("sakuin-search-local")
   set_kind("static")
   add_files("src/search_local/**.cppm", {public = true})
   add_deps("sakuin-core", "sakuin-model", "sakuin-model-codecs",
-           "sakuin-search")
+           "sakuin-search", "sakuin-classification")
 
 target("sakuin-search-pipeline")
   set_kind("static")
@@ -181,6 +186,12 @@ target("sakuin-config-tests")
   add_files("tests/config/config.cpp")
   add_deps("sakuin-core", "sakuin-config")
   add_tests("config")
+
+target("sakuin-classification-tests")
+  set_kind("binary")
+  add_files("tests/classification/rules.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-classification")
+  add_tests("classification")
 
 target("sakuin-api-auth-tests")
   set_kind("binary")
@@ -427,6 +438,12 @@ target("sakuin-routing-maintenance-tests")
   add_files("tests/dht/routing_maintenance.cpp")
   add_deps("sakuin-core", "sakuin-runtime", "sakuin-dht")
   add_tests("routing-maintenance")
+
+target("sakuin-routing-discovery-tests")
+  set_kind("binary")
+  add_files("tests/dht/discovery.cpp")
+  add_deps("sakuin-core", "sakuin-runtime", "sakuin-dht")
+  add_tests("routing-discovery")
 
 target("sakuin-dht-identity-tests")
   set_kind("binary")

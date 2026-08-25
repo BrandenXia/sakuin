@@ -60,7 +60,9 @@ completed initializer and its token-bearing logs with
 `docker compose rm --force sakuin-init`. Data is kept in the `sakuin-data`
 Docker volume. The API is available at `http://127.0.0.1:8080` by default; UDP
 port 6881 is exposed for the DHT. The image includes a small public DHT
-bootstrap list.
+bootstrap list. The bundled Compose network is dual-stack and Sakuin uses both
+IPv4 and IPv6 by default; set `SAKUIN_ENABLE_IPV6=false` in an adjacent `.env`
+file only when the Docker host cannot route IPv6.
 
 ```bash
 curl http://127.0.0.1:8080/v1/health
@@ -109,14 +111,22 @@ Set `SAKUIN_IMAGE=ghcr.io/brandenxia/sakuin:vX.Y.Z` in an adjacent `.env` file
 to pin a release.
 
 Torznab clients can use `http://127.0.0.1:8080/api` as the indexer URL and the
-complete `sakuin_...` reader token as `apikey`. Sakuin currently advertises and
-implements generic `t=search`; results use magnet links because Sakuin indexes
-metadata rather than hosting `.torrent` files.
+complete `sakuin_...` reader token as `apikey`. Sakuin advertises generic,
+movie, TV, music/audio, and book search, with standard Torznab categories.
+Results use magnet links because Sakuin indexes metadata rather than hosting
+`.torrent` files. Adult classification is only a label: visibility is an
+operator setting and defaults to including every result. Native JSON search
+also returns bounded rule evidence so classifications can be audited.
 
 Prometheus can scrape `/metrics` (or `/v1/metrics`) with the operator token as
 an `Authorization: Bearer` header. The endpoint reports service uptime, DHT
 activity and queues, search and duplicate generations, materialization, and
 storage-maintenance counters without including peer addresses or error text.
+It also distinguishes inbound DHT query methods from responses and reports
+active routing-discovery work, which makes passive reachability and crawler
+progress visible without packet captures.
+Classifier coverage, ambiguity, bounded-input truncation, and semantic category
+counts are included so operators can assess classification quality in place.
 
 `/v1/health` is a liveness check for the HTTP process. `/v1/ready` stays at
 HTTP 503 until the composed service and every enabled DHT address-family worker

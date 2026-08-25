@@ -44,6 +44,7 @@ RUN apt-get update \
     && install -d -o sakuin -g sakuin -m 0750 /var/lib/sakuin
 
 COPY --from=release --chown=root:root /opt/sakuin /opt/sakuin
+COPY --chown=root:root config/sakuin.docker.toml /etc/sakuin/sakuin.toml
 
 ENV LD_LIBRARY_PATH=/opt/sakuin/lib
 ENV PATH=/opt/sakuin/bin:$PATH
@@ -56,3 +57,4 @@ EXPOSE 8080/tcp 6881/udp
 STOPSIGNAL SIGTERM
 
 ENTRYPOINT ["sakuin"]
+CMD ["--config=/etc/sakuin/sakuin.toml"]

@@ -10,6 +10,8 @@ export namespace sakuin::config {
 enum class DhtIdentityMode { Bep42, Fixed };
 enum class StorageBackend { Local };
 enum class CompressionCodec { None, Zstd };
+enum class AdultContentPolicy { Include, Exclude, Only };
+enum class ClassificationConfidence { Low, Medium, High };
 
 struct DhtIdentityConfig {
   DhtIdentityMode mode{DhtIdentityMode::Bep42};
@@ -136,8 +138,22 @@ struct DuplicateIndexConfig {
   core::Duration interval{std::chrono::minutes{5}};
 };
 
+struct ClassificationConfig {
+  bool enabled{true};
+  bool adult_detection_enabled{true};
+  // Classification only supplies a label. Search visibility is an explicit
+  // operator policy and defaults to retaining every result.
+  AdultContentPolicy adult_content_policy{AdultContentPolicy::Include};
+  ClassificationConfidence adult_minimum_confidence{
+      ClassificationConfidence::High};
+  std::size_t maximum_files_to_inspect{100'000};
+  std::size_t maximum_path_bytes{4'096};
+  std::size_t maximum_tokens{16'384};
+};
+
 struct IndexingConfig {
   DuplicateIndexConfig duplicates;
+  ClassificationConfig classification;
 };
 
 struct DistributedConfig {
@@ -559,6 +575,60 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.indexing.duplicates.interval = *value;
+    } else if (name == "indexing.classification.enabled") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.indexing.classification.enabled = *value;
+    } else if (name == "indexing.classification.adult_detection_enabled") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.indexing.classification.adult_detection_enabled = *value;
+    } else if (name == "indexing.classification.adult_content_policy") {
+      if (text == "include")
+        config.indexing.classification.adult_content_policy =
+            AdultContentPolicy::Include;
+      else if (text == "exclude")
+        config.indexing.classification.adult_content_policy =
+            AdultContentPolicy::Exclude;
+      else if (text == "only")
+        config.indexing.classification.adult_content_policy =
+            AdultContentPolicy::Only;
+      else
+        return std::unexpected(invalid(
+            "indexing.classification.adult_content_policy must be include, "
+            "exclude, or only"));
+    } else if (name ==
+               "indexing.classification.adult_minimum_confidence") {
+      if (text == "low")
+        config.indexing.classification.adult_minimum_confidence =
+            ClassificationConfidence::Low;
+      else if (text == "medium")
+        config.indexing.classification.adult_minimum_confidence =
+            ClassificationConfidence::Medium;
+      else if (text == "high")
+        config.indexing.classification.adult_minimum_confidence =
+            ClassificationConfidence::High;
+      else
+        return std::unexpected(invalid(
+            "indexing.classification.adult_minimum_confidence must be low, "
+            "medium, or high"));
+    } else if (name == "indexing.classification.maximum_files_to_inspect") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.indexing.classification.maximum_files_to_inspect = *value;
+    } else if (name == "indexing.classification.maximum_path_bytes") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.indexing.classification.maximum_path_bytes = *value;
+    } else if (name == "indexing.classification.maximum_tokens") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.indexing.classification.maximum_tokens = *value;
     } else if (name == "api.enabled") {
       auto value = boolean_value(text, name);
       if (!value)
@@ -917,6 +987,21 @@ core::Result<void> validate(const AppConfig &config) {
   if (config.indexing.duplicates.interval <= core::Duration::zero())
     return std::unexpected(
         invalid("Duplicate-index interval must be positive"));
+  if (config.indexing.classification.maximum_files_to_inspect == 0 ||
+      config.indexing.classification.maximum_files_to_inspect > 1'000'000 ||
+      config.indexing.classification.maximum_path_bytes == 0 ||
+      config.indexing.classification.maximum_path_bytes > 1024U * 1024U ||
+      config.indexing.classification.maximum_tokens == 0 ||
+      config.indexing.classification.maximum_tokens > 1'000'000)
+    return std::unexpected(
+        invalid("Classification inspection limits are invalid"));
+  if (config.indexing.classification.adult_content_policy !=
+          AdultContentPolicy::Include &&
+      (!config.indexing.classification.enabled ||
+       !config.indexing.classification.adult_detection_enabled))
+    return std::unexpected(invalid(
+        "Adult exclude/only policy requires classification and adult "
+        "detection to be enabled"));
   if (config.api.enabled &&
       (config.api.credential_store_directory.empty() ||
        config.api.listen_address.empty() || config.api.listen_port == 0 ||

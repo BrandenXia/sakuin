@@ -6,6 +6,7 @@ export module sakuin.api.json;
 
 import std;
 
+import sakuin.classification;
 import sakuin.core.bytes;
 import sakuin.core.hash;
 import sakuin.core.ids;
@@ -76,6 +77,225 @@ nlohmann::json duplicate_group(const index::DuplicateGroup &group) {
           {"torrents", std::move(torrents)}};
 }
 
+std::string_view name(classification::ClassificationState value) {
+  using enum classification::ClassificationState;
+  switch (value) {
+  case AwaitingMetadata:
+    return "awaiting_metadata";
+  case Classified:
+    return "classified";
+  case Ambiguous:
+    return "ambiguous";
+  case Unknown:
+    return "unknown";
+  }
+  std::unreachable();
+}
+
+std::string_view name(classification::ContentKind value) {
+  using enum classification::ContentKind;
+  switch (value) {
+  case Unknown:
+    return "unknown";
+  case Movie:
+    return "movie";
+  case Series:
+    return "series";
+  case Music:
+    return "music";
+  case Audiobook:
+    return "audiobook";
+  case Ebook:
+    return "ebook";
+  case Game:
+    return "game";
+  case Application:
+    return "application";
+  case Mixed:
+    return "mixed";
+  }
+  std::unreachable();
+}
+
+std::string_view name(classification::Confidence value) {
+  using enum classification::Confidence;
+  switch (value) {
+  case Unknown:
+    return "unknown";
+  case Low:
+    return "low";
+  case Medium:
+    return "medium";
+  case High:
+    return "high";
+  }
+  std::unreachable();
+}
+
+std::string_view name(classification::ContentLabel value) {
+  using enum classification::ContentLabel;
+  switch (value) {
+  case Adult:
+    return "adult";
+  case Anime:
+    return "anime";
+  }
+  std::unreachable();
+}
+
+std::string_view name(classification::VideoResolution value) {
+  using enum classification::VideoResolution;
+  switch (value) {
+  case Sd:
+    return "sd";
+  case Hd720:
+    return "720p";
+  case Hd1080:
+    return "1080p";
+  case Uhd2160:
+    return "2160p";
+  }
+  std::unreachable();
+}
+
+std::string_view name(classification::MediaCategory value) {
+  using enum classification::MediaCategory;
+  switch (value) {
+  case Movie:
+    return "movie";
+  case MovieSd:
+    return "movie_sd";
+  case MovieHd:
+    return "movie_hd";
+  case MovieUhd:
+    return "movie_uhd";
+  case Series:
+    return "series";
+  case SeriesSd:
+    return "series_sd";
+  case SeriesHd:
+    return "series_hd";
+  case SeriesUhd:
+    return "series_uhd";
+  case SeriesAnime:
+    return "series_anime";
+  case Audio:
+    return "audio";
+  case Audiobook:
+    return "audiobook";
+  case Application:
+    return "application";
+  case Books:
+    return "books";
+  case Ebook:
+    return "ebook";
+  case Adult:
+    return "adult";
+  case Other:
+    return "other";
+  }
+  std::unreachable();
+}
+
+std::string_view name(classification::EvidenceSubject value) {
+  using enum classification::EvidenceSubject;
+  switch (value) {
+  case Movie:
+    return "movie";
+  case Series:
+    return "series";
+  case Music:
+    return "music";
+  case Audiobook:
+    return "audiobook";
+  case Ebook:
+    return "ebook";
+  case Game:
+    return "game";
+  case Application:
+    return "application";
+  case Mixed:
+    return "mixed";
+  case Adult:
+    return "adult";
+  case Anime:
+    return "anime";
+  case Resolution:
+    return "resolution";
+  }
+  std::unreachable();
+}
+
+std::string_view name(classification::EvidenceCode value) {
+  using enum classification::EvidenceCode;
+  switch (value) {
+  case VideoPayloadDominant:
+    return "video_payload_dominant";
+  case AudioPayloadDominant:
+    return "audio_payload_dominant";
+  case EbookPayloadDominant:
+    return "ebook_payload_dominant";
+  case GamePayloadDominant:
+    return "game_payload_dominant";
+  case ApplicationPayloadDominant:
+    return "application_payload_dominant";
+  case MultiplePayloadFamilies:
+    return "multiple_payload_families";
+  case SingleDominantVideo:
+    return "single_dominant_video";
+  case SeasonEpisodeToken:
+    return "season_episode_token";
+  case ReleaseYearToken:
+    return "release_year_token";
+  case MusicReleaseToken:
+    return "music_release_token";
+  case AudiobookToken:
+    return "audiobook_token";
+  case EbookToken:
+    return "ebook_token";
+  case GameToken:
+    return "game_token";
+  case ApplicationToken:
+    return "application_token";
+  case AdultToken:
+    return "adult_token";
+  case AnimeToken:
+    return "anime_token";
+  case ResolutionToken:
+    return "resolution_token";
+  }
+  std::unreachable();
+}
+
+nlohmann::json classification_json(const search::SearchHit &hit) {
+  nlohmann::json labels = nlohmann::json::array();
+  for (const auto &label : hit.classification.labels)
+    labels.push_back(
+        {{"name", name(label.label)}, {"confidence", name(label.confidence)}});
+  nlohmann::json categories = nlohmann::json::array();
+  for (const auto category : hit.categories)
+    categories.push_back(name(category));
+  nlohmann::json evidence = nlohmann::json::array();
+  for (const auto &item : hit.classification.evidence)
+    evidence.push_back({{"code", name(item.code)},
+                        {"subject", name(item.subject)},
+                        {"weight", item.weight}});
+  nlohmann::json result{
+      {"state", name(hit.classification.state)},
+      {"kind", name(hit.classification.kind)},
+      {"confidence", name(hit.classification.kind_confidence)},
+      {"labels", std::move(labels)},
+      {"categories", std::move(categories)},
+      {"evidence", std::move(evidence)},
+      {"algorithm_version", hit.classification.algorithm_version},
+      {"input_truncated", hit.classification.input_truncated}};
+  result["resolution"] =
+      hit.classification.resolution
+          ? nlohmann::json{name(*hit.classification.resolution)}
+          : nlohmann::json{nullptr};
+  return result;
+}
+
 std::int64_t milliseconds(core::Timestamp timestamp) {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              timestamp.time_since_epoch())
@@ -106,7 +326,8 @@ json_search_result(const search::SearchResult &result) {
                         {"file_count", hit.file_count},
                         {"first_seen_ms", milliseconds(hit.first_seen)},
                         {"last_seen_ms", milliseconds(hit.last_seen)},
-                        {"score", hit.score}};
+                        {"score", hit.score},
+                        {"classification", classification_json(hit)}};
     item["name"] =
         hit.name ? nlohmann::json{*hit.name} : nlohmann::json{nullptr};
     hits.push_back(std::move(item));

@@ -486,22 +486,61 @@ core::Result<void> parse_api(const toml::table &table, ConfigOverlay &overlay) {
 
 core::Result<void> parse_indexing(const toml::table &table,
                                   ConfigOverlay &overlay) {
-  if (auto checked = check_keys(table, {"duplicates"}, "indexing."); !checked)
+  if (auto checked =
+          check_keys(table, {"duplicates", "classification"}, "indexing.");
+      !checked)
     return checked;
   auto duplicates = optional_table(table, "duplicates", "indexing.duplicates");
   if (!duplicates)
     return std::unexpected(duplicates.error());
-  if (!*duplicates)
+  if (*duplicates) {
+    if (auto checked = check_keys(**duplicates, {"enabled", "interval_ms"},
+                                  "indexing.duplicates.");
+        !checked)
+      return checked;
+    for (auto result :
+         {scalar<bool>(**duplicates, "enabled", "indexing.duplicates.enabled",
+                       overlay),
+          scalar<std::int64_t>(**duplicates, "interval_ms",
+                               "indexing.duplicates.interval_ms", overlay)})
+      if (!result)
+        return result;
+  }
+  auto classification =
+      optional_table(table, "classification", "indexing.classification");
+  if (!classification)
+    return std::unexpected(classification.error());
+  if (!*classification)
     return {};
-  if (auto checked = check_keys(**duplicates, {"enabled", "interval_ms"},
-                                "indexing.duplicates.");
+  if (auto checked = check_keys(
+          **classification,
+          {"enabled", "adult_detection_enabled", "adult_content_policy",
+           "adult_minimum_confidence", "maximum_files_to_inspect",
+           "maximum_path_bytes", "maximum_tokens"},
+          "indexing.classification.");
       !checked)
     return checked;
   for (auto result :
-       {scalar<bool>(**duplicates, "enabled", "indexing.duplicates.enabled",
+       {scalar<bool>(**classification, "enabled",
+                     "indexing.classification.enabled", overlay),
+        scalar<bool>(**classification, "adult_detection_enabled",
+                     "indexing.classification.adult_detection_enabled",
                      overlay),
-        scalar<std::int64_t>(**duplicates, "interval_ms",
-                             "indexing.duplicates.interval_ms", overlay)})
+        scalar<std::string>(**classification, "adult_content_policy",
+                            "indexing.classification.adult_content_policy",
+                            overlay),
+        scalar<std::string>(
+            **classification, "adult_minimum_confidence",
+            "indexing.classification.adult_minimum_confidence", overlay),
+        scalar<std::int64_t>(**classification, "maximum_files_to_inspect",
+                             "indexing.classification.maximum_files_to_inspect",
+                             overlay),
+        scalar<std::int64_t>(**classification, "maximum_path_bytes",
+                             "indexing.classification.maximum_path_bytes",
+                             overlay),
+        scalar<std::int64_t>(**classification, "maximum_tokens",
+                             "indexing.classification.maximum_tokens",
+                             overlay)})
     if (!result)
       return result;
   return {};
@@ -827,6 +866,19 @@ core::Result<ConfigOverlay> environment_overlay(
        "storage.materialization.interval_ms"},
       {"SAKUIN_DUPLICATE_INDEX_ENABLED", "indexing.duplicates.enabled"},
       {"SAKUIN_DUPLICATE_INDEX_INTERVAL_MS", "indexing.duplicates.interval_ms"},
+      {"SAKUIN_CLASSIFICATION_ENABLED", "indexing.classification.enabled"},
+      {"SAKUIN_CLASSIFICATION_ADULT_DETECTION_ENABLED",
+       "indexing.classification.adult_detection_enabled"},
+      {"SAKUIN_CLASSIFICATION_ADULT_CONTENT_POLICY",
+       "indexing.classification.adult_content_policy"},
+      {"SAKUIN_CLASSIFICATION_ADULT_MINIMUM_CONFIDENCE",
+       "indexing.classification.adult_minimum_confidence"},
+      {"SAKUIN_CLASSIFICATION_MAXIMUM_FILES_TO_INSPECT",
+       "indexing.classification.maximum_files_to_inspect"},
+      {"SAKUIN_CLASSIFICATION_MAXIMUM_PATH_BYTES",
+       "indexing.classification.maximum_path_bytes"},
+      {"SAKUIN_CLASSIFICATION_MAXIMUM_TOKENS",
+       "indexing.classification.maximum_tokens"},
       {"SAKUIN_API_ENABLED", "api.enabled"},
       {"SAKUIN_API_CREDENTIAL_STORE_DIRECTORY",
        "api.credential_store_directory"},

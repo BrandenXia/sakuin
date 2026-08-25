@@ -8,6 +8,7 @@ import sakuin.core.random;
 import sakuin.core.result;
 import sakuin.core.time;
 import sakuin.dht.bootstrap;
+import sakuin.dht.discovery;
 import sakuin.dht.identity;
 import sakuin.dht.krpc;
 import sakuin.dht.metadata;
@@ -102,6 +103,7 @@ private:
   std::unique_ptr<dht::Bep42IdentityPolicy> identity_;
   std::unique_ptr<dht::BootstrapPlanner> bootstrap_;
   std::unique_ptr<dht::RoutingMaintenancePlanner> routing_;
+  std::unique_ptr<dht::RoutingDiscoveryPlanner> discovery_;
   integration::DhtRuntimeWakeup wakeup_;
   std::unique_ptr<integration::TorrentMetadataAcquisition> metadata_;
   std::unique_ptr<dht::MetadataAcquisitionController> external_metadata_;
@@ -306,6 +308,10 @@ AsioDhtFamilyRuntime::create(
   if (!routing)
     return std::unexpected(routing.error());
   result->routing_ = std::move(*routing);
+  auto discovery = dht::RoutingDiscoveryPlanner::create(*result->node_);
+  if (!discovery)
+    return std::unexpected(discovery.error());
+  result->discovery_ = std::move(*discovery);
 
   const auto wake_owner = [owner = result.get()] { owner->wakeup_.notify(); };
   if (configuration.metadata.enabled) {
@@ -338,6 +344,7 @@ AsioDhtFamilyRuntime::create(
        .node = result->node_.get(),
        .bootstrap = result->bootstrap_.get(),
        .routing = result->routing_.get(),
+       .discovery = result->discovery_.get(),
        .identity = result->identity_.get()},
       {.wake_owner = wake_owner});
   if (!pump)

@@ -69,7 +69,16 @@ int main() {
   record.first_seen = core::Timestamp{std::chrono::milliseconds{10}};
   record.last_seen = core::Timestamp{std::chrono::milliseconds{20}};
   record.files.push_back({.path = "linux.iso", .size = 4096});
-  if (!(*rebuild)->append(record) || !(*rebuild)->commit())
+  model::TorrentRecord movie;
+  movie.info_hash.bytes.fill(0x33);
+  movie.name = "Example Movie 2024 1080p";
+  movie.total_size = 1'000'000;
+  movie.first_seen = core::Timestamp{std::chrono::milliseconds{30}};
+  movie.last_seen = core::Timestamp{std::chrono::milliseconds{40}};
+  movie.files.push_back(
+      {.path = "Example.Movie.2024.1080p.mkv", .size = 1'000'000});
+  if (!(*rebuild)->append(record) || !(*rebuild)->append(movie) ||
+      !(*rebuild)->commit())
     return 4;
 
   Duplicates duplicates;
@@ -91,6 +100,11 @@ int main() {
   status.snapshot.ipv4.routing_nodes = 13;
   status.snapshot.ipv4.metadata_in_flight = 2;
   status.snapshot.ipv4.observations_stored = 99;
+  status.snapshot.ipv4.discovery_queries_started = 17;
+  status.snapshot.ipv4.discovery_in_flight = 1;
+  status.snapshot.ipv4.inbound_queries = 12;
+  status.snapshot.ipv4.inbound_get_peers_queries = 7;
+  status.snapshot.ipv4.last_inbound_query_ms = 12'000;
   status.snapshot.ipv4.bootstrap_complete = true;
   status.snapshot.search_source_generation = 7;
   status.snapshot.search_records_indexed = 21;
@@ -167,6 +181,9 @@ int main() {
       !body(*found).contains("\"source_generation\":7") ||
       !body(*found).contains("\"total_matches\":1") ||
       !body(*found).contains("Linux Distribution") ||
+      !body(*found).contains("\"classification\"") ||
+      !body(*found).contains("\"categories\":[\"other\"]") ||
+      !body(*found).contains("\"evidence\":[") ||
       !body(*found).contains(std::string(40, '1')))
     return 7;
 
@@ -179,6 +196,19 @@ int main() {
   if (!time_filtered || time_filtered->status != 200 ||
       !body(*time_filtered).contains("\"total_matches\":1"))
     return 14;
+
+  api::HttpRequest category_query{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?category=movie&limit=10",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto category_filtered = handler.handle(std::move(category_query));
+  if (!category_filtered || category_filtered->status != 200 ||
+      !body(*category_filtered).contains("\"total_matches\":1") ||
+      !body(*category_filtered).contains("Example Movie 2024 1080p") ||
+      !body(*category_filtered).contains("\"code\":\"release_year_token\"") ||
+      !body(*category_filtered).contains("\"subject\":\"movie\"") ||
+      !body(*category_filtered).contains("\"weight\":"))
+    return 38;
 
   api::HttpRequest invalid{
       .method = api::HttpMethod::Get,
@@ -222,7 +252,10 @@ int main() {
       handler.handle({.method = api::HttpMethod::Get, .target = "/api?t=caps"});
   if (!caps || caps->status != 200 ||
       !body(*caps).contains("<server version=\"1.3\" title=\"Sakuin\"") ||
-      !body(*caps).contains("<search available=\"yes\""))
+      !body(*caps).contains("<search available=\"yes\"") ||
+      !body(*caps).contains("<movie-search available=\"yes\"") ||
+      !body(*caps).contains("<audio-search available=\"yes\"") ||
+      !body(*caps).contains("<category id=\"2000\" name=\"Movies\""))
     return 16;
 
   auto token = credential("reader", secret);
@@ -236,6 +269,20 @@ int main() {
       !body(*torznab).contains("magnet:?xt=urn:btih:") ||
       !body(*torznab).contains(std::string(40, '1')))
     return 17;
+
+  auto torznab_movie = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/api?t=movie&q=example&limit=10&apikey=" + token});
+  if (!torznab_movie ||
+      !body(*torznab_movie).contains("name=\"category\" value=\"2000\"") ||
+      !body(*torznab_movie).contains("name=\"category\" value=\"2040\"") ||
+      !body(*torznab_movie).contains("total=\"1\""))
+    return 36;
+  auto unknown_category = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/api?t=search&cat=9999&limit=10&apikey=" + token});
+  if (!unknown_category || !body(*unknown_category).contains("total=\"0\""))
+    return 37;
 
   auto torznab_unauthorized = handler.handle(
       {.method = api::HttpMethod::Get, .target = "/api?t=search&q=linux"});
@@ -258,7 +305,13 @@ int main() {
            .contains("\"version\":\"" + std::string{core::version} + "\"") ||
       !body(*operator_status).contains("\"cycles\":42") ||
       !body(*operator_status).contains("\"routing_nodes\":13") ||
+      !body(*operator_status).contains("\"inbound_queries\":12") ||
+      !body(*operator_status).contains("\"inbound_get_peers_queries\":7") ||
+      !body(*operator_status).contains("\"discovery_in_flight\":1") ||
       !body(*operator_status).contains("\"metadata_in_flight\":2") ||
+      !body(*operator_status).contains("\"total_records\":2") ||
+      !body(*operator_status).contains("\"adult_labeled\":0") ||
+      !body(*operator_status).contains("\"movie\":1") ||
       !body(*operator_status).contains("\"last_error\":null") ||
       body(*operator_status).contains("\"last_error\":[null]") ||
       !body(*operator_status).contains("\"state\":\"running\""))
@@ -290,10 +343,27 @@ int main() {
       !body(*operator_metrics)
            .contains("sakuin_dht_bootstrap_complete{family=\"ipv4\"} 1\n") ||
       !body(*operator_metrics)
+           .contains("sakuin_dht_discovery_queries_started_total{family="
+                     "\"ipv4\"} 17\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_inbound_query_methods_total{family=\"ipv4\","
+                     "method=\"get_peers\"} 7\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_last_inbound_query_timestamp_seconds{family="
+                     "\"ipv4\"} 12.000000\n") ||
+      !body(*operator_metrics)
            .contains("sakuin_search_source_generation 7\n") ||
       !body(*operator_metrics)
            .contains("sakuin_search_records_indexed_total 21\n"))
     return 24;
+  if (!body(*operator_metrics).contains("sakuin_classification_enabled 1\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_classification_adult_labeled_records 0\n") ||
+      !body(*operator_metrics)
+           .contains(
+               "sakuin_classification_category_records{category=\"movie\"} "
+               "1\n"))
+    return 39;
   if (!body(*operator_metrics).contains("sakuin_service_ready 1\n"))
     return 31;
   auto metrics_with_post = handler.handle(

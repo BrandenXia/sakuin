@@ -2,12 +2,23 @@ export module sakuin.search.index;
 
 import std;
 
+import sakuin.classification;
 import sakuin.core.ids;
 import sakuin.core.result;
 import sakuin.core.time;
 import sakuin.model.torrent;
 
 export namespace sakuin::search {
+
+enum class AdultContentMode { Include, Exclude, Only };
+
+struct SearchClassificationOptions {
+  bool enabled{true};
+  classification::ClassifierOptions classifier;
+  classification::Confidence category_minimum{
+      classification::Confidence::Medium};
+  classification::Confidence adult_minimum{classification::Confidence::High};
+};
 
 struct SearchQuery {
   std::string text;
@@ -17,6 +28,10 @@ struct SearchQuery {
   std::optional<std::size_t> maximum_file_count;
   std::optional<core::Timestamp> first_seen_at_or_after;
   std::optional<core::Timestamp> last_seen_at_or_before;
+  // Categories are ORed. Adult visibility is intentionally separate from
+  // classification and defaults to retaining all matching records.
+  std::vector<classification::MediaCategory> categories;
+  AdultContentMode adult_content{AdultContentMode::Include};
   std::size_t offset{};
   std::size_t limit{50};
 };
@@ -29,12 +44,41 @@ struct SearchHit {
   core::Timestamp first_seen;
   core::Timestamp last_seen;
   std::uint32_t score{};
+  classification::Classification classification;
+  std::vector<classification::MediaCategory> categories;
 };
 
 struct SearchResult {
   std::vector<SearchHit> hits;
   std::uint64_t total_matches{};
   std::uint64_t source_generation{};
+};
+
+inline constexpr std::size_t ClassificationStateCount =
+    std::to_underlying(classification::ClassificationState::Unknown) + 1U;
+inline constexpr std::size_t MediaCategoryCount =
+    std::to_underlying(classification::MediaCategory::Other) + 1U;
+
+struct ClassificationIndexStats {
+  bool enabled{};
+  std::uint32_t algorithm_version{classification::AlgorithmVersion};
+  std::uint64_t total_records{};
+  std::array<std::uint64_t, ClassificationStateCount> states{};
+  std::uint64_t input_truncated{};
+  // Counts every Adult label produced by the classifier. The Adult semantic
+  // category below applies the configured confidence threshold separately.
+  std::uint64_t adult_labeled{};
+  std::array<std::uint64_t, MediaCategoryCount> categories{};
+
+  std::uint64_t
+  state_count(classification::ClassificationState state) const noexcept {
+    return states[std::to_underlying(state)];
+  }
+
+  std::uint64_t
+  category_count(classification::MediaCategory category) const noexcept {
+    return categories[std::to_underlying(category)];
+  }
 };
 
 class SearchRebuildSession {
@@ -71,6 +115,7 @@ public:
   begin_update(std::uint64_t source_generation) = 0;
   virtual core::Result<SearchResult> search(const SearchQuery &query) const = 0;
   virtual std::uint64_t source_generation() const noexcept = 0;
+  virtual ClassificationIndexStats classification_stats() const noexcept = 0;
 
 protected:
   SearchIndex() = default;

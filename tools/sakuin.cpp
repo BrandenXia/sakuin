@@ -101,12 +101,30 @@ public:
     status.metadata_candidates_accepted +=
         cycle.poll.metadata_candidates_accepted;
     status.routing_probes_accepted += cycle.poll.routing_probes_accepted;
+    status.discovery_queries_started += cycle.poll.discovery_queries_started;
+    status.inbound_messages += cycle.poll.inbound_messages;
+    status.inbound_queries += cycle.poll.inbound_queries;
+    status.inbound_ping_queries += cycle.poll.inbound_ping_queries;
+    status.inbound_find_node_queries += cycle.poll.inbound_find_node_queries;
+    status.inbound_get_peers_queries += cycle.poll.inbound_get_peers_queries;
+    status.inbound_announce_peer_queries +=
+        cycle.poll.inbound_announce_peer_queries;
+    status.inbound_unknown_queries += cycle.poll.inbound_unknown_queries;
+    status.inbound_responses += cycle.poll.inbound_responses;
+    status.inbound_protocol_errors += cycle.poll.inbound_protocol_errors;
+    if (cycle.poll.last_inbound_query)
+      status.last_inbound_query_ms =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              cycle.poll.last_inbound_query->time_since_epoch())
+              .count();
     status.queries_expired += cycle.poll.queries_expired;
     status.datagrams_attempted += cycle.dispatch.attempted;
     status.datagrams_accepted += cycle.dispatch.accepted;
     status.datagrams_failed += cycle.dispatch.failed;
     status.routing_nodes = cycle.poll.routing_nodes;
     status.outstanding_queries = cycle.poll.outstanding_queries;
+    status.discovery_in_flight =
+        cycle.poll.discovery ? cycle.poll.discovery->in_flight : 0;
     status.pending_actions = cycle.poll.pending_actions;
     status.metadata_queued = cycle.poll.metadata_queued;
     status.metadata_in_flight = cycle.poll.metadata_in_flight;
