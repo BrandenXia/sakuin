@@ -122,6 +122,13 @@ target("sakuin-integrations")
   add_deps("sakuin-core", "sakuin-config", "sakuin-model", "sakuin-storage",
            "sakuin-model-codecs", "sakuin-dht", "sakuin-scheduler")
 
+target("llvm-dht-runtime-repro")
+  set_kind("static")
+  add_files("src/integration/metadata_backfill.cppm", {public = true})
+  add_files("src/integration/dht_runtime.cppm", {public = true})
+  add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
+           "sakuin-model-codecs", "sakuin-dht")
+
 target("sakuin-service")
   set_kind("static")
   add_files("src/service/**.cpp")
