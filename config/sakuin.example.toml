@@ -49,7 +49,7 @@ storage_retry_delay_ms = 1000
 # substantially improving metadata coverage on a normally connected node.
 enabled = true
 maximum_pending = 8192
-maximum_in_flight = 16
+maximum_in_flight = 64
 parallelism_per_hash = 3
 maximum_queries_per_hash = 24
 retry_delay_ms = 300000
