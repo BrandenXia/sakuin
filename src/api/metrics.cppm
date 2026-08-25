@@ -148,6 +148,8 @@ std::string_view category_name(classification::MediaCategory category) {
     return "audiobook";
   case Application:
     return "application";
+  case Game:
+    return "game";
   case Books:
     return "books";
   case Ebook:

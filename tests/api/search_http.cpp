@@ -1,6 +1,7 @@
 import std;
 
 import sakuin.api;
+import sakuin.classification;
 import sakuin.core;
 import sakuin.index.duplicates;
 import sakuin.model.torrent;
@@ -211,6 +212,14 @@ int main() {
       !body(*category_filtered).contains("\"subject\":\"movie\"") ||
       !body(*category_filtered).contains("\"weight\":"))
     return 38;
+  api::HttpRequest game_category_query{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?category=game&limit=10",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto game_category_filtered = handler.handle(std::move(game_category_query));
+  if (!game_category_filtered || game_category_filtered->status != 200 ||
+      !body(*game_category_filtered).contains("\"total_matches\":0"))
+    return 48;
 
   api::HttpRequest classification_query{
       .method = api::HttpMethod::Get,
@@ -312,8 +321,31 @@ int main() {
       !body(*caps).contains("<search available=\"yes\"") ||
       !body(*caps).contains("<movie-search available=\"yes\"") ||
       !body(*caps).contains("<audio-search available=\"yes\"") ||
-      !body(*caps).contains("<category id=\"2000\" name=\"Movies\""))
+      !body(*caps).contains("<category id=\"2000\" name=\"Movies\"") ||
+      !body(*caps).contains("<subcat id=\"4050\" name=\"Games\""))
     return 16;
+  auto game_request = api::parse_torznab_request("t=search&cat=4050");
+  if (!game_request || game_request->category_filter_matches_nothing ||
+      game_request->query.categories !=
+          std::vector{classification::MediaCategory::Game})
+    return 45;
+  auto pc_request = api::parse_torznab_request("t=search&cat=4000");
+  if (!pc_request ||
+      !std::ranges::contains(pc_request->query.categories,
+                             classification::MediaCategory::Application) ||
+      !std::ranges::contains(pc_request->query.categories,
+                             classification::MediaCategory::Game))
+    return 47;
+  search::SearchHit game_hit{
+      .name = "Example Game",
+      .total_size = 1024,
+      .file_count = 1,
+      .categories = {classification::MediaCategory::Game}};
+  auto game_feed = api::torznab_search_response(
+      {.hits = {std::move(game_hit)}, .total_matches = 1}, 0);
+  if (!body(game_feed).contains("<category>4050</category>") ||
+      !body(game_feed).contains("name=\"category\" value=\"4050\""))
+    return 46;
 
   auto token = credential("reader", secret);
   token.erase(0, std::string_view{"Bearer "}.size());

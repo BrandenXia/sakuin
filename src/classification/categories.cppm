@@ -64,11 +64,13 @@ std::vector<MediaCategory> media_categories(const Classification &value,
     case ContentKind::Application:
       result.push_back(MediaCategory::Application);
       break;
+    case ContentKind::Game:
+      result.push_back(MediaCategory::Game);
+      break;
     case ContentKind::Ebook:
       result.push_back(MediaCategory::Books);
       result.push_back(MediaCategory::Ebook);
       break;
-    case ContentKind::Game:
     case ContentKind::Mixed:
     case ContentKind::Unknown:
       result.push_back(MediaCategory::Other);

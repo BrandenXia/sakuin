@@ -336,6 +336,8 @@ categories(const std::map<std::string, std::string, std::less<>> &parameters) {
         return Audiobook;
       if (value == "application")
         return Application;
+      if (value == "game")
+        return Game;
       if (value == "books")
         return Books;
       if (value == "ebook")

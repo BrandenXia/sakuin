@@ -49,6 +49,7 @@ enum class MediaCategory {
   Audio,
   Audiobook,
   Application,
+  Game,
   Books,
   Ebook,
   Adult,
