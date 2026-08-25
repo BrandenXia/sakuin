@@ -275,6 +275,16 @@ weight so clients and operators can explain a classification without inspecting
 classifier internals. The rules inspect bounded untrusted strings without
 opening paths, extracting archives, or performing network lookups.
 
+Classifier changes are checked against a version-controlled regression corpus
+with explicit expected state, kind, minimum confidence, label requirements, and
+label exclusions. The corpus includes adult detection enabled and disabled
+cases so detection remains a configurable annotation policy rather than a
+visibility decision. `xmake test sakuin-classifier-eval/classification-corpus`
+runs the corpus. The evaluator emits deterministic coverage counts by resulting
+state, kind, and label. These counts describe regression coverage only; the
+hand-curated cases are not presented as population accuracy, precision, or
+recall measurements.
+
 API credentials live in a separate operational store. The CLI generates the
 secret once and persists a salted verifier, owner-only pepper, and permission
 set. Writes are locked and atomically replaced. Credentials can be created,

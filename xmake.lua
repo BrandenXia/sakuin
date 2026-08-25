@@ -193,6 +193,14 @@ target("sakuin-classification-tests")
   add_deps("sakuin-core", "sakuin-model", "sakuin-classification")
   add_tests("classification")
 
+target("sakuin-classifier-eval")
+  set_kind("binary")
+  add_files("tools/classifier_eval.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-classification")
+  add_tests("classification-corpus", {
+    runargs = {path.absolute("tests/fixtures/classification/corpus.tsv")}
+  })
+
 target("sakuin-api-auth-tests")
   set_kind("binary")
   add_files("tests/api/auth.cpp")
