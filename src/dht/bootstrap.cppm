@@ -169,12 +169,12 @@ bool BootstrapPlanner::consume_timeout(const QueryTimeout &timeout,
 
 bool BootstrapPlanner::delivery_failed(const DatagramSend &send,
                                        core::Timestamp now) {
-  if (!send.query_transaction)
+  if (send.query_transaction.empty())
     return false;
-  const auto found = find(*send.query_transaction, send.destination);
+  const auto found = find(send.query_transaction, send.destination);
   if (found == candidates_.end())
     return false;
-  node_->cancel_query(*send.query_transaction, send.destination);
+  node_->cancel_query(send.query_transaction, send.destination);
   failed(*found, now);
   return true;
 }
@@ -199,8 +199,8 @@ core::Result<BootstrapStep> BootstrapPlanner::poll(core::Timestamp now) {
     auto query = node_->find_node(candidate.endpoint, target, now);
     if (!query) {
       for (const auto &created : step.sends) {
-        if (created.query_transaction) {
-          node_->cancel_query(*created.query_transaction, created.destination);
+        if (!created.query_transaction.empty()) {
+          node_->cancel_query(created.query_transaction, created.destination);
           const auto rollback = std::ranges::find(
               candidates_, created.destination, &Candidate::endpoint);
           if (rollback != candidates_.end()) {
@@ -213,7 +213,7 @@ core::Result<BootstrapStep> BootstrapPlanner::poll(core::Timestamp now) {
       return std::unexpected(query.error());
     }
     candidate.outstanding = true;
-    candidate.transaction = *query->query_transaction;
+    candidate.transaction = query->query_transaction;
     ++candidate.attempts;
     step.sends.push_back(std::move(*query));
     --capacity;

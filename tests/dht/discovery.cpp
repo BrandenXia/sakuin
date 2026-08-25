@@ -58,7 +58,7 @@ int main() {
   const auto *query =
       decoded ? std::get_if<dht::krpc::Query>(&*decoded) : nullptr;
   if (!query || query->kind != dht::krpc::QueryKind::FindNode ||
-      !query->target || !started->sends.front().query_transaction)
+      !query->target || started->sends.front().query_transaction.empty())
     return 4;
 
   auto saturated = (*planner)->poll(seconds(20));

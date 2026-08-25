@@ -160,9 +160,9 @@ RoutingMaintenancePlanner::poll(core::Timestamp now) {
     auto query = node_->ping(entry.probe.incumbent.endpoint, now);
     if (!query) {
       for (const auto &created : step.sends) {
-        node_->cancel_query(*created.query_transaction, created.destination);
+        node_->cancel_query(created.query_transaction, created.destination);
         const auto rollback =
-            find(*created.query_transaction, created.destination);
+            find(created.query_transaction, created.destination);
         if (rollback != entries_.end()) {
           rollback->outstanding = false;
           rollback->transaction.clear();
@@ -172,7 +172,7 @@ RoutingMaintenancePlanner::poll(core::Timestamp now) {
       return std::unexpected(query.error());
     }
     entry.outstanding = true;
-    entry.transaction = *query->query_transaction;
+    entry.transaction = query->query_transaction;
     ++entry.attempts;
     step.sends.push_back(std::move(*query));
     --capacity;
@@ -228,12 +228,12 @@ bool RoutingMaintenancePlanner::consume_timeout(const QueryTimeout &timeout,
 
 bool RoutingMaintenancePlanner::delivery_failed(const DatagramSend &send,
                                                 core::Timestamp now) {
-  if (!send.query_transaction)
+  if (send.query_transaction.empty())
     return false;
-  const auto found = find(*send.query_transaction, send.destination);
+  const auto found = find(send.query_transaction, send.destination);
   if (found == entries_.end())
     return false;
-  node_->cancel_query(*send.query_transaction, send.destination);
+  node_->cancel_query(send.query_transaction, send.destination);
   found->outstanding = false;
   found->transaction.clear();
   if (found->attempts >= options_.maximum_attempts) {

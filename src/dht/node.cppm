@@ -31,7 +31,10 @@ struct DatagramSend {
   runtime::DatagramEndpoint destination;
   core::ByteBuffer payload;
   runtime::TrafficClassId traffic_class{traffic_class::protocol_response};
-  std::optional<core::ByteBuffer> query_transaction;
+  // Locally initiated queries always use a nonempty transaction ID. An empty
+  // buffer marks protocol responses, so wrapping the owning buffer in an
+  // optional would represent a state the node never produces.
+  core::ByteBuffer query_transaction;
 };
 
 struct QueryCompletion {

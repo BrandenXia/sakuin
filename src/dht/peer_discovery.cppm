@@ -223,17 +223,16 @@ PeerDiscoveryPlanner::poll(core::Timestamp now) {
       auto query = node_->get_peers(contact->endpoint, entry.info_hash, now);
       if (!query) {
         for (const auto &created : step.sends) {
-          if (created.query_transaction) {
-            node_->cancel_query(*created.query_transaction,
-                                created.destination);
+          if (!created.query_transaction.empty()) {
+            node_->cancel_query(created.query_transaction, created.destination);
             const auto rollback =
-                find(*created.query_transaction, created.destination);
+                find(created.query_transaction, created.destination);
             if (rollback != entries_.end()) {
               std::erase_if(
                   rollback->outstanding, [&](const auto &outstanding) {
                     return outstanding.remote == created.destination &&
                            std::ranges::equal(outstanding.transaction,
-                                              *created.query_transaction);
+                                              created.query_transaction);
                   });
               std::erase(rollback->queried, created.destination);
               if (rollback->attempts != 0)
@@ -244,7 +243,7 @@ PeerDiscoveryPlanner::poll(core::Timestamp now) {
         return std::unexpected(query.error());
       }
       entry.queried.push_back(contact->endpoint);
-      entry.outstanding.push_back({.transaction = *query->query_transaction,
+      entry.outstanding.push_back({.transaction = query->query_transaction,
                                    .remote = query->destination});
       ++entry.attempts;
       ++step.queries_started;
@@ -338,17 +337,17 @@ bool PeerDiscoveryPlanner::consume_timeout(const QueryTimeout &timeout,
 
 bool PeerDiscoveryPlanner::delivery_failed(const DatagramSend &send,
                                            core::Timestamp now) {
-  if (!send.query_transaction)
+  if (send.query_transaction.empty())
     return false;
-  const auto entry = find(*send.query_transaction, send.destination);
+  const auto entry = find(send.query_transaction, send.destination);
   if (entry == entries_.end())
     return false;
-  node_->cancel_query(*send.query_transaction, send.destination);
+  node_->cancel_query(send.query_transaction, send.destination);
   const auto query =
       std::ranges::find_if(entry->outstanding, [&](const auto &outstanding) {
         return outstanding.remote == send.destination &&
                std::ranges::equal(outstanding.transaction,
-                                  *send.query_transaction);
+                                  send.query_transaction);
       });
   entry->outstanding.erase(query);
   if (entry->outstanding.empty() &&
