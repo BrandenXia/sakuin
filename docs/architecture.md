@@ -294,6 +294,12 @@ remain behind the authenticated status and metrics routes.
 text format. Both require an operator credential. Labels are bounded to service
 state and IP address family; peer addresses and error messages are omitted to
 avoid sensitive output and unbounded time-series cardinality.
+Operational decisions use deltas or rates across sampled counter values, never
+the absolute magnitude of a cumulative counter. The deployment helper can
+sample the discovery-to-metadata pipeline without an external time-series
+database and identifies new or reset series explicitly. Prometheus deployments
+retain the cumulative counters and derive equivalent windows with `rate` or
+`increase`.
 
 When maintenance is enabled, authenticated operators may enqueue a pass through
 `POST /v1/operations/storage-maintenance`, optionally including verification.

@@ -96,6 +96,7 @@ Useful commands from a repository checkout:
 ```bash
 ./scripts/deploy.sh status YOUR_OPERATOR_TOKEN
 ./scripts/deploy.sh metrics YOUR_OPERATOR_TOKEN
+./scripts/deploy.sh activity YOUR_OPERATOR_TOKEN 30
 ./scripts/deploy.sh maintenance YOUR_OPERATOR_TOKEN
 ./scripts/deploy.sh maintenance YOUR_OPERATOR_TOKEN verify
 ./scripts/deploy.sh logs
@@ -152,6 +153,12 @@ active routing-discovery work, which makes passive reachability and crawler
 progress visible without packet captures.
 Classifier coverage, ambiguity, bounded-input truncation, and semantic category
 counts are included so operators can assess classification quality in place.
+Counters are cumulative for Prometheus compatibility; assess live crawler
+behavior with counter deltas or rates over a time window. From a repository
+deployment, `./scripts/deploy.sh activity OPERATOR_TOKEN 30` samples twice and
+reports reset-aware deltas and per-second rates for the discovery-to-metadata
+pipeline. In Prometheus, use `rate(..._total[5m])` or
+`increase(..._total[5m])` for the same purpose instead of comparing totals.
 
 `/v1/health` is a liveness check for the HTTP process. `/v1/ready` stays at
 HTTP 503 until the composed service and every enabled DHT address-family worker

@@ -1,0 +1,6 @@
+metric	labels	delta	per_second	continuity
+sakuin_dht_observations_stored_total	family="ipv4"	30	3.000000	continuous
+sakuin_dht_metadata_fetches_succeeded_total	family="ipv4"	2	0.200000	reset
+sakuin_dht_metadata_fetch_failures_total	family="ipv4",outcome="retryable"	0	0.000000	continuous
+sakuin_dht_metadata_sink_succeeded_total	family="ipv4"	1	0.100000	reset
+sakuin_dht_metadata_sink_failures_total	family="ipv4"	1	0.100000	new

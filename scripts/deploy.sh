@@ -67,6 +67,32 @@ wait_for_ready() {
   fail "Sakuin did not become ready within 30 seconds"
 }
 
+fetch_metrics() {
+  local token="$1"
+  "${compose[@]}" exec -T sakuin curl --fail --silent --show-error \
+    -H "Authorization: Bearer ${token}" \
+    http://127.0.0.1:8080/metrics
+}
+
+sample_activity() (
+  local token="$1"
+  local window_seconds="$2"
+  [[ "${window_seconds}" =~ ^[0-9]+$ ]] &&
+    ((window_seconds >= 1 && window_seconds <= 3600)) ||
+    fail "activity window must be an integer from 1 to 3600 seconds"
+
+  local sample_directory
+  sample_directory="$(mktemp -d)"
+  trap 'rm -rf -- "${sample_directory}"' EXIT
+  fetch_metrics "${token}" >"${sample_directory}/before.prom"
+  printf 'Sampling crawler activity for %s seconds...\n' "${window_seconds}" >&2
+  sleep "${window_seconds}"
+  fetch_metrics "${token}" >"${sample_directory}/after.prom"
+  awk -v window_seconds="${window_seconds}" \
+    -f "${script_directory}/metrics-delta.awk" \
+    "${sample_directory}/before.prom" "${sample_directory}/after.prom"
+)
+
 deploy() {
   local api_port="${SAKUIN_API_PORT:-}"
   "${compose[@]}" config --quiet
@@ -104,9 +130,12 @@ status)
   ;;
 metrics)
   [[ -n "${2:-}" ]] || fail "usage: $0 metrics OPERATOR_TOKEN"
-  "${compose[@]}" exec -T sakuin curl --fail --silent --show-error \
-    -H "Authorization: Bearer ${2}" \
-    http://127.0.0.1:8080/metrics
+  fetch_metrics "${2}"
+  ;;
+activity)
+  [[ -n "${2:-}" ]] ||
+    fail "usage: $0 activity OPERATOR_TOKEN [WINDOW_SECONDS]"
+  sample_activity "${2}" "${3:-10}"
   ;;
 maintenance)
   [[ -n "${2:-}" ]] || fail "usage: $0 maintenance OPERATOR_TOKEN [verify]"
@@ -131,6 +160,6 @@ key)
   "${compose[@]}" kill --signal SIGHUP sakuin >/dev/null 2>&1 || true
   ;;
 *)
-  fail "usage: $0 [up|down|logs|status [OPERATOR_TOKEN]|metrics OPERATOR_TOKEN|maintenance OPERATOR_TOKEN [verify]|verify|key KEY_ID [PERMISSIONS]]"
+  fail "usage: $0 [up|down|logs|status [OPERATOR_TOKEN]|metrics OPERATOR_TOKEN|activity OPERATOR_TOKEN [WINDOW_SECONDS]|maintenance OPERATOR_TOKEN [verify]|verify|key KEY_ID [PERMISSIONS]]"
   ;;
 esac
