@@ -67,6 +67,18 @@ void family_samples(std::string &output, std::string_view name,
          family.routing_probes_accepted);
   sample(output, "sakuin_dht_discovery_queries_started_total", labels,
          family.discovery_queries_started);
+  sample(output, "sakuin_dht_peer_discovery_queries_started_total", labels,
+         family.peer_discovery_queries_started);
+  sample(output, "sakuin_dht_peer_discovery_peers_found_total", labels,
+         family.peer_discovery_peers_found);
+  sample(output, "sakuin_dht_peer_discovery_exhausted_total", labels,
+         family.peer_discovery_exhausted);
+  sample(output, "sakuin_dht_metadata_backfill_records_scanned_total", labels,
+         family.metadata_backfill_records_scanned);
+  sample(output, "sakuin_dht_metadata_backfill_targets_offered_total", labels,
+         family.metadata_backfill_targets_offered);
+  sample(output, "sakuin_dht_metadata_backfill_records_with_metadata_total",
+         labels, family.metadata_backfill_records_with_metadata);
   sample(output, "sakuin_dht_inbound_messages_total", labels,
          family.inbound_messages);
   sample(output, "sakuin_dht_inbound_queries_total", labels,
@@ -99,6 +111,16 @@ void family_samples(std::string &output, std::string_view name,
          family.outstanding_queries);
   sample(output, "sakuin_dht_discovery_in_flight", labels,
          family.discovery_in_flight);
+  sample(output, "sakuin_dht_peer_discovery_pending", labels,
+         family.peer_discovery_pending);
+  sample(output, "sakuin_dht_peer_discovery_in_flight", labels,
+         family.peer_discovery_in_flight);
+  sample(output, "sakuin_dht_metadata_backfill_source_generation", labels,
+         family.metadata_backfill_source_generation);
+  sample(output, "sakuin_dht_metadata_backfill_scan_in_progress", labels,
+         family.metadata_backfill_scan_in_progress ? 1 : 0);
+  sample(output, "sakuin_dht_metadata_backfill_full_rebuild", labels,
+         family.metadata_backfill_full_rebuild ? 1 : 0);
   sample(output, "sakuin_dht_pending_actions", labels, family.pending_actions);
   sample(output, "sakuin_dht_metadata_queued", labels, family.metadata_queued);
   sample(output, "sakuin_dht_metadata_in_flight", labels,
@@ -219,6 +241,25 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "Routing probes accepted.", "counter");
     metadata(output, "sakuin_dht_discovery_queries_started_total",
              "Periodic DHT routing-discovery queries started.", "counter");
+    metadata(output, "sakuin_dht_peer_discovery_queries_started_total",
+             "Active get_peers discovery queries started for observed "
+             "infohashes.",
+             "counter");
+    metadata(output, "sakuin_dht_peer_discovery_peers_found_total",
+             "Peer endpoints found by active DHT discovery.", "counter");
+    metadata(output, "sakuin_dht_peer_discovery_exhausted_total",
+             "Observed infohash discovery traversals exhausted without a "
+             "peer.",
+             "counter");
+    metadata(output, "sakuin_dht_metadata_backfill_records_scanned_total",
+             "Canonical torrent records scanned for metadata backfill.",
+             "counter");
+    metadata(output, "sakuin_dht_metadata_backfill_targets_offered_total",
+             "Metadata-missing records offered to active peer discovery.",
+             "counter");
+    metadata(output, "sakuin_dht_metadata_backfill_records_with_metadata_total",
+             "Backfill records skipped because metadata is already present.",
+             "counter");
     metadata(output, "sakuin_dht_inbound_messages_total",
              "Valid inbound KRPC messages received.", "counter");
     metadata(output, "sakuin_dht_inbound_queries_total",
@@ -243,6 +284,20 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "DHT queries currently awaiting responses.", "gauge");
     metadata(output, "sakuin_dht_discovery_in_flight",
              "Periodic routing-discovery queries awaiting responses.", "gauge");
+    metadata(output, "sakuin_dht_peer_discovery_pending",
+             "Observed infohashes awaiting or undergoing peer discovery.",
+             "gauge");
+    metadata(output, "sakuin_dht_peer_discovery_in_flight",
+             "Active get_peers discovery queries awaiting responses.", "gauge");
+    metadata(output, "sakuin_dht_metadata_backfill_source_generation",
+             "Canonical torrent generation represented by the backfill scan.",
+             "gauge");
+    metadata(output, "sakuin_dht_metadata_backfill_scan_in_progress",
+             "Whether a metadata backfill change scan is in progress.",
+             "gauge");
+    metadata(output, "sakuin_dht_metadata_backfill_full_rebuild",
+             "Whether the current backfill scan is a complete keyed scan.",
+             "gauge");
     metadata(output, "sakuin_dht_pending_actions",
              "DHT actions waiting to be dispatched.", "gauge");
     metadata(output, "sakuin_dht_metadata_queued",

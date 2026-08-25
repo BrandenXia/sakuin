@@ -103,6 +103,17 @@ int main() {
   status.snapshot.ipv4.observations_stored = 99;
   status.snapshot.ipv4.discovery_queries_started = 17;
   status.snapshot.ipv4.discovery_in_flight = 1;
+  status.snapshot.ipv4.peer_discovery_queries_started = 23;
+  status.snapshot.ipv4.peer_discovery_peers_found = 5;
+  status.snapshot.ipv4.peer_discovery_exhausted = 4;
+  status.snapshot.ipv4.peer_discovery_pending = 9;
+  status.snapshot.ipv4.peer_discovery_in_flight = 3;
+  status.snapshot.ipv4.metadata_backfill_records_scanned = 31;
+  status.snapshot.ipv4.metadata_backfill_targets_offered = 11;
+  status.snapshot.ipv4.metadata_backfill_records_with_metadata = 20;
+  status.snapshot.ipv4.metadata_backfill_source_generation = 7;
+  status.snapshot.ipv4.metadata_backfill_scan_in_progress = true;
+  status.snapshot.ipv4.metadata_backfill_full_rebuild = true;
   status.snapshot.ipv4.inbound_queries = 12;
   status.snapshot.ipv4.inbound_get_peers_queries = 7;
   status.snapshot.ipv4.last_inbound_query_ms = 12'000;
@@ -451,6 +462,12 @@ int main() {
       !body(*operator_status).contains("\"inbound_queries\":12") ||
       !body(*operator_status).contains("\"inbound_get_peers_queries\":7") ||
       !body(*operator_status).contains("\"discovery_in_flight\":1") ||
+      !body(*operator_status).contains("\"peer_discovery_pending\":9") ||
+      !body(*operator_status).contains("\"peer_discovery_in_flight\":3") ||
+      !body(*operator_status)
+           .contains("\"metadata_backfill_targets_offered\":11") ||
+      !body(*operator_status)
+           .contains("\"metadata_backfill_scan_in_progress\":true") ||
       !body(*operator_status).contains("\"metadata_in_flight\":2") ||
       !body(*operator_status).contains("\"total_records\":2") ||
       !body(*operator_status).contains("\"adult_labeled\":0") ||
@@ -488,6 +505,18 @@ int main() {
       !body(*operator_metrics)
            .contains("sakuin_dht_discovery_queries_started_total{family="
                      "\"ipv4\"} 17\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_peer_discovery_queries_started_total{family="
+                     "\"ipv4\"} 23\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_peer_discovery_peers_found_total{family="
+                     "\"ipv4\"} 5\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_metadata_backfill_targets_offered_total{"
+                     "family=\"ipv4\"} 11\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_metadata_backfill_scan_in_progress{family="
+                     "\"ipv4\"} 1\n") ||
       !body(*operator_metrics)
            .contains("sakuin_dht_inbound_query_methods_total{family=\"ipv4\","
                      "method=\"get_peers\"} 7\n") ||

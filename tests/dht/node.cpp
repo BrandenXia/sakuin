@@ -278,6 +278,50 @@ int main() {
       protocol_error->query_completion->protocol_error->code != 202)
     return 19;
 
+  auto peer_query = server.get_peers(remote, hash(51), at_ten_minutes);
+  auto decoded_peer_query = dht::krpc::decode(peer_query->payload);
+  const auto *encoded_peer_query =
+      std::get_if<dht::krpc::Query>(&*decoded_peer_query);
+  const runtime::DatagramEndpoint discovered_peer = endpoint(55, 51'413);
+  auto compact_peer = dht::krpc::encode_compact_endpoint(discovered_peer);
+  dht::bencode::Value::Dictionary peer_values{
+      {"values", dht::bencode::Value{dht::bencode::Value::List{
+                     dht::bencode::Value{*compact_peer},
+                     dht::bencode::Value{*compact_peer}}}}};
+  auto peer_response_packet = dht::krpc::encode(
+      dht::krpc::Response{.transaction = encoded_peer_query->transaction,
+                          .sender = node(9),
+                          .values = std::move(peer_values)});
+  auto peer_response = server.handle(
+      {.source = remote, .payload = std::move(*peer_response_packet)},
+      at_ten_minutes);
+  if (!peer_response || !peer_response->query_completion ||
+      peer_response->query_completion->peers.size() != 1 ||
+      peer_response->query_completion->peers.front().address !=
+          discovered_peer.address ||
+      peer_response->query_completion->peers.front().port !=
+          discovered_peer.port)
+    return 23;
+
+  auto malformed_peer_query =
+      server.get_peers(remote, hash(52), at_ten_minutes);
+  auto decoded_malformed_query =
+      dht::krpc::decode(malformed_peer_query->payload);
+  const auto *encoded_malformed_query =
+      std::get_if<dht::krpc::Query>(&*decoded_malformed_query);
+  dht::bencode::Value::Dictionary malformed_peer_values{
+      {"values", dht::bencode::Value{bytes("not-a-list")}}};
+  auto malformed_peer_packet = dht::krpc::encode(
+      dht::krpc::Response{.transaction = encoded_malformed_query->transaction,
+                          .sender = node(9),
+                          .values = std::move(malformed_peer_values)});
+  auto malformed_peer_response = server.handle(
+      {.source = remote, .payload = std::move(*malformed_peer_packet)},
+      at_ten_minutes);
+  if (malformed_peer_response ||
+      malformed_peer_response.error().code != core::ErrorCode::InvalidArgument)
+    return 24;
+
   auto expiring = server.ping(remote, at_ten_minutes);
   if (!expiring ||
       !server.expire_queries(at_ten_minutes + std::chrono::seconds{14})

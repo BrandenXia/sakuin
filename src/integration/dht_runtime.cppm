@@ -11,9 +11,11 @@ import sakuin.dht.krpc;
 import sakuin.dht.metadata_controller;
 import sakuin.dht.node;
 import sakuin.dht.observation;
+import sakuin.dht.peer_discovery;
 import sakuin.dht.routing;
 import sakuin.dht.routing_maintenance;
 import sakuin.dht.runtime;
+import sakuin.integration.metadata_backfill;
 
 export namespace sakuin::integration {
 
@@ -25,6 +27,8 @@ struct DhtRuntimePoll {
   std::vector<core::Error> errors;
   std::optional<dht::RoutingMaintenanceStep> routing;
   std::optional<dht::RoutingDiscoveryStep> discovery;
+  std::optional<dht::PeerDiscoveryStep> peer_discovery;
+  std::optional<MetadataDiscoveryBackfillStep> metadata_backfill;
   std::optional<dht::BootstrapStep> bootstrap;
   // Remains set until the service owner successfully replaces this family's
   // node/runtime and commits the address on the identity policy.
@@ -35,6 +39,12 @@ struct DhtRuntimePoll {
   std::size_t metadata_candidates_accepted{};
   std::size_t routing_probes_accepted{};
   std::size_t discovery_queries_started{};
+  std::size_t peer_discovery_queries_started{};
+  std::size_t peer_discovery_peers_found{};
+  std::size_t peer_discovery_exhausted{};
+  std::size_t metadata_backfill_records_scanned{};
+  std::size_t metadata_backfill_targets_offered{};
+  std::size_t metadata_backfill_records_with_metadata{};
   std::size_t inbound_messages{};
   std::size_t inbound_queries{};
   std::size_t inbound_ping_queries{};
@@ -63,6 +73,8 @@ struct DhtRuntimeActionPumpServices {
   dht::BootstrapPlanner *bootstrap{};
   dht::RoutingMaintenancePlanner *routing{};
   dht::RoutingDiscoveryPlanner *discovery{};
+  dht::PeerDiscoveryPlanner *peer_discovery{};
+  MetadataDiscoveryBackfill *metadata_backfill{};
   dht::Bep42IdentityPolicy *identity{};
 };
 
@@ -104,6 +116,8 @@ private:
       : observations_(&observations), metadata_(services.metadata),
         node_(services.node), bootstrap_(services.bootstrap),
         routing_(services.routing), discovery_(services.discovery),
+        peer_discovery_(services.peer_discovery),
+        metadata_backfill_(services.metadata_backfill),
         identity_(services.identity), options_(options) {}
 
   static bool has_forward_actions(const dht::DhtActions &actions) noexcept;
@@ -114,6 +128,8 @@ private:
   dht::BootstrapPlanner *bootstrap_;
   dht::RoutingMaintenancePlanner *routing_;
   dht::RoutingDiscoveryPlanner *discovery_;
+  dht::PeerDiscoveryPlanner *peer_discovery_;
+  MetadataDiscoveryBackfill *metadata_backfill_;
   dht::Bep42IdentityPolicy *identity_;
   DhtRuntimeActionPumpOptions options_;
   mutable std::mutex incoming_mutex_;
@@ -164,11 +180,20 @@ DhtRuntimeActionPump::create(dht::ObservationSink &observations,
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
                     "DHT runtime action-pump pending limits must be nonzero"});
-  if ((services.bootstrap || services.routing || services.discovery) &&
+  if ((services.bootstrap || services.routing || services.discovery ||
+       services.peer_discovery) &&
       !services.node)
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
                     "DHT query planners require an owner-thread node"});
+  if (services.peer_discovery && !services.metadata)
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidArgument,
+                    "Active peer discovery requires metadata acquisition"});
+  if (services.metadata_backfill && !services.peer_discovery)
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidArgument,
+                    "Metadata backfill requires active peer discovery"});
   return std::unique_ptr<DhtRuntimeActionPump>{
       new DhtRuntimeActionPump{observations, services, options}};
 }
@@ -287,6 +312,13 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
       try {
         auto stored = observations_->observe(*actions.observation);
         if (stored) {
+          if (peer_discovery_) {
+            auto offered =
+                peer_discovery_->offer(actions.observation->info_hash,
+                                       actions.observation->observed_at);
+            if (!offered)
+              result.errors.push_back(offered.error());
+          }
           actions.observation.reset();
           ++result.observations_stored;
         } else {
@@ -387,6 +419,17 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
         result.errors.push_back(callback_error("Routing-discovery completion"));
       }
     }
+    if (actions.query_completion && peer_discovery_) {
+      try {
+        completion_consumed =
+            peer_discovery_->consume(actions, now) || completion_consumed;
+      } catch (const std::exception &exception) {
+        result.errors.push_back(
+            callback_error("Peer-discovery completion", exception));
+      } catch (...) {
+        result.errors.push_back(callback_error("Peer-discovery completion"));
+      }
+    }
     if (completion_consumed)
       actions.query_completion.reset();
 
@@ -470,6 +513,16 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
           result.errors.push_back(callback_error("Routing-discovery timeout"));
         }
       }
+      if (peer_discovery_) {
+        try {
+          consumed = peer_discovery_->consume_timeout(timeout, now) || consumed;
+        } catch (const std::exception &exception) {
+          result.errors.push_back(
+              callback_error("Peer-discovery timeout", exception));
+        } catch (...) {
+          result.errors.push_back(callback_error("Peer-discovery timeout"));
+        }
+      }
       if (!consumed)
         result.unhandled_timeouts.push_back(std::move(timeout));
     }
@@ -519,6 +572,69 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
       result.errors.push_back(callback_error("Routing-discovery poll"));
     }
   }
+  if (metadata_backfill_) {
+    try {
+      auto step = metadata_backfill_->poll(now);
+      if (step) {
+        result.metadata_backfill_records_scanned += step->records_scanned;
+        result.metadata_backfill_targets_offered += step->targets_offered;
+        result.metadata_backfill_records_with_metadata +=
+            step->records_with_metadata;
+        result.metadata_backfill = std::move(*step);
+      } else {
+        result.errors.push_back(step.error());
+      }
+    } catch (const std::exception &exception) {
+      result.errors.push_back(
+          callback_error("Metadata-discovery backfill poll", exception));
+    } catch (...) {
+      result.errors.push_back(
+          callback_error("Metadata-discovery backfill poll"));
+    }
+  }
+  if (peer_discovery_) {
+    try {
+      auto step = peer_discovery_->poll(now);
+      if (step) {
+        result.peer_discovery_queries_started += step->queries_started;
+        result.peer_discovery_peers_found += step->peers_found;
+        result.peer_discovery_exhausted += step->exhausted;
+        if (metadata_) {
+          for (const auto &candidate : step->candidates) {
+            try {
+              auto accepted = metadata_->offer(candidate);
+              if (accepted) {
+                if (*accepted)
+                  ++result.metadata_candidates_accepted;
+              } else {
+                result.errors.push_back(accepted.error());
+                if (auto retried = peer_discovery_->retry(candidate); !retried)
+                  result.errors.push_back(retried.error());
+              }
+            } catch (const std::exception &exception) {
+              result.errors.push_back(
+                  callback_error("Metadata acquisition offer", exception));
+              if (auto retried = peer_discovery_->retry(candidate); !retried)
+                result.errors.push_back(retried.error());
+            } catch (...) {
+              result.errors.push_back(
+                  callback_error("Metadata acquisition offer"));
+              if (auto retried = peer_discovery_->retry(candidate); !retried)
+                result.errors.push_back(retried.error());
+            }
+          }
+        }
+        step->candidates.clear();
+        result.peer_discovery = std::move(*step);
+      } else {
+        result.errors.push_back(step.error());
+      }
+    } catch (const std::exception &exception) {
+      result.errors.push_back(callback_error("Peer-discovery poll", exception));
+    } catch (...) {
+      result.errors.push_back(callback_error("Peer-discovery poll"));
+    }
+  }
   if (identity_) {
     if (auto proposed = identity_->proposed_external()) {
       result.identity_reconfiguration =
@@ -540,6 +656,8 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
     include_wakeup(result.routing->next_wakeup);
   if (result.discovery)
     include_wakeup(result.discovery->next_wakeup);
+  if (result.metadata_backfill)
+    include_wakeup(result.metadata_backfill->next_wakeup);
   result.pending_actions = pending_count_.load(std::memory_order_acquire);
   if (node_) {
     result.routing_nodes = node_->routing_table().size();
@@ -562,6 +680,8 @@ DhtRuntimeActionPump::delivery_failed(const dht::DatagramSend &send,
       consumed = routing_->delivery_failed(send, now);
     if (discovery_)
       consumed = discovery_->delivery_failed(send) || consumed;
+    if (peer_discovery_)
+      consumed = peer_discovery_->delivery_failed(send, now) || consumed;
     if (bootstrap_)
       consumed = bootstrap_->delivery_failed(send, now) || consumed;
     return consumed;
@@ -609,6 +729,8 @@ DhtRuntimeDispatch dispatch_dht_runtime(DhtRuntimePoll &poll,
     drain(poll.routing->sends);
   if (poll.discovery)
     drain(poll.discovery->sends);
+  if (poll.peer_discovery)
+    drain(poll.peer_discovery->sends);
   return result;
 }
 

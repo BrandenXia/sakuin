@@ -144,6 +144,18 @@ int main() {
   dht_config.routing.maximum_in_flight = 4;
   dht_config.routing.maximum_attempts = 6;
   dht_config.routing.retry_delay = std::chrono::seconds{8};
+  dht_config.metadata.discovery.maximum_pending = 333;
+  dht_config.metadata.discovery.maximum_in_flight = 9;
+  dht_config.metadata.discovery.parallelism_per_hash = 3;
+  dht_config.metadata.discovery.maximum_queries_per_hash = 27;
+  dht_config.metadata.discovery.retry_delay = std::chrono::seconds{70};
+  dht_config.metadata.discovery.backfill.maximum_records_per_poll = 123;
+  dht_config.metadata.discovery.backfill.refresh_interval =
+      std::chrono::seconds{80};
+  dht_config.metadata.discovery.backfill.full_rescan_interval =
+      std::chrono::minutes{20};
+  dht_config.metadata.discovery.backfill.retry_delay =
+      std::chrono::milliseconds{900};
   dht_config.identity.observation_quorum = 5;
   dht_config.identity.vote_window = std::chrono::seconds{45};
   const auto node_options =
@@ -151,6 +163,11 @@ int main() {
   const auto configured_bootstrap = integration::bootstrap_options(dht_config);
   const auto configured_routing =
       integration::routing_maintenance_options(dht_config.routing);
+  const auto configured_peer_discovery =
+      integration::peer_discovery_options(dht_config.metadata.discovery);
+  const auto configured_backfill =
+      integration::metadata_discovery_backfill_options(
+          dht_config.metadata.discovery.backfill);
   const auto configured_identity =
       integration::bep42_identity_policy_options(dht_config.identity);
   if (node_options.query_timeout != std::chrono::seconds{9} ||
@@ -162,6 +179,16 @@ int main() {
       configured_routing.maximum_in_flight != 4 ||
       configured_routing.maximum_attempts != 6 ||
       configured_routing.retry_delay != std::chrono::seconds{8} ||
+      configured_peer_discovery.maximum_pending != 333 ||
+      configured_peer_discovery.maximum_in_flight != 9 ||
+      configured_peer_discovery.parallelism_per_hash != 3 ||
+      configured_peer_discovery.maximum_queries_per_hash != 27 ||
+      configured_peer_discovery.retry_delay != std::chrono::seconds{70} ||
+      configured_backfill.maximum_records_per_poll != 123 ||
+      configured_backfill.refresh_interval != std::chrono::seconds{80} ||
+      configured_backfill.full_rescan_interval != std::chrono::minutes{20} ||
+      configured_backfill.backpressure_retry_delay !=
+          std::chrono::milliseconds{900} ||
       !configured_identity || configured_identity->observation_quorum != 5 ||
       configured_identity->vote_window != std::chrono::seconds{45})
     return 32;
@@ -237,20 +264,32 @@ int main() {
                      .maximum_in_flight = 1,
                      .maximum_attempts = 1,
                      .retry_delay = std::chrono::seconds{1}});
-  if (!routing_update.probe || !routing)
+  auto peer_discovery = dht::PeerDiscoveryPlanner::create(
+      routing_node, {.maximum_pending = 16,
+                     .maximum_in_flight = 2,
+                     .parallelism_per_hash = 2,
+                     .maximum_queries_per_hash = 4,
+                     .retry_delay = std::chrono::minutes{5}});
+  if (!routing_update.probe || !routing || !peer_discovery)
     return 20;
   auto pump = integration::DhtRuntimeActionPump::create(
       observations, {.metadata = controller->get(),
                      .node = &routing_node,
-                     .routing = routing->get()});
+                     .routing = routing->get(),
+                     .peer_discovery = peer_discovery->get()});
   auto invalid_pump = integration::DhtRuntimeActionPump::create(
       observations, {}, {.maximum_pending_actions = 0});
   auto missing_owner = integration::DhtRuntimeActionPump::create(
       observations, {.routing = routing->get()});
+  auto missing_metadata = integration::DhtRuntimeActionPump::create(
+      observations,
+      {.node = &routing_node, .peer_discovery = peer_discovery->get()});
   if (!pump || invalid_pump ||
       invalid_pump.error().code != core::ErrorCode::InvalidArgument ||
       missing_owner ||
-      missing_owner.error().code != core::ErrorCode::InvalidArgument)
+      missing_owner.error().code != core::ErrorCode::InvalidArgument ||
+      missing_metadata ||
+      missing_metadata.error().code != core::ErrorCode::InvalidArgument)
     return 3;
   std::size_t owner_wakeups{};
   auto bounded_pump = integration::DhtRuntimeActionPump::create(
@@ -416,8 +455,47 @@ int main() {
       second.inbound_messages != 0 || second.inbound_queries != 0 ||
       !second.errors.empty() || observations.records.size() != 1 ||
       observations.records.front().info_hash != wanted ||
-      (*pump)->pending() != 0)
+      (*pump)->pending() != 0 || !second.peer_discovery ||
+      second.peer_discovery->queries_started != 2 ||
+      second.peer_discovery->sends.size() != 2)
     return 8;
+
+  auto active_query =
+      dht::krpc::decode(second.peer_discovery->sends.front().payload);
+  const auto *typed_active_query =
+      active_query ? std::get_if<dht::krpc::Query>(&*active_query) : nullptr;
+  auto active_peer = routing_contact(60).endpoint;
+  auto compact_active_peer = dht::krpc::encode_compact_endpoint(active_peer);
+  auto active_response =
+      typed_active_query && compact_active_peer
+          ? dht::krpc::encode(dht::krpc::Response{
+                .transaction = typed_active_query->transaction,
+                .sender = routing_contact(1).id,
+                .values = {{"values",
+                            dht::bencode::Value{
+                                dht::bencode::Value::List{dht::bencode::Value{
+                                    std::move(*compact_active_peer)}}}}}})
+          : core::Result<core::ByteBuffer>{std::unexpected(core::Error{
+                core::ErrorCode::Internal,
+                "Unable to construct active peer-discovery response"})};
+  auto active_completion =
+      active_response
+          ? routing_node.handle(
+                {.source = second.peer_discovery->sends.front().destination,
+                 .payload = std::move(*active_response)},
+                now + std::chrono::seconds{2})
+          : core::Result<dht::DhtActions>{
+                std::unexpected(active_response.error())};
+  if (!active_completion)
+    return 44;
+  (*pump)->on_actions(std::move(*active_completion));
+  auto active_completed = (*pump)->poll(now + std::chrono::seconds{2});
+  if (!active_completed.peer_discovery ||
+      active_completed.peer_discovery_peers_found != 1 ||
+      active_completed.metadata_candidates_accepted != 1 ||
+      active_completed.peer_discovery->pending != 0 ||
+      routing_node.outstanding_queries() != 0)
+    return 45;
 
   auto identity = dht::Bep42IdentityPolicy::create(
       runtime::AddressFamily::IPv4, std::nullopt,
