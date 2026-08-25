@@ -192,8 +192,10 @@ Search and duplicate state is derived and stored separately from canonical
 segments. Both can be removed and rebuilt.
 
 The search view indexes torrent name, file path, infohash, total size, file
-count, and observation timestamps. It supports text and structured filters with
-bounded pagination.
+count, observation timestamps, and derived classifications. It supports text,
+structured metadata filters, semantic categories, and optional classifier
+state, kind, confidence, and label facets with bounded pagination. Classifier
+facets do not override the independently configured Adult visibility policy.
 
 Duplicate detection currently publishes two explicitly versioned fingerprints:
 an exact sorted file-layout identity and a normalized name/path identity.

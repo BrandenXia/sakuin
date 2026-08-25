@@ -28,6 +28,14 @@ struct SearchQuery {
   std::optional<std::size_t> maximum_file_count;
   std::optional<core::Timestamp> first_seen_at_or_after;
   std::optional<core::Timestamp> last_seen_at_or_before;
+  std::optional<classification::ClassificationState> classification_state;
+  std::optional<classification::ContentKind> content_kind;
+  std::optional<classification::Confidence> minimum_kind_confidence;
+  // Every requested label must be present at the configured minimum. These
+  // facets describe classifier output and never override Adult visibility.
+  std::vector<classification::ContentLabel> labels;
+  classification::Confidence minimum_label_confidence{
+      classification::Confidence::Low};
   // Categories are ORed. Adult visibility is intentionally separate from
   // classification and defaults to retaining all matching records.
   std::vector<classification::MediaCategory> categories;
