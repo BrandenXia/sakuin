@@ -197,10 +197,14 @@ structured metadata filters, semantic categories, and optional classifier
 state, kind, confidence, and label facets with bounded pagination. Classifier
 facets do not override the independently configured Adult visibility policy.
 
-Duplicate detection currently publishes two explicitly versioned fingerprints:
-an exact sorted file-layout identity and a normalized name/path identity.
-Versioning the algorithm avoids silently changing group semantics when future
-normalization or fuzzy matching is introduced.
+Duplicate detection publishes three explicitly versioned fingerprints: an
+exact sorted file-layout identity, a normalized name/path identity, and a
+conservative payload-layout similarity signature. The latter ignores names and
+directories while retaining exact file sizes and normalized extensions, so it
+can group renamed or reorganized payloads. Small single-file torrents are
+excluded from that signature because their layout is not discriminative enough.
+These are likely-duplicate signals rather than content hashes. Versioning the
+algorithms avoids silently changing group semantics as detection expands.
 
 ## API and credentials
 

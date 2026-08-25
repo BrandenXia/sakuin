@@ -13,7 +13,7 @@ duplicate indexes can be rebuilt from it.
 
 - Crawls the public BitTorrent DHT and acquires torrent metadata.
 - Searches torrent names, paths, sizes, file counts, dates, and infohashes.
-- Detects exact file-layout and normalized-metadata duplicates.
+- Detects exact, normalized-metadata, and renamed payload-layout duplicates.
 - Preserves historical observations with configurable retention and
   compression.
 - Enforces configurable DHT traffic budgets.

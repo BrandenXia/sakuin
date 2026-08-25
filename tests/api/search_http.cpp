@@ -156,6 +156,7 @@ int main() {
       !body(*openapi).contains("\"/v1/search\"") ||
       !body(*openapi).contains("\"classification_state\"") ||
       !body(*openapi).contains("\"minimum_label_confidence\"") ||
+      !body(*openapi).contains("payload_layout_v1") ||
       !body(*openapi).contains("\"bearerAuth\"") ||
       body(*openapi).contains("sakuin_reader_"))
     return 33;
@@ -294,6 +295,16 @@ int main() {
       !body(*duplicate_groups).contains("\"source_generation\":7") ||
       !body(*duplicate_groups).contains("\"total_groups\":1") ||
       !body(*duplicate_groups).contains("abababababababab"))
+    return 9;
+
+  api::HttpRequest payload_duplicate_query{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/duplicates?algorithm=payload_layout_v1&limit=10",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto payload_duplicate_groups =
+      handler.handle(std::move(payload_duplicate_query));
+  if (!payload_duplicate_groups || payload_duplicate_groups->status != 200 ||
+      !body(*payload_duplicate_groups).contains("\"total_groups\":0"))
     return 9;
 
   api::HttpRequest duplicate_match{
