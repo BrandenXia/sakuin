@@ -57,6 +57,20 @@ local_root = "./data"
 block_target_bytes = 2097152
 segment_target_bytes = 134217728
 
+# To keep immutable segment blobs in AWS S3 or a path-style S3-compatible
+# service, change backend to "s3" and configure this table. local_root remains
+# required for manifests, locks, derived indexes, checkpoints, and bounded
+# upload/download staging. Credentials are intentionally not stored here; use
+# AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and optionally AWS_SESSION_TOKEN.
+# [storage.s3]
+# endpoint = "https://s3.amazonaws.com"
+# bucket = "sakuin-data"
+# region = "us-east-1"
+# prefix = "catalog"
+# connect_timeout_ms = 10000
+# request_timeout_ms = 300000
+# verify_tls = true
+
 [storage.compression]
 codec = "zstd"
 level = 3

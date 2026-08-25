@@ -297,7 +297,7 @@ core::Result<void> parse_storage(const toml::table &table,
           check_keys(table,
                      {"backend", "local_root", "block_target_bytes",
                       "segment_target_bytes", "compression", "compaction",
-                      "retention", "maintenance", "materialization"},
+                      "retention", "maintenance", "materialization", "s3"},
                      "storage.");
       !checked)
     return checked;
@@ -310,6 +310,30 @@ core::Result<void> parse_storage(const toml::table &table,
                              "storage.segment_target_bytes", overlay)})
     if (!result)
       return result;
+  auto s3 = optional_table(table, "s3", "storage.s3");
+  if (!s3)
+    return std::unexpected(s3.error());
+  if (*s3) {
+    if (auto checked = check_keys(**s3,
+                                  {"endpoint", "bucket", "region", "prefix",
+                                   "connect_timeout_ms", "request_timeout_ms",
+                                   "verify_tls"},
+                                  "storage.s3.");
+        !checked)
+      return checked;
+    for (auto result :
+         {scalar<std::string>(**s3, "endpoint", "storage.s3.endpoint", overlay),
+          scalar<std::string>(**s3, "bucket", "storage.s3.bucket", overlay),
+          scalar<std::string>(**s3, "region", "storage.s3.region", overlay),
+          scalar<std::string>(**s3, "prefix", "storage.s3.prefix", overlay),
+          scalar<std::int64_t>(**s3, "connect_timeout_ms",
+                               "storage.s3.connect_timeout_ms", overlay),
+          scalar<std::int64_t>(**s3, "request_timeout_ms",
+                               "storage.s3.request_timeout_ms", overlay),
+          scalar<bool>(**s3, "verify_tls", "storage.s3.verify_tls", overlay)})
+      if (!result)
+        return result;
+  }
   auto compression =
       optional_table(table, "compression", "storage.compression");
   if (!compression)
@@ -529,9 +553,9 @@ core::Result<void> parse_indexing(const toml::table &table,
         scalar<std::string>(**classification, "adult_content_policy",
                             "indexing.classification.adult_content_policy",
                             overlay),
-        scalar<std::string>(
-            **classification, "adult_minimum_confidence",
-            "indexing.classification.adult_minimum_confidence", overlay),
+        scalar<std::string>(**classification, "adult_minimum_confidence",
+                            "indexing.classification.adult_minimum_confidence",
+                            overlay),
         scalar<std::int64_t>(**classification, "maximum_files_to_inspect",
                              "indexing.classification.maximum_files_to_inspect",
                              overlay),
@@ -834,6 +858,13 @@ core::Result<ConfigOverlay> environment_overlay(
       {"SAKUIN_TRAFFIC_GRANT_BYTES", "network.traffic.grant_bytes"},
       {"SAKUIN_STORAGE_BACKEND", "storage.backend"},
       {"SAKUIN_STORAGE_LOCAL_ROOT", "storage.local_root"},
+      {"SAKUIN_STORAGE_S3_ENDPOINT", "storage.s3.endpoint"},
+      {"SAKUIN_STORAGE_S3_BUCKET", "storage.s3.bucket"},
+      {"SAKUIN_STORAGE_S3_REGION", "storage.s3.region"},
+      {"SAKUIN_STORAGE_S3_PREFIX", "storage.s3.prefix"},
+      {"SAKUIN_STORAGE_S3_CONNECT_TIMEOUT_MS", "storage.s3.connect_timeout_ms"},
+      {"SAKUIN_STORAGE_S3_REQUEST_TIMEOUT_MS", "storage.s3.request_timeout_ms"},
+      {"SAKUIN_STORAGE_S3_VERIFY_TLS", "storage.s3.verify_tls"},
       {"SAKUIN_STORAGE_BLOCK_TARGET_BYTES", "storage.block_target_bytes"},
       {"SAKUIN_STORAGE_SEGMENT_TARGET_BYTES", "storage.segment_target_bytes"},
       {"SAKUIN_STORAGE_COMPRESSION", "storage.compression.codec"},

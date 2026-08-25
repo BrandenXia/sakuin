@@ -8,7 +8,7 @@ import sakuin.core.time;
 export namespace sakuin::config {
 
 enum class DhtIdentityMode { Bep42, Fixed };
-enum class StorageBackend { Local };
+enum class StorageBackend { Local, S3 };
 enum class CompressionCodec { None, Zstd };
 enum class AdultContentPolicy { Include, Exclude, Only };
 enum class ClassificationConfidence { Low, Medium, High };
@@ -74,6 +74,16 @@ struct NetworkConfig {
 };
 
 struct StorageConfig {
+  struct S3Config {
+    std::string endpoint{"https://s3.amazonaws.com"};
+    std::string bucket;
+    std::string region{"us-east-1"};
+    std::string prefix{"sakuin"};
+    core::Duration connect_timeout{std::chrono::seconds{10}};
+    core::Duration request_timeout{std::chrono::minutes{5}};
+    bool verify_tls{true};
+  };
+
   struct MaintenanceConfig {
     bool enabled{true};
     core::Duration interval{std::chrono::minutes{15}};
@@ -108,6 +118,7 @@ struct StorageConfig {
   MaintenanceConfig maintenance;
   MaterializationConfig materialization;
   RetentionConfig retention;
+  S3Config s3;
 };
 
 struct ApiRateLimitConfig {
@@ -463,12 +474,37 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
         return std::unexpected(value.error());
       config.network.traffic.grant_bytes = *value;
     } else if (name == "storage.backend") {
-      if (text != "local")
-        return std::unexpected(
-            invalid("storage.backend currently supports only local"));
-      config.storage.backend = StorageBackend::Local;
+      if (text == "local")
+        config.storage.backend = StorageBackend::Local;
+      else if (text == "s3")
+        config.storage.backend = StorageBackend::S3;
+      else
+        return std::unexpected(invalid("storage.backend must be local or s3"));
     } else if (name == "storage.local_root") {
       config.storage.local_root = text;
+    } else if (name == "storage.s3.endpoint") {
+      config.storage.s3.endpoint = text;
+    } else if (name == "storage.s3.bucket") {
+      config.storage.s3.bucket = text;
+    } else if (name == "storage.s3.region") {
+      config.storage.s3.region = text;
+    } else if (name == "storage.s3.prefix") {
+      config.storage.s3.prefix = text;
+    } else if (name == "storage.s3.connect_timeout_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.s3.connect_timeout = *value;
+    } else if (name == "storage.s3.request_timeout_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.s3.request_timeout = *value;
+    } else if (name == "storage.s3.verify_tls") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.s3.verify_tls = *value;
     } else if (name == "storage.block_target_bytes") {
       auto value = unsigned_value<std::uint64_t>(text, name);
       if (!value)
@@ -599,8 +635,7 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
         return std::unexpected(invalid(
             "indexing.classification.adult_content_policy must be include, "
             "exclude, or only"));
-    } else if (name ==
-               "indexing.classification.adult_minimum_confidence") {
+    } else if (name == "indexing.classification.adult_minimum_confidence") {
       if (text == "low")
         config.indexing.classification.adult_minimum_confidence =
             ClassificationConfidence::Low;
@@ -945,6 +980,15 @@ core::Result<void> validate(const AppConfig &config) {
       config.storage.block_target_bytes > config.storage.segment_target_bytes)
     return std::unexpected(
         invalid("Storage paths and size targets are invalid"));
+  if (config.storage.backend == StorageBackend::S3 &&
+      ((!config.storage.s3.endpoint.starts_with("https://") &&
+        !config.storage.s3.endpoint.starts_with("http://")) ||
+       config.storage.s3.bucket.empty() || config.storage.s3.region.empty() ||
+       config.storage.s3.connect_timeout <= core::Duration::zero() ||
+       config.storage.s3.request_timeout <= core::Duration::zero()))
+    return std::unexpected(invalid(
+        "S3 storage requires an HTTP(S) endpoint, bucket, region, and positive "
+        "timeouts"));
   if (config.storage.compaction_minimum_segments < 2)
     return std::unexpected(
         invalid("Compaction requires at least two input segments"));
@@ -999,9 +1043,9 @@ core::Result<void> validate(const AppConfig &config) {
           AdultContentPolicy::Include &&
       (!config.indexing.classification.enabled ||
        !config.indexing.classification.adult_detection_enabled))
-    return std::unexpected(invalid(
-        "Adult exclude/only policy requires classification and adult "
-        "detection to be enabled"));
+    return std::unexpected(
+        invalid("Adult exclude/only policy requires classification and adult "
+                "detection to be enabled"));
   if (config.api.enabled &&
       (config.api.credential_store_directory.empty() ||
        config.api.listen_address.empty() || config.api.listen_port == 0 ||

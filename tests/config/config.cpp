@@ -53,6 +53,15 @@ local_root = "/srv/sakuin"
 block_target_bytes = 1048576
 segment_target_bytes = 67108864
 
+[storage.s3]
+endpoint = "https://objects.example.test"
+bucket = "sakuin-data"
+region = "us-test-1"
+prefix = "production/catalog"
+connect_timeout_ms = 4000
+request_timeout_ms = 120000
+verify_tls = true
+
 [storage.compression]
 codec = "zstd"
 level = 5
@@ -175,6 +184,8 @@ tls_server_name = "coordinator.internal"
                 std::string{"131072"}},
       std::pair{std::string{"SAKUIN_STORAGE_COMPACTION_MINIMUM_SEGMENTS"},
                 std::string{"8"}},
+      std::pair{std::string{"SAKUIN_STORAGE_S3_BUCKET"},
+                std::string{"sakuin-data-override"}},
       std::pair{std::string{"SAKUIN_STORAGE_COMPACTION_MAXIMUM_WARM_SEGMENTS"},
                 std::string{"5"}},
       std::pair{
@@ -262,7 +273,13 @@ tls_server_name = "coordinator.internal"
       loaded.network.dht.bootstrap_file != "bootstrap.txt" ||
       loaded.network.traffic.grant_bytes != 131072 ||
       loaded.storage.local_root != "/srv/sakuin" ||
-      loaded.storage.compression_level != 5 ||
+      loaded.storage.s3.endpoint != "https://objects.example.test" ||
+      loaded.storage.s3.bucket != "sakuin-data-override" ||
+      loaded.storage.s3.region != "us-test-1" ||
+      loaded.storage.s3.prefix != "production/catalog" ||
+      loaded.storage.s3.connect_timeout != std::chrono::seconds{4} ||
+      loaded.storage.s3.request_timeout != std::chrono::minutes{2} ||
+      !loaded.storage.s3.verify_tls || loaded.storage.compression_level != 5 ||
       loaded.storage.compaction_minimum_segments != 8 ||
       loaded.storage.compaction_maximum_warm_segments != 5 ||
       loaded.storage.compaction_warm_block_target_bytes != 65536 ||
@@ -386,6 +403,10 @@ tls_server_name = "coordinator.internal"
   invalid_tiering.storage.compaction_warm_block_target_bytes = 1024;
   if (config::validate(invalid_tiering))
     return 13;
+  auto invalid_s3 = config::defaults();
+  invalid_s3.storage.backend = config::StorageBackend::S3;
+  if (config::validate(invalid_s3))
+    return 17;
   auto invalid_retention = config::defaults();
   invalid_retention.storage.retention.enabled = true;
   invalid_retention.storage.retention.observation_max_age =
