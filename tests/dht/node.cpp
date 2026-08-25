@@ -332,9 +332,9 @@ int main() {
     return 20;
 
   auto canceled = server.ping(remote, at_ten_minutes);
-  if (!canceled || !canceled->query_transaction ||
-      !server.cancel_query(*canceled->query_transaction, remote) ||
-      server.cancel_query(*canceled->query_transaction, remote) ||
+  if (!canceled || canceled->query_transaction.empty() ||
+      !server.cancel_query(canceled->query_transaction, remote) ||
+      server.cancel_query(canceled->query_transaction, remote) ||
       server.outstanding_queries() != 0)
     return 21;
 
