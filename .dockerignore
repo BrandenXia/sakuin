@@ -1,2 +1,4 @@
 *
 !Dockerfile
+!config/
+!config/sakuin.docker.toml
