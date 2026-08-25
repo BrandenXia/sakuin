@@ -148,7 +148,7 @@ RoutingDiscoveryPlanner::poll(core::Timestamp now) {
   if (!query)
     return std::unexpected(query.error());
   outstanding_.push_back(
-      {.transaction = *query->query_transaction, .remote = query->destination});
+      {.transaction = query->query_transaction, .remote = query->destination});
   step.sends.push_back(std::move(*query));
   step.queries_started = 1;
   step.in_flight = outstanding_.size();
@@ -178,12 +178,12 @@ bool RoutingDiscoveryPlanner::consume_timeout(const QueryTimeout &timeout) {
 }
 
 bool RoutingDiscoveryPlanner::delivery_failed(const DatagramSend &send) {
-  if (!send.query_transaction)
+  if (send.query_transaction.empty())
     return false;
-  const auto found = find(*send.query_transaction, send.destination);
+  const auto found = find(send.query_transaction, send.destination);
   if (found == outstanding_.end())
     return false;
-  node_->cancel_query(*send.query_transaction, send.destination);
+  node_->cancel_query(send.query_transaction, send.destination);
   outstanding_.erase(found);
   return true;
 }

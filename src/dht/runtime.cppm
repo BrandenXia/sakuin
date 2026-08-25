@@ -149,8 +149,8 @@ core::Result<void> DhtRuntimeDriver::send_at(DatagramSend send,
                          .bytes = send.payload.size()},
                         current);
     if (!decision.allowed) {
-      if (send.query_transaction)
-        node_->cancel_query(*send.query_transaction, send.destination);
+      if (!send.query_transaction.empty())
+        node_->cancel_query(send.query_transaction, send.destination);
       std::string message = "DHT outbound traffic quota denied a datagram";
       if (decision.request_too_large)
         message += " because it can never fit the configured window";
@@ -159,8 +159,8 @@ core::Result<void> DhtRuntimeDriver::send_at(DatagramSend send,
     }
   }
   auto sent = transport_->send(send.destination, std::move(send.payload));
-  if (!sent && send.query_transaction)
-    node_->cancel_query(*send.query_transaction, send.destination);
+  if (!sent && !send.query_transaction.empty())
+    node_->cancel_query(send.query_transaction, send.destination);
   return sent;
 }
 
