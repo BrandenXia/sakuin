@@ -96,7 +96,7 @@ checksummed compressed blocks
     ↓ immutable segment
 manifest generation
     ↓ BlobStore
-local filesystem
+local filesystem or S3-compatible object storage
 ```
 
 The segment reader knows about blocks, checksums, sparse indexes, Bloom filters,
@@ -130,6 +130,16 @@ A snapshot pins its exact generation for repeatable reads. Compaction creates
 replacement segments and publishes a new manifest, while existing snapshots
 continue reading the old objects. Garbage collection removes an object only
 after it is unreachable from every live pinned generation.
+
+The optional S3 backend moves immutable content-addressed blobs behind the
+`BlobStore` boundary. It deliberately leaves manifests, the single-writer
+lock, derived indexes, and operational state under `storage.local_root`, so the
+manifest remains the local atomic transaction boundary. Uploads and downloads
+use bounded local staging; a downloaded object is size-checked and hashed
+before a reader can observe it. Requests use SigV4 with credentials supplied
+through `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and the optional
+`AWS_SESSION_TOKEN`. Path-style bucket URLs support AWS S3 and compatible
+endpoints without adding provider-specific configuration.
 
 ### Compaction and retention
 
@@ -387,9 +397,9 @@ Neither is confused with canonical observations and torrents.
 ## Testing and benchmarks
 
 The test suite covers codecs, corrupted segments, format versions, manifests,
-snapshot pinning, compaction, retention, migration, DHT protocol and runtime,
-metadata acquisition, search, API security, traffic budgets, remote work,
-result idempotency, and crash recovery.
+snapshot pinning, compaction, retention, migration, local and fake-S3 blob
+stores, DHT protocol and runtime, metadata acquisition, search, API security,
+traffic budgets, remote work, result idempotency, and crash recovery.
 
 The separate storage benchmark measures append and scan throughput,
 compression ratio, compaction and COLD archival throughput, write amplification,
@@ -402,12 +412,14 @@ xmake run sakuin-storage-benchmark 100000 65536
 
 ## Known boundaries
 
-- The canonical backend is currently the local filesystem; S3-compatible
-  storage remains future work.
+- S3-compatible storage currently offloads immutable segment blobs only;
+  manifests, coordination, and derived state remain local and single-writer.
 - The search engine is a local derived implementation rather than an external
   cluster.
 - Coordinator recovery is durable on one host but not replicated.
-- Duplicate matching is deterministic metadata fingerprinting, not semantic or
-  fuzzy similarity.
+- Duplicate matching uses exact content IDs, normalized metadata, and renamed
+  payload-layout fingerprints; it does not yet perform probabilistic semantic
+  similarity.
 - There is currently no browser UI. Classification is deterministic and
-  metadata-based; it does not yet use fuzzy similarity or learned models.
+  metadata-based. Strong kind hints have bounded typo tolerance, but there are
+  no learned models or operator-defined classifier rules yet.

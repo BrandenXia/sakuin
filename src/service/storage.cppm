@@ -22,6 +22,8 @@ import sakuin.storage.admin.compaction;
 import sakuin.storage.admin.retention;
 import sakuin.storage.admin.row_v1;
 import sakuin.storage.blob.local;
+import sakuin.storage.blob.s3;
+import sakuin.storage.blob.store;
 import sakuin.storage.catalog.manifest;
 import sakuin.storage.catalog.local;
 import sakuin.storage.dataset.observations;
@@ -72,10 +74,11 @@ public:
   const std::filesystem::path &root() const noexcept { return root_; }
 
 private:
-  explicit LocalCanonicalStorage(std::filesystem::path root);
+  LocalCanonicalStorage(std::filesystem::path root,
+                        std::unique_ptr<storage::BlobStore> blobs);
 
   std::filesystem::path root_;
-  storage::LocalBlobStore blobs_;
+  std::unique_ptr<storage::BlobStore> blobs_;
   std::unique_ptr<storage::LocalManifestCatalog> observation_catalog_;
   std::unique_ptr<storage::LocalManifestCatalog> torrent_catalog_;
   std::unique_ptr<storage::LocalManifestCatalog> work_result_catalog_;
@@ -135,15 +138,12 @@ std::size_t calculated_observation_batch_size(std::uint64_t target_bytes) {
 
 } // namespace
 
-LocalCanonicalStorage::LocalCanonicalStorage(std::filesystem::path root)
-    : root_(std::move(root)), blobs_(root_ / "objects") {}
+LocalCanonicalStorage::LocalCanonicalStorage(
+    std::filesystem::path root, std::unique_ptr<storage::BlobStore> blobs)
+    : root_(std::move(root)), blobs_(std::move(blobs)) {}
 
 core::Result<std::unique_ptr<LocalCanonicalStorage>>
 LocalCanonicalStorage::open(const config::StorageConfig &configuration) {
-  if (configuration.backend != config::StorageBackend::Local)
-    return std::unexpected(core::Error{
-        core::ErrorCode::InvalidArgument,
-        "Local canonical storage requires the local storage backend"});
   if (configuration.local_root.empty() ||
       configuration.segment_target_bytes == 0 ||
       configuration.compaction_warm_block_target_bytes == 0 ||
@@ -159,14 +159,37 @@ LocalCanonicalStorage::open(const config::StorageConfig &configuration) {
             std::numeric_limits<std::uint32_t>::max())))
     return std::unexpected(core::Error{
         core::ErrorCode::InvalidArgument,
-        "Local canonical storage requires valid paths and block/segment "
+        "Canonical storage requires valid local state paths and block/segment "
         "targets"});
   auto header = segment_header(configuration);
   if (!header)
     return std::unexpected(header.error());
 
+  std::unique_ptr<storage::BlobStore> blobs;
+  if (configuration.backend == config::StorageBackend::Local) {
+    blobs = std::make_unique<storage::LocalBlobStore>(configuration.local_root /
+                                                      "objects");
+  } else {
+    auto remote = storage::S3BlobStore::open_from_environment(
+        {.endpoint = configuration.s3.endpoint,
+         .bucket = configuration.s3.bucket,
+         .region = configuration.s3.region,
+         .prefix = configuration.s3.prefix,
+         .staging_directory =
+             configuration.local_root / "operational" / "s3-staging",
+         .connect_timeout =
+             std::chrono::duration_cast<std::chrono::milliseconds>(
+                 configuration.s3.connect_timeout),
+         .request_timeout =
+             std::chrono::duration_cast<std::chrono::milliseconds>(
+                 configuration.s3.request_timeout),
+         .verify_tls = configuration.s3.verify_tls});
+    if (!remote)
+      return std::unexpected(remote.error());
+    blobs = std::move(*remote);
+  }
   auto result = std::unique_ptr<LocalCanonicalStorage>{
-      new LocalCanonicalStorage{configuration.local_root}};
+      new LocalCanonicalStorage{configuration.local_root, std::move(blobs)}};
   std::error_code directory_error;
   const auto operational = configuration.local_root / "operational";
   std::filesystem::create_directories(operational, directory_error);
@@ -191,33 +214,33 @@ LocalCanonicalStorage::open(const config::StorageConfig &configuration) {
             : "Could not lock local storage: " +
                   std::string{std::strerror(errno)}});
   auto observation_catalog = storage::LocalManifestCatalog::open(
-      configuration.local_root / "manifests" / "observations", result->blobs_);
+      configuration.local_root / "manifests" / "observations", *result->blobs_);
   if (!observation_catalog)
     return std::unexpected(observation_catalog.error());
   result->observation_catalog_ = std::move(*observation_catalog);
 
   auto torrent_catalog = storage::LocalManifestCatalog::open(
-      configuration.local_root / "manifests" / "torrents", result->blobs_);
+      configuration.local_root / "manifests" / "torrents", *result->blobs_);
   if (!torrent_catalog)
     return std::unexpected(torrent_catalog.error());
   result->torrent_catalog_ = std::move(*torrent_catalog);
 
   auto work_result_catalog = storage::LocalManifestCatalog::open(
-      configuration.local_root / "manifests" / "work-results", result->blobs_);
+      configuration.local_root / "manifests" / "work-results", *result->blobs_);
   if (!work_result_catalog)
     return std::unexpected(work_result_catalog.error());
   result->work_result_catalog_ = std::move(*work_result_catalog);
 
   result->observations_ = std::make_unique<storage::ObservationDataset>(
-      result->blobs_, *result->observation_catalog_, *header);
+      *result->blobs_, *result->observation_catalog_, *header);
   result->torrents_ = std::make_unique<storage::TorrentDataset>(
-      result->blobs_, *result->torrent_catalog_, *header);
+      *result->blobs_, *result->torrent_catalog_, *header);
   result->work_results_ =
       std::make_unique<integration::CanonicalWorkResultInbox>(
-          result->blobs_, *result->work_result_catalog_, *header);
+          *result->blobs_, *result->work_result_catalog_, *header);
   result->observation_results_ =
       std::make_unique<integration::CanonicalObservationResultPublisher>(
-          result->blobs_, *result->observation_catalog_, *header);
+          *result->blobs_, *result->observation_catalog_, *header);
   result->torrent_metadata_results_ =
       std::make_unique<integration::CanonicalTorrentMetadataResultPublisher>(
           *result->torrents_);
@@ -261,7 +284,7 @@ LocalCanonicalStorage::compact(LocalDataset dataset) {
   if (dataset == LocalDataset::WorkResults)
     return work_results_->compact(compaction_policy_);
   return storage::RowV1DatasetMaintenance::compact(
-      blobs_, *observation_catalog_, compaction_policy_);
+      *blobs_, *observation_catalog_, compaction_policy_);
 }
 
 core::Result<storage::RetentionResult>
@@ -275,7 +298,7 @@ LocalCanonicalStorage::retain_observations(core::Timestamp now) {
       std::chrono::duration_cast<core::Timestamp::duration>(
           retention_configuration_.observation_max_age);
   return storage::RowV1DatasetMaintenance::retain_unkeyed(
-      blobs_, *observation_catalog_,
+      *blobs_, *observation_catalog_,
       storage::RetentionPolicy{
           .cold_before = now - cold_age,
           .expire_before = now - maximum_age,
@@ -291,12 +314,12 @@ core::Result<storage::VerifyResult>
 LocalCanonicalStorage::verify(LocalDataset dataset) {
   switch (dataset) {
   case LocalDataset::Observations:
-    return storage::RowV1DatasetMaintenance::verify(blobs_,
+    return storage::RowV1DatasetMaintenance::verify(*blobs_,
                                                     *observation_catalog_);
   case LocalDataset::Torrents:
-    return storage::RowV1DatasetMaintenance::verify(blobs_, *torrent_catalog_);
+    return storage::RowV1DatasetMaintenance::verify(*blobs_, *torrent_catalog_);
   case LocalDataset::WorkResults:
-    return storage::RowV1DatasetMaintenance::verify(blobs_,
+    return storage::RowV1DatasetMaintenance::verify(*blobs_,
                                                     *work_result_catalog_);
   }
   std::unreachable();
