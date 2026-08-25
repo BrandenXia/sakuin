@@ -64,7 +64,7 @@ jobs:
             --sh=/usr/lib/llvm-20/bin/clang++ \
             --sdk=/usr/lib/llvm-20 --runtimes=c++_shared \
             --sakuin_version="${release_version}"
-          xmake build --yes --jobs=1 llvm-backfill-import-repro
+          xmake build --yes --jobs=1 llvm-storage-stub-repro
 
       - name: Smoke-test the command line
         if: false

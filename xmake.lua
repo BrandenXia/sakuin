@@ -147,6 +147,14 @@ target("llvm-backfill-import-repro")
   add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
            "sakuin-model-codecs", "sakuin-dht")
 
+target("llvm-storage-stub-repro")
+  set_kind("static")
+  add_files("repro/stream.cppm", {public = true})
+  add_files("repro/torrents.cppm", {public = true})
+  add_files("src/integration/metadata_backfill.cppm", {public = true})
+  add_files("src/integration/dht_runtime.cppm", {public = true})
+  add_deps("sakuin-core", "sakuin-model", "sakuin-dht")
+
 target("sakuin-service")
   set_kind("static")
   add_files("src/service/**.cpp")
