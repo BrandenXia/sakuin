@@ -245,7 +245,8 @@ The daemon exposes it through the authenticated status response and the bounded
 The public `/openapi.json` route serves a process-cached OpenAPI 3.1 document
 for the native JSON endpoints. It describes bearer authentication and required
 Sakuin permissions without embedding credentials. Torznab stays outside that
-document because its XML discovery and capability contract is `/api?t=caps`.
+document because its XML discovery and capability contract is
+`/torznab/api?t=caps`.
 
 The unauthenticated `/v1/health` route is a narrow HTTP liveness probe.
 `/v1/ready` reports success only after the service state is running and every
@@ -263,15 +264,26 @@ The HTTP request only signals the maintenance coordinator and returns `202`;
 compaction, retention, garbage collection, and verification remain serialized
 on the maintenance owner thread rather than blocking an Asio request thread.
 
-The `/api` compatibility route implements Torznab capabilities and UTF-8
-XML/RSS search responses. Semantic classifications map to the advertised
-Movies, TV, Audio, PC, Books, XXX, and Other category families. Applications
-use PC while games use its standard Games subcategory. Generic and specialized
-movie, TV, music/audio, and book searches apply category filters
-inside the derived index before totals and pagination. Unknown category IDs are
-ignored as Torznab specifies; a request containing only unknown IDs is empty.
-Results use magnet links because the canonical store retains decoded torrent
-metadata rather than downloadable `.torrent` payloads.
+The `/torznab/api` compatibility route implements Torznab capabilities and
+UTF-8 XML/RSS search responses; `/api` remains a legacy alias. Semantic
+classifications map to the advertised Movies, TV, Audio, PC, Books, XXX, and
+Other category families. Applications use PC while games use its standard
+Games subcategory. Generic and specialized movie, TV, music/audio, and book
+searches apply category filters inside the derived index before totals and
+pagination. Unknown category IDs are ignored as Torznab specifies; a request
+containing only unknown IDs is empty. Results use magnet links because the
+canonical store retains decoded torrent metadata rather than downloadable
+`.torrent` payloads.
+
+The advertised category set is part of the compatibility contract: every
+category emitted in an item must also appear in the capabilities document.
+This matters for clients such as Prowlarr, which build a tracker-to-standard
+category map from `t=caps` and retain that map in memory. Sakuin versions before
+classification advertised only Other, so a Prowlarr process that cached those
+old capabilities can temporarily map `8000` while dropping newer category IDs.
+Using the canonical `/torznab/api` path instead of the legacy `/api` alias
+changes the client-side cache identity and forces capability discovery; a
+Prowlarr restart has the same effect.
 
 Classification is a deterministic, rebuildable projection over torrent names,
 file paths, sizes, and layout. It records a semantic content kind, confidence,
