@@ -263,6 +263,8 @@ std::string_view name(classification::EvidenceCode value) {
     return "application_token";
   case FuzzySemanticToken:
     return "fuzzy_semantic_token";
+  case LearnedContentModel:
+    return "learned_content_model";
   case AdultToken:
     return "adult_token";
   case AnimeToken:

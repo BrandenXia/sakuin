@@ -606,15 +606,18 @@ core::Result<void> parse_indexing(const toml::table &table,
     return {};
   if (auto checked = check_keys(
           **classification,
-          {"enabled", "adult_detection_enabled", "adult_content_policy",
-           "adult_minimum_confidence", "maximum_files_to_inspect",
-           "maximum_path_bytes", "maximum_tokens"},
+          {"enabled", "learned_fallback_enabled", "adult_detection_enabled",
+           "adult_content_policy", "adult_minimum_confidence",
+           "maximum_files_to_inspect", "maximum_path_bytes", "maximum_tokens"},
           "indexing.classification.");
       !checked)
     return checked;
   for (auto result :
        {scalar<bool>(**classification, "enabled",
                      "indexing.classification.enabled", overlay),
+        scalar<bool>(**classification, "learned_fallback_enabled",
+                     "indexing.classification.learned_fallback_enabled",
+                     overlay),
         scalar<bool>(**classification, "adult_detection_enabled",
                      "indexing.classification.adult_detection_enabled",
                      overlay),
@@ -988,6 +991,8 @@ core::Result<ConfigOverlay> environment_overlay(
       {"SAKUIN_DUPLICATE_INDEX_ENABLED", "indexing.duplicates.enabled"},
       {"SAKUIN_DUPLICATE_INDEX_INTERVAL_MS", "indexing.duplicates.interval_ms"},
       {"SAKUIN_CLASSIFICATION_ENABLED", "indexing.classification.enabled"},
+      {"SAKUIN_CLASSIFICATION_LEARNED_FALLBACK_ENABLED",
+       "indexing.classification.learned_fallback_enabled"},
       {"SAKUIN_CLASSIFICATION_ADULT_DETECTION_ENABLED",
        "indexing.classification.adult_detection_enabled"},
       {"SAKUIN_CLASSIFICATION_ADULT_CONTENT_POLICY",

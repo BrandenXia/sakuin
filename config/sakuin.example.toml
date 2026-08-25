@@ -126,6 +126,11 @@ interval_ms = 300000
 
 [indexing.classification]
 enabled = true
+# A bounded local model learns only content kind from high-confidence
+# deterministic results, then fills remaining metadata-complete unknown or
+# ambiguous cases. It never learns sensitive labels or overrides a classified
+# deterministic result.
+learned_fallback_enabled = true
 # Detection only assigns a label; it does not hide results. Visibility remains
 # an explicit include/exclude/only policy and defaults to including everything.
 adult_detection_enabled = true

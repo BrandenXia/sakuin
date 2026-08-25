@@ -115,7 +115,7 @@ int main() {
       record("Softwrae Bundle", {FileRecord{"payload.bin", 120'000'000}}));
   if (fuzzy_application.kind != ContentKind::Application ||
       fuzzy_application.kind_confidence != Confidence::Low ||
-      fuzzy_application.algorithm_version != 2 ||
+      fuzzy_application.algorithm_version != 3 ||
       !std::ranges::contains(
           fuzzy_application.evidence,
           sakuin::classification::EvidenceCode::FuzzySemanticToken,

@@ -364,6 +364,25 @@ state, kind, and label. These counts describe regression coverage only; the
 hand-curated cases are not presented as population accuracy, precision, or
 recall measurements.
 
+An optional learned content-kind fallback complements those rules without
+replacing them. During each derived search rebuild, Sakuin trains a bounded
+multinomial Naive Bayes model from the same node's high-confidence deterministic
+results. Candidate features and per-record extraction are capped, low-support
+features are discarded, the final vocabulary is bounded, and a kind needs a
+minimum local training set before it is eligible. Uniform kind priors prevent
+the most common local media kind from winning solely because it is common.
+
+The learned stage runs only for records that contain metadata and remain
+`Unknown` or `Ambiguous` after deterministic classification. Accepted
+predictions require both posterior and margin thresholds, are capped at Medium
+confidence, and carry `learned_content_model` evidence. Deterministic
+`Classified` results are authoritative. Adult and Anime labels, resolution, and
+all operator visibility policy remain deterministic and are never learned or
+overridden. The model is disposable derived state rebuilt from canonical
+torrent metadata; no model artifact becomes a source of truth. Status and
+metrics expose whether it is ready, its training/vocabulary coverage, and how
+many current records use it.
+
 API credentials live in a separate operational store. The CLI generates the
 secret once and persists a salted verifier, owner-only pepper, and permission
 set. Writes are locked and atomically replaced. Credentials can be created,

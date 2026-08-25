@@ -194,6 +194,12 @@ target("sakuin-classification-tests")
   add_deps("sakuin-core", "sakuin-model", "sakuin-classification")
   add_tests("classification")
 
+target("sakuin-learned-classification-tests")
+  set_kind("binary")
+  add_files("tests/classification/learned.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-classification")
+  add_tests("learned-classification")
+
 target("sakuin-classifier-eval")
   set_kind("binary")
   add_files("tools/classifier_eval.cpp")

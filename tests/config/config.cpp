@@ -109,6 +109,7 @@ interval_ms = 120000
 
 [indexing.classification]
 enabled = true
+learned_fallback_enabled = true
 adult_detection_enabled = true
 adult_content_policy = "only"
 adult_minimum_confidence = "medium"
@@ -224,6 +225,8 @@ tls_server_name = "coordinator.internal"
                 std::string{"60000"}},
       std::pair{std::string{"SAKUIN_CLASSIFICATION_ADULT_CONTENT_POLICY"},
                 std::string{"exclude"}},
+      std::pair{std::string{"SAKUIN_CLASSIFICATION_LEARNED_FALLBACK_ENABLED"},
+                std::string{"false"}},
       std::pair{std::string{"SAKUIN_CLASSIFICATION_ADULT_MINIMUM_CONFIDENCE"},
                 std::string{"low"}},
       std::pair{std::string{"SAKUIN_DISTRIBUTED_MAXIMUM_WORK_ITEMS"},
@@ -338,6 +341,7 @@ tls_server_name = "coordinator.internal"
       !loaded.indexing.duplicates.enabled ||
       loaded.indexing.duplicates.interval != std::chrono::minutes{1} ||
       !loaded.indexing.classification.enabled ||
+      loaded.indexing.classification.learned_fallback_enabled ||
       !loaded.indexing.classification.adult_detection_enabled ||
       loaded.indexing.classification.adult_content_policy !=
           config::AdultContentPolicy::Exclude ||

@@ -139,6 +139,11 @@ operator setting and defaults to including every result. Native JSON search
 also returns bounded rule evidence so classifications can be audited.
 Strong content-kind hints tolerate simple one-character misspellings out of the
 box, while sensitive labels remain exact-token-only.
+For metadata-complete results that deterministic rules still leave unknown or
+ambiguous, an enabled-by-default local learned fallback adapts to recurring
+content-kind vocabulary in the node's own high-confidence records. Its
+predictions are conservative and auditable; it never learns sensitive labels,
+changes Adult visibility, or overrides a deterministic classified result.
 For classifier review workflows, `/v1/search` can filter by exact state and
 kind, minimum confidence, and required labels; the published OpenAPI document
 lists the accepted values. These facets never bypass the operator's Adult

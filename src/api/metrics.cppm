@@ -397,6 +397,37 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "gauge");
     sample(output, "sakuin_classification_adult_labeled_records", {},
            status.search_classification.adult_labeled);
+    metadata(output, "sakuin_classification_learned_enabled",
+             "Whether the learned content-kind fallback is enabled.", "gauge");
+    sample(output, "sakuin_classification_learned_enabled", {},
+           status.search_classification.learned_enabled ? 1 : 0);
+    metadata(output, "sakuin_classification_learned_ready",
+             "Whether the local learned model has enough training coverage.",
+             "gauge");
+    sample(output, "sakuin_classification_learned_ready", {},
+           status.search_classification.learned_ready ? 1 : 0);
+    metadata(output, "sakuin_classification_learned_training_records",
+             "High-confidence deterministic records used to train the local "
+             "content-kind model.",
+             "gauge");
+    sample(output, "sakuin_classification_learned_training_records", {},
+           status.search_classification.learned_training_records);
+    metadata(output, "sakuin_classification_learned_classified_records",
+             "Current records whose content kind was supplied by the learned "
+             "fallback.",
+             "gauge");
+    sample(output, "sakuin_classification_learned_classified_records", {},
+           status.search_classification.learned_classified_records);
+    metadata(output, "sakuin_classification_learned_eligible_kinds",
+             "Content kinds with enough examples in the local learned model.",
+             "gauge");
+    sample(output, "sakuin_classification_learned_eligible_kinds", {},
+           status.search_classification.learned_eligible_kinds);
+    metadata(output, "sakuin_classification_learned_vocabulary_size",
+             "Bounded feature vocabulary size of the local learned model.",
+             "gauge");
+    sample(output, "sakuin_classification_learned_vocabulary_size", {},
+           status.search_classification.learned_vocabulary_size);
     metadata(output, "sakuin_classification_category_records",
              "Current search-index records by semantic category.", "gauge");
     for (std::size_t index = 0; index < search::MediaCategoryCount; ++index) {
