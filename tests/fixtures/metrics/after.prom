@@ -1,0 +1,7 @@
+# TYPE sakuin_dht_observations_stored_total counter
+sakuin_dht_observations_stored_total{family="ipv4"} 130
+sakuin_dht_metadata_fetches_succeeded_total{family="ipv4"} 2
+sakuin_dht_metadata_fetch_failures_total{family="ipv4",outcome="retryable"} 5
+sakuin_dht_metadata_sink_succeeded_total{family="ipv4"} 1
+sakuin_dht_metadata_sink_failures_total{family="ipv4"} 1
+sakuin_dht_metadata_backlog{family="ipv4"} 4
