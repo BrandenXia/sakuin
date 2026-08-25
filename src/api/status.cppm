@@ -22,12 +22,23 @@ struct DhtFamilyStatus {
   std::uint64_t observations_stored{};
   std::uint64_t metadata_candidates_accepted{};
   std::uint64_t routing_probes_accepted{};
+  std::uint64_t discovery_queries_started{};
+  std::uint64_t inbound_messages{};
+  std::uint64_t inbound_queries{};
+  std::uint64_t inbound_ping_queries{};
+  std::uint64_t inbound_find_node_queries{};
+  std::uint64_t inbound_get_peers_queries{};
+  std::uint64_t inbound_announce_peer_queries{};
+  std::uint64_t inbound_unknown_queries{};
+  std::uint64_t inbound_responses{};
+  std::uint64_t inbound_protocol_errors{};
   std::uint64_t queries_expired{};
   std::uint64_t datagrams_attempted{};
   std::uint64_t datagrams_accepted{};
   std::uint64_t datagrams_failed{};
   std::size_t routing_nodes{};
   std::size_t outstanding_queries{};
+  std::size_t discovery_in_flight{};
   std::size_t pending_actions{};
   std::size_t metadata_queued{};
   std::size_t metadata_in_flight{};
@@ -35,6 +46,7 @@ struct DhtFamilyStatus {
   std::size_t bootstrap_candidates{};
   std::optional<bool> bootstrap_complete;
   std::optional<std::int64_t> last_cycle_ms;
+  std::optional<std::int64_t> last_inbound_query_ms;
   std::optional<std::int64_t> last_error_ms;
   std::optional<std::string> last_error;
 };
@@ -82,12 +94,23 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
       {"observations_stored", family.observations_stored},
       {"metadata_candidates_accepted", family.metadata_candidates_accepted},
       {"routing_probes_accepted", family.routing_probes_accepted},
+      {"discovery_queries_started", family.discovery_queries_started},
+      {"inbound_messages", family.inbound_messages},
+      {"inbound_queries", family.inbound_queries},
+      {"inbound_ping_queries", family.inbound_ping_queries},
+      {"inbound_find_node_queries", family.inbound_find_node_queries},
+      {"inbound_get_peers_queries", family.inbound_get_peers_queries},
+      {"inbound_announce_peer_queries", family.inbound_announce_peer_queries},
+      {"inbound_unknown_queries", family.inbound_unknown_queries},
+      {"inbound_responses", family.inbound_responses},
+      {"inbound_protocol_errors", family.inbound_protocol_errors},
       {"queries_expired", family.queries_expired},
       {"datagrams_attempted", family.datagrams_attempted},
       {"datagrams_accepted", family.datagrams_accepted},
       {"datagrams_failed", family.datagrams_failed},
       {"routing_nodes", family.routing_nodes},
       {"outstanding_queries", family.outstanding_queries},
+      {"discovery_in_flight", family.discovery_in_flight},
       {"pending_actions", family.pending_actions},
       {"metadata_queued", family.metadata_queued},
       {"metadata_in_flight", family.metadata_in_flight},
@@ -99,6 +122,10 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
   result["last_cycle_ms"] = family.last_cycle_ms
                                 ? nlohmann::json(*family.last_cycle_ms)
                                 : nlohmann::json(nullptr);
+  result["last_inbound_query_ms"] =
+      family.last_inbound_query_ms
+          ? nlohmann::json(*family.last_inbound_query_ms)
+          : nlohmann::json(nullptr);
   result["last_error_ms"] = family.last_error_ms
                                 ? nlohmann::json(*family.last_error_ms)
                                 : nlohmann::json(nullptr);

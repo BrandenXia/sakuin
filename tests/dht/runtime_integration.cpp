@@ -379,10 +379,15 @@ int main() {
               .info_hash = wanted,
               .peer = {.address = peer_address, .port = 51'413},
               .observed_at = observed_at},
-      .observed_address = dht::ObservedAddressReport{
-          .reporter = {.address = peer_address, .port = 6'881},
-          .observed = {.address = runtime::IpAddress::loopback_v4(),
-                       .port = 6'881}}};
+      .observed_address =
+          dht::ObservedAddressReport{
+              .reporter = {.address = peer_address, .port = 6'881},
+              .observed = {.address = runtime::IpAddress::loopback_v4(),
+                           .port = 6'881}},
+      .inbound_message = dht::InboundMessageReport{
+          .type = dht::InboundMessageType::Query,
+          .query_kind = dht::krpc::QueryKind::GetPeers,
+          .received_at = observed_at}};
   std::thread producer{[&] {
     (*pump)->on_actions(std::move(actions));
     (*pump)->on_error(core::Error{core::ErrorCode::QuotaExceeded,
@@ -396,6 +401,9 @@ int main() {
   auto first = (*pump)->poll(now);
   if (first.observations_stored != 0 ||
       first.metadata_candidates_accepted != 1 || first.actions.size() != 1 ||
+      first.inbound_messages != 1 || first.inbound_queries != 1 ||
+      first.inbound_get_peers_queries != 1 ||
+      first.last_inbound_query != observed_at ||
       !first.actions.front().observed_address || first.errors.size() != 2 ||
       controller->get()->in_flight() != 1 || !factory.last ||
       !factory.last->started || (*pump)->pending() != 1 ||
@@ -405,6 +413,7 @@ int main() {
   auto second = (*pump)->poll(now + std::chrono::seconds{1});
   if (second.observations_stored != 1 ||
       second.metadata_candidates_accepted != 0 || !second.actions.empty() ||
+      second.inbound_messages != 0 || second.inbound_queries != 0 ||
       !second.errors.empty() || observations.records.size() != 1 ||
       observations.records.front().info_hash != wanted ||
       (*pump)->pending() != 0)

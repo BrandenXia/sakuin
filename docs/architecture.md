@@ -168,13 +168,23 @@ A fresh public node needs at least one contact before it can bootstrap
 proactively. Explicit TOML, environment, and command-line contacts take
 precedence. When they are absent, Sakuin may load one `host:port` entry per
 line from a standalone bootstrap file; release bundles provide an initial
-public-router list that operators can replace. If no list is available, the
-node warns and permits passive discovery.
+public-router list that operators can replace. After bootstrap, a bounded
+routing-discovery planner periodically issues `find_node` queries toward
+rotating Kademlia distance buckets. This expands a sparse routing table beyond
+the bootstrap routers without creating an unbounded query fan-out. If no list
+is available, the node warns and permits passive discovery.
 
 DNS absence is evaluated per address family. An IPv4-only router therefore
 does not prevent a dual-stack node from starting its IPv6 family with other
 contacts, while startup still fails when none of the configured contacts
 resolve for any enabled family.
+
+The release Compose file creates a dual-stack bridge and enables both DHT
+families by default. Docker assigns the bridge an IPv6 subnet when none is
+specified and performs the host-side forwarding for the published UDP port.
+An external Compose network must be created with IPv6 enabled separately;
+Compose cannot change the address-family settings of an existing external
+network.
 
 ## Search and duplicate indexes
 
@@ -196,9 +206,14 @@ The HTTP service exposes health, detailed operator status, Prometheus metrics,
 search, duplicate queries, and an authenticated search-refresh operation.
 Status snapshots
 aggregate DHT family cycles, bootstrap progress, datagram dispatch, derived
-index generations, materialization, and maintenance without exposing runtime
-or Asio types. Search and duplicate data is returned through domain views
-rather than exposing manifests or segment paths.
+index generations, materialization, maintenance, active routing discovery, and
+valid inbound KRPC traffic without exposing runtime or Asio types. Inbound
+query counts are split into `ping`, `find_node`, `get_peers`, `announce_peer`,
+and unknown methods; responses and protocol errors are counted separately.
+This provides direct evidence that published UDP ingress is reaching Sakuin,
+while avoiding peer-address labels and their unbounded cardinality. Search and
+duplicate data is returned through domain views rather than exposing manifests
+or segment paths.
 
 Classification observability is derived from the currently published search
 snapshot. Status exposes state and category distributions, bounded-input

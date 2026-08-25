@@ -100,6 +100,11 @@ int main() {
   status.snapshot.ipv4.routing_nodes = 13;
   status.snapshot.ipv4.metadata_in_flight = 2;
   status.snapshot.ipv4.observations_stored = 99;
+  status.snapshot.ipv4.discovery_queries_started = 17;
+  status.snapshot.ipv4.discovery_in_flight = 1;
+  status.snapshot.ipv4.inbound_queries = 12;
+  status.snapshot.ipv4.inbound_get_peers_queries = 7;
+  status.snapshot.ipv4.last_inbound_query_ms = 12'000;
   status.snapshot.ipv4.bootstrap_complete = true;
   status.snapshot.search_source_generation = 7;
   status.snapshot.search_records_indexed = 21;
@@ -300,6 +305,9 @@ int main() {
            .contains("\"version\":\"" + std::string{core::version} + "\"") ||
       !body(*operator_status).contains("\"cycles\":42") ||
       !body(*operator_status).contains("\"routing_nodes\":13") ||
+      !body(*operator_status).contains("\"inbound_queries\":12") ||
+      !body(*operator_status).contains("\"inbound_get_peers_queries\":7") ||
+      !body(*operator_status).contains("\"discovery_in_flight\":1") ||
       !body(*operator_status).contains("\"metadata_in_flight\":2") ||
       !body(*operator_status).contains("\"total_records\":2") ||
       !body(*operator_status).contains("\"adult_labeled\":0") ||
@@ -334,6 +342,15 @@ int main() {
                "sakuin_dht_observations_stored_total{family=\"ipv4\"} 99\n") ||
       !body(*operator_metrics)
            .contains("sakuin_dht_bootstrap_complete{family=\"ipv4\"} 1\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_discovery_queries_started_total{family="
+                     "\"ipv4\"} 17\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_inbound_query_methods_total{family=\"ipv4\","
+                     "method=\"get_peers\"} 7\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_last_inbound_query_timestamp_seconds{family="
+                     "\"ipv4\"} 12.000000\n") ||
       !body(*operator_metrics)
            .contains("sakuin_search_source_generation 7\n") ||
       !body(*operator_metrics)
