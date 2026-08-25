@@ -249,7 +249,12 @@ exhausted traversals per address family. Metadata backfill additionally reports
 records scanned, targets offered,
 records already carrying metadata, source generation, and whether a full scan
 is in progress. These counters distinguish a discovery bottleneck from an
-acquisition or storage bottleneck without exposing peer addresses. Inbound
+acquisition or storage bottleneck without exposing peer addresses.
+Metadata acquisition exposes attempts, verified fetches, retryable and
+permanent failures, and result/storage-sink outcomes as monotonic counters.
+Its backlog gauge is the sum of candidates queued, acquisitions in flight, and
+verified records waiting for their configured sink; the three component gauges
+remain available for locating the congested stage. Inbound
 query counts are split into `ping`, `find_node`, `get_peers`, `announce_peer`,
 and unknown methods; responses and protocol errors are counted separately.
 This provides direct evidence that published UDP ingress is reaching Sakuin,

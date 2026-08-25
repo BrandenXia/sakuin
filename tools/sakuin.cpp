@@ -100,6 +100,14 @@ public:
     status.observations_stored += cycle.poll.observations_stored;
     status.metadata_candidates_accepted +=
         cycle.poll.metadata_candidates_accepted;
+    status.metadata_attempts_started += cycle.poll.metadata_attempts_started;
+    status.metadata_fetches_succeeded += cycle.poll.metadata_fetches_succeeded;
+    status.metadata_retryable_failures +=
+        cycle.poll.metadata_retryable_failures;
+    status.metadata_permanent_failures +=
+        cycle.poll.metadata_permanent_failures;
+    status.metadata_sink_succeeded += cycle.poll.metadata_sink_succeeded;
+    status.metadata_sink_failures += cycle.poll.metadata_sink_failures;
     status.routing_probes_accepted += cycle.poll.routing_probes_accepted;
     status.discovery_queries_started += cycle.poll.discovery_queries_started;
     status.peer_discovery_queries_started +=
@@ -155,6 +163,7 @@ public:
     status.metadata_queued = cycle.poll.metadata_queued;
     status.metadata_in_flight = cycle.poll.metadata_in_flight;
     status.metadata_pending_storage = cycle.poll.metadata_pending_storage;
+    status.metadata_backlog = cycle.poll.metadata_backlog;
     if (cycle.poll.bootstrap) {
       status.bootstrap_candidates = cycle.poll.bootstrap->known_candidates;
       status.bootstrap_complete = cycle.poll.bootstrap->complete;

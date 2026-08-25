@@ -63,6 +63,18 @@ void family_samples(std::string &output, std::string_view name,
          family.observations_stored);
   sample(output, "sakuin_dht_metadata_candidates_accepted_total", labels,
          family.metadata_candidates_accepted);
+  sample(output, "sakuin_dht_metadata_attempts_started_total", labels,
+         family.metadata_attempts_started);
+  sample(output, "sakuin_dht_metadata_fetches_succeeded_total", labels,
+         family.metadata_fetches_succeeded);
+  sample(output, "sakuin_dht_metadata_fetch_failures_total",
+         labels + ",outcome=\"retryable\"", family.metadata_retryable_failures);
+  sample(output, "sakuin_dht_metadata_fetch_failures_total",
+         labels + ",outcome=\"permanent\"", family.metadata_permanent_failures);
+  sample(output, "sakuin_dht_metadata_sink_succeeded_total", labels,
+         family.metadata_sink_succeeded);
+  sample(output, "sakuin_dht_metadata_sink_failures_total", labels,
+         family.metadata_sink_failures);
   sample(output, "sakuin_dht_routing_probes_accepted_total", labels,
          family.routing_probes_accepted);
   sample(output, "sakuin_dht_discovery_queries_started_total", labels,
@@ -127,6 +139,8 @@ void family_samples(std::string &output, std::string_view name,
          family.metadata_in_flight);
   sample(output, "sakuin_dht_metadata_pending_storage", labels,
          family.metadata_pending_storage);
+  sample(output, "sakuin_dht_metadata_backlog", labels,
+         family.metadata_backlog);
   sample(output, "sakuin_dht_bootstrap_candidates", labels,
          family.bootstrap_candidates);
   if (family.bootstrap_complete)
@@ -237,6 +251,21 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "DHT observations stored in canonical storage.", "counter");
     metadata(output, "sakuin_dht_metadata_candidates_accepted_total",
              "Metadata acquisition candidates accepted.", "counter");
+    metadata(output, "sakuin_dht_metadata_attempts_started_total",
+             "Metadata acquisition attempts started.", "counter");
+    metadata(output, "sakuin_dht_metadata_fetches_succeeded_total",
+             "Metadata payloads downloaded and verified successfully.",
+             "counter");
+    metadata(output, "sakuin_dht_metadata_fetch_failures_total",
+             "Metadata acquisition failures by retry outcome.", "counter");
+    metadata(output, "sakuin_dht_metadata_sink_succeeded_total",
+             "Fetched metadata accepted by the configured result or storage "
+             "sink.",
+             "counter");
+    metadata(output, "sakuin_dht_metadata_sink_failures_total",
+             "Fetched metadata delivery attempts rejected by the configured "
+             "result or storage sink.",
+             "counter");
     metadata(output, "sakuin_dht_routing_probes_accepted_total",
              "Routing probes accepted.", "counter");
     metadata(output, "sakuin_dht_discovery_queries_started_total",
@@ -305,7 +334,12 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
     metadata(output, "sakuin_dht_metadata_in_flight",
              "Metadata acquisitions currently in flight.", "gauge");
     metadata(output, "sakuin_dht_metadata_pending_storage",
-             "Acquired metadata waiting for canonical storage.", "gauge");
+             "Acquired metadata waiting for the configured result or storage "
+             "sink.",
+             "gauge");
+    metadata(output, "sakuin_dht_metadata_backlog",
+             "Metadata work queued, in flight, or waiting for its sink.",
+             "gauge");
     metadata(output, "sakuin_dht_bootstrap_candidates",
              "Known bootstrap candidates.", "gauge");
     metadata(output, "sakuin_dht_bootstrap_complete",
