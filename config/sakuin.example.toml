@@ -43,6 +43,17 @@ maximum_queued_write_bytes = 1048576
 storage_conflict_attempts = 3
 storage_retry_delay_ms = 1000
 
+[network.dht.metadata.discovery]
+# Actively locate peers for observed infohashes instead of waiting for an
+# announce_peer query to reveal one. The defaults bound DHT traffic while
+# substantially improving metadata coverage on a normally connected node.
+enabled = true
+maximum_pending = 8192
+maximum_in_flight = 16
+parallelism_per_hash = 3
+maximum_queries_per_hash = 24
+retry_delay_ms = 300000
+
 [network.traffic]
 window_ms = 3600000
 # Remote workers reserve quota in bounded chunks to avoid a coordinator round

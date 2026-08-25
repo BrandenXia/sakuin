@@ -102,6 +102,10 @@ public:
         cycle.poll.metadata_candidates_accepted;
     status.routing_probes_accepted += cycle.poll.routing_probes_accepted;
     status.discovery_queries_started += cycle.poll.discovery_queries_started;
+    status.peer_discovery_queries_started +=
+        cycle.poll.peer_discovery_queries_started;
+    status.peer_discovery_peers_found += cycle.poll.peer_discovery_peers_found;
+    status.peer_discovery_exhausted += cycle.poll.peer_discovery_exhausted;
     status.inbound_messages += cycle.poll.inbound_messages;
     status.inbound_queries += cycle.poll.inbound_queries;
     status.inbound_ping_queries += cycle.poll.inbound_ping_queries;
@@ -125,6 +129,10 @@ public:
     status.outstanding_queries = cycle.poll.outstanding_queries;
     status.discovery_in_flight =
         cycle.poll.discovery ? cycle.poll.discovery->in_flight : 0;
+    status.peer_discovery_pending =
+        cycle.poll.peer_discovery ? cycle.poll.peer_discovery->pending : 0;
+    status.peer_discovery_in_flight =
+        cycle.poll.peer_discovery ? cycle.poll.peer_discovery->in_flight : 0;
     status.pending_actions = cycle.poll.pending_actions;
     status.metadata_queued = cycle.poll.metadata_queued;
     status.metadata_in_flight = cycle.poll.metadata_in_flight;

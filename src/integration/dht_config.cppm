@@ -10,6 +10,7 @@ import sakuin.dht.bootstrap;
 import sakuin.dht.identity;
 import sakuin.dht.krpc;
 import sakuin.dht.node;
+import sakuin.dht.peer_discovery;
 import sakuin.dht.routing_maintenance;
 import sakuin.runtime.datagram;
 
@@ -22,6 +23,8 @@ dht::BootstrapOptions
 bootstrap_options(const config::DhtConfig &config) noexcept;
 dht::RoutingMaintenanceOptions routing_maintenance_options(
     const config::RoutingMaintenanceConfig &config) noexcept;
+dht::PeerDiscoveryOptions
+peer_discovery_options(const config::MetadataDiscoveryConfig &config) noexcept;
 std::optional<dht::Bep42IdentityPolicyOptions>
 bep42_identity_policy_options(const config::DhtIdentityConfig &config) noexcept;
 core::Result<dht::krpc::NodeId>
@@ -88,6 +91,15 @@ dht::RoutingMaintenanceOptions routing_maintenance_options(
   return {.maximum_queued = config.maximum_queued,
           .maximum_in_flight = config.maximum_in_flight,
           .maximum_attempts = config.maximum_attempts,
+          .retry_delay = config.retry_delay};
+}
+
+dht::PeerDiscoveryOptions
+peer_discovery_options(const config::MetadataDiscoveryConfig &config) noexcept {
+  return {.maximum_pending = config.maximum_pending,
+          .maximum_in_flight = config.maximum_in_flight,
+          .parallelism_per_hash = config.parallelism_per_hash,
+          .maximum_queries_per_hash = config.maximum_queries_per_hash,
           .retry_delay = config.retry_delay};
 }
 
