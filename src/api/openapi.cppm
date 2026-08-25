@@ -302,7 +302,7 @@ core::Result<core::ByteBuffer> openapi_document() {
         "type": "object",
         "required": ["code", "subject", "weight"],
         "properties": {
-          "code": {"type": "string", "enum": ["video_payload_dominant", "audio_payload_dominant", "ebook_payload_dominant", "game_payload_dominant", "application_payload_dominant", "multiple_payload_families", "single_dominant_video", "season_episode_token", "release_year_token", "music_release_token", "audiobook_token", "ebook_token", "game_token", "application_token", "fuzzy_semantic_token", "adult_token", "anime_token", "resolution_token"]},
+          "code": {"type": "string", "enum": ["video_payload_dominant", "audio_payload_dominant", "ebook_payload_dominant", "game_payload_dominant", "application_payload_dominant", "multiple_payload_families", "single_dominant_video", "season_episode_token", "release_year_token", "music_release_token", "audiobook_token", "ebook_token", "game_token", "application_token", "fuzzy_semantic_token", "learned_content_model", "adult_token", "anime_token", "resolution_token"]},
           "subject": {"type": "string", "enum": ["movie", "series", "music", "audiobook", "ebook", "game", "application", "mixed", "adult", "anime", "resolution"]},
           "weight": {"type": "integer"}
         }
@@ -355,7 +355,7 @@ core::Result<core::ByteBuffer> openapi_document() {
       },
       "ClassificationIndexStats": {
         "type": "object",
-        "required": ["enabled", "algorithm_version", "total_records", "states", "input_truncated", "adult_labeled", "categories"],
+        "required": ["enabled", "algorithm_version", "total_records", "states", "input_truncated", "adult_labeled", "learned", "categories"],
         "properties": {
           "enabled": {"type": "boolean"},
           "algorithm_version": {"type": "integer", "minimum": 1},
@@ -373,6 +373,19 @@ core::Result<core::ByteBuffer> openapi_document() {
           },
           "input_truncated": {"type": "integer", "minimum": 0},
           "adult_labeled": {"type": "integer", "minimum": 0},
+          "learned": {
+            "type": "object",
+            "required": ["enabled", "ready", "training_records", "classified_records", "eligible_kinds", "vocabulary_size"],
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {"type": "boolean"},
+              "ready": {"type": "boolean"},
+              "training_records": {"type": "integer", "minimum": 0},
+              "classified_records": {"type": "integer", "minimum": 0},
+              "eligible_kinds": {"type": "integer", "minimum": 0},
+              "vocabulary_size": {"type": "integer", "minimum": 0}
+            }
+          },
           "categories": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}
         }
       },

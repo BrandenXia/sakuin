@@ -164,6 +164,7 @@ search::SearchClassificationOptions search_classification_options(
                              configuration.maximum_files_to_inspect,
                          .maximum_path_bytes = configuration.maximum_path_bytes,
                          .maximum_tokens = configuration.maximum_tokens},
+          .learned = {.enabled = configuration.learned_fallback_enabled},
           .adult_minimum = adult_minimum};
 }
 

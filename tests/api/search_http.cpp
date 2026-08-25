@@ -176,6 +176,7 @@ int main() {
                                "\"") ||
       !body(*openapi).contains("\"/v1/search\"") ||
       !body(*openapi).contains("\"classification_state\"") ||
+      !body(*openapi).contains("learned_content_model") ||
       !body(*openapi).contains("\"minimum_label_confidence\"") ||
       !body(*openapi).contains("payload_layout_v1") ||
       !body(*openapi).contains("\"bearerAuth\"") ||
@@ -486,6 +487,8 @@ int main() {
       !body(*operator_status).contains("\"total_records\":2") ||
       !body(*operator_status).contains("\"adult_labeled\":0") ||
       !body(*operator_status).contains("\"movie\":1") ||
+      !body(*operator_status).contains("\"learned\":{") ||
+      !body(*operator_status).contains("\"training_records\":1") ||
       !body(*operator_status).contains("\"last_error\":null") ||
       body(*operator_status).contains("\"last_error\":[null]") ||
       !body(*operator_status).contains("\"state\":\"running\""))
@@ -556,6 +559,12 @@ int main() {
            .contains("sakuin_search_records_indexed_total 21\n"))
     return 24;
   if (!body(*operator_metrics).contains("sakuin_classification_enabled 1\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_classification_learned_enabled 1\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_classification_learned_ready 0\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_classification_learned_training_records 1\n") ||
       !body(*operator_metrics)
            .contains("sakuin_classification_adult_labeled_records 0\n") ||
       !body(*operator_metrics)

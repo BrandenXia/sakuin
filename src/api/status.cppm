@@ -239,6 +239,13 @@ classification_json(const search::ClassificationIndexStats &classification) {
             {"unknown", classification.state_count(Unknown)}}},
           {"input_truncated", classification.input_truncated},
           {"adult_labeled", classification.adult_labeled},
+          {"learned",
+           {{"enabled", classification.learned_enabled},
+            {"ready", classification.learned_ready},
+            {"training_records", classification.learned_training_records},
+            {"classified_records", classification.learned_classified_records},
+            {"eligible_kinds", classification.learned_eligible_kinds},
+            {"vocabulary_size", classification.learned_vocabulary_size}}},
           {"categories", std::move(categories)}};
 }
 
