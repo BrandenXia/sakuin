@@ -134,6 +134,12 @@ target("llvm-peer-discovery-repro")
   add_files("repro/runtime.cppm", {public = true})
   add_deps("sakuin-dht")
 
+target("llvm-dht-runtime-stub-repro")
+  set_kind("static")
+  add_files("repro/metadata_backfill.cppm", {public = true})
+  add_files("src/integration/dht_runtime.cppm", {public = true})
+  add_deps("sakuin-dht")
+
 target("sakuin-service")
   set_kind("static")
   add_files("src/service/**.cpp")
