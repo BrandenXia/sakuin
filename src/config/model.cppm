@@ -21,6 +21,14 @@ struct DhtIdentityConfig {
   std::optional<std::string> fixed_ipv6_node_id;
 };
 
+struct MetadataDiscoveryBackfillConfig {
+  bool enabled{true};
+  std::size_t maximum_records_per_poll{256};
+  core::Duration refresh_interval{std::chrono::minutes{1}};
+  core::Duration full_rescan_interval{std::chrono::minutes{30}};
+  core::Duration retry_delay{std::chrono::seconds{1}};
+};
+
 struct MetadataDiscoveryConfig {
   bool enabled{true};
   std::size_t maximum_pending{8'192};
@@ -28,6 +36,7 @@ struct MetadataDiscoveryConfig {
   std::size_t parallelism_per_hash{3};
   std::size_t maximum_queries_per_hash{24};
   core::Duration retry_delay{std::chrono::minutes{5}};
+  MetadataDiscoveryBackfillConfig backfill;
 };
 
 struct MetadataAcquisitionConfig {
@@ -473,14 +482,12 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.network.dht.metadata.discovery.maximum_pending = *value;
-    } else if (name ==
-               "network.dht.metadata.discovery.maximum_in_flight") {
+    } else if (name == "network.dht.metadata.discovery.maximum_in_flight") {
       auto value = unsigned_value<std::size_t>(text, name);
       if (!value)
         return std::unexpected(value.error());
       config.network.dht.metadata.discovery.maximum_in_flight = *value;
-    } else if (name ==
-               "network.dht.metadata.discovery.parallelism_per_hash") {
+    } else if (name == "network.dht.metadata.discovery.parallelism_per_hash") {
       auto value = unsigned_value<std::size_t>(text, name);
       if (!value)
         return std::unexpected(value.error());
@@ -491,12 +498,42 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.network.dht.metadata.discovery.maximum_queries_per_hash = *value;
-    } else if (name ==
-               "network.dht.metadata.discovery.retry_delay_ms") {
+    } else if (name == "network.dht.metadata.discovery.retry_delay_ms") {
       auto value = duration_ms(text, name);
       if (!value)
         return std::unexpected(value.error());
       config.network.dht.metadata.discovery.retry_delay = *value;
+    } else if (name == "network.dht.metadata.discovery.backfill.enabled") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.discovery.backfill.enabled = *value;
+    } else if (name == "network.dht.metadata.discovery.backfill.maximum_"
+                       "records_per_poll") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.discovery.backfill.maximum_records_per_poll =
+          *value;
+    } else if (name ==
+               "network.dht.metadata.discovery.backfill.refresh_interval_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.discovery.backfill.refresh_interval = *value;
+    } else if (name == "network.dht.metadata.discovery.backfill.full_rescan_"
+                       "interval_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.discovery.backfill.full_rescan_interval =
+          *value;
+    } else if (name ==
+               "network.dht.metadata.discovery.backfill.retry_delay_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.network.dht.metadata.discovery.backfill.retry_delay = *value;
     } else if (name == "network.traffic.window_ms") {
       auto value = duration_ms(text, name);
       if (!value)
@@ -1026,6 +1063,14 @@ core::Result<void> validate(const AppConfig &config) {
       metadata_discovery.retry_delay <= core::Duration::zero())
     return std::unexpected(
         invalid("DHT active metadata-discovery limits are invalid"));
+  const auto &metadata_backfill = metadata_discovery.backfill;
+  if (metadata_backfill.maximum_records_per_poll == 0 ||
+      metadata_backfill.maximum_records_per_poll > 1'000'000 ||
+      metadata_backfill.refresh_interval <= core::Duration::zero() ||
+      metadata_backfill.full_rescan_interval <= core::Duration::zero() ||
+      metadata_backfill.retry_delay <= core::Duration::zero())
+    return std::unexpected(
+        invalid("DHT metadata-discovery backfill limits are invalid"));
   if (config.network.traffic.window <= core::Duration::zero() ||
       (config.network.traffic.inbound_bytes == 0) ||
       (config.network.traffic.outbound_bytes == 0) ||

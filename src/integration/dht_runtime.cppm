@@ -15,6 +15,7 @@ import sakuin.dht.peer_discovery;
 import sakuin.dht.routing;
 import sakuin.dht.routing_maintenance;
 import sakuin.dht.runtime;
+import sakuin.integration.metadata_backfill;
 
 export namespace sakuin::integration {
 
@@ -27,6 +28,7 @@ struct DhtRuntimePoll {
   std::optional<dht::RoutingMaintenanceStep> routing;
   std::optional<dht::RoutingDiscoveryStep> discovery;
   std::optional<dht::PeerDiscoveryStep> peer_discovery;
+  std::optional<MetadataDiscoveryBackfillStep> metadata_backfill;
   std::optional<dht::BootstrapStep> bootstrap;
   // Remains set until the service owner successfully replaces this family's
   // node/runtime and commits the address on the identity policy.
@@ -40,6 +42,9 @@ struct DhtRuntimePoll {
   std::size_t peer_discovery_queries_started{};
   std::size_t peer_discovery_peers_found{};
   std::size_t peer_discovery_exhausted{};
+  std::size_t metadata_backfill_records_scanned{};
+  std::size_t metadata_backfill_targets_offered{};
+  std::size_t metadata_backfill_records_with_metadata{};
   std::size_t inbound_messages{};
   std::size_t inbound_queries{};
   std::size_t inbound_ping_queries{};
@@ -69,6 +74,7 @@ struct DhtRuntimeActionPumpServices {
   dht::RoutingMaintenancePlanner *routing{};
   dht::RoutingDiscoveryPlanner *discovery{};
   dht::PeerDiscoveryPlanner *peer_discovery{};
+  MetadataDiscoveryBackfill *metadata_backfill{};
   dht::Bep42IdentityPolicy *identity{};
 };
 
@@ -110,8 +116,9 @@ private:
       : observations_(&observations), metadata_(services.metadata),
         node_(services.node), bootstrap_(services.bootstrap),
         routing_(services.routing), discovery_(services.discovery),
-        peer_discovery_(services.peer_discovery), identity_(services.identity),
-        options_(options) {}
+        peer_discovery_(services.peer_discovery),
+        metadata_backfill_(services.metadata_backfill),
+        identity_(services.identity), options_(options) {}
 
   static bool has_forward_actions(const dht::DhtActions &actions) noexcept;
 
@@ -122,6 +129,7 @@ private:
   dht::RoutingMaintenancePlanner *routing_;
   dht::RoutingDiscoveryPlanner *discovery_;
   dht::PeerDiscoveryPlanner *peer_discovery_;
+  MetadataDiscoveryBackfill *metadata_backfill_;
   dht::Bep42IdentityPolicy *identity_;
   DhtRuntimeActionPumpOptions options_;
   mutable std::mutex incoming_mutex_;
@@ -182,6 +190,10 @@ DhtRuntimeActionPump::create(dht::ObservationSink &observations,
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
                     "Active peer discovery requires metadata acquisition"});
+  if (services.metadata_backfill && !services.peer_discovery)
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidArgument,
+                    "Metadata backfill requires active peer discovery"});
   return std::unique_ptr<DhtRuntimeActionPump>{
       new DhtRuntimeActionPump{observations, services, options}};
 }
@@ -560,6 +572,26 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
       result.errors.push_back(callback_error("Routing-discovery poll"));
     }
   }
+  if (metadata_backfill_) {
+    try {
+      auto step = metadata_backfill_->poll(now);
+      if (step) {
+        result.metadata_backfill_records_scanned += step->records_scanned;
+        result.metadata_backfill_targets_offered += step->targets_offered;
+        result.metadata_backfill_records_with_metadata +=
+            step->records_with_metadata;
+        result.metadata_backfill = std::move(*step);
+      } else {
+        result.errors.push_back(step.error());
+      }
+    } catch (const std::exception &exception) {
+      result.errors.push_back(
+          callback_error("Metadata-discovery backfill poll", exception));
+    } catch (...) {
+      result.errors.push_back(
+          callback_error("Metadata-discovery backfill poll"));
+    }
+  }
   if (peer_discovery_) {
     try {
       auto step = peer_discovery_->poll(now);
@@ -624,6 +656,8 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
     include_wakeup(result.routing->next_wakeup);
   if (result.discovery)
     include_wakeup(result.discovery->next_wakeup);
+  if (result.metadata_backfill)
+    include_wakeup(result.metadata_backfill->next_wakeup);
   result.pending_actions = pending_count_.load(std::memory_order_acquire);
   if (node_) {
     result.routing_nodes = node_->routing_table().size();

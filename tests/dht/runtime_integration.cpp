@@ -149,6 +149,13 @@ int main() {
   dht_config.metadata.discovery.parallelism_per_hash = 3;
   dht_config.metadata.discovery.maximum_queries_per_hash = 27;
   dht_config.metadata.discovery.retry_delay = std::chrono::seconds{70};
+  dht_config.metadata.discovery.backfill.maximum_records_per_poll = 123;
+  dht_config.metadata.discovery.backfill.refresh_interval =
+      std::chrono::seconds{80};
+  dht_config.metadata.discovery.backfill.full_rescan_interval =
+      std::chrono::minutes{20};
+  dht_config.metadata.discovery.backfill.retry_delay =
+      std::chrono::milliseconds{900};
   dht_config.identity.observation_quorum = 5;
   dht_config.identity.vote_window = std::chrono::seconds{45};
   const auto node_options =
@@ -158,6 +165,9 @@ int main() {
       integration::routing_maintenance_options(dht_config.routing);
   const auto configured_peer_discovery =
       integration::peer_discovery_options(dht_config.metadata.discovery);
+  const auto configured_backfill =
+      integration::metadata_discovery_backfill_options(
+          dht_config.metadata.discovery.backfill);
   const auto configured_identity =
       integration::bep42_identity_policy_options(dht_config.identity);
   if (node_options.query_timeout != std::chrono::seconds{9} ||
@@ -174,6 +184,11 @@ int main() {
       configured_peer_discovery.parallelism_per_hash != 3 ||
       configured_peer_discovery.maximum_queries_per_hash != 27 ||
       configured_peer_discovery.retry_delay != std::chrono::seconds{70} ||
+      configured_backfill.maximum_records_per_poll != 123 ||
+      configured_backfill.refresh_interval != std::chrono::seconds{80} ||
+      configured_backfill.full_rescan_interval != std::chrono::minutes{20} ||
+      configured_backfill.backpressure_retry_delay !=
+          std::chrono::milliseconds{900} ||
       !configured_identity || configured_identity->observation_quorum != 5 ||
       configured_identity->vote_window != std::chrono::seconds{45})
     return 32;

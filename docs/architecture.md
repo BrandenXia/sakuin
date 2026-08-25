@@ -170,6 +170,15 @@ improved metadata coverage does not require unbounded DHT fan-out. IPv4 and
 IPv6 traversals remain isolated even when a response contains contacts for both
 families.
 
+Existing canonical records without fetched metadata are also fed into this
+planner by a bounded backfill scan. The scan starts with a complete keyed view,
+then follows the torrent dataset change stream so an unchanged catalog is not
+re-read continuously. Compaction or an invalidated change cursor safely causes
+a new complete scan. Planner backpressure retains the current record and
+resumes later instead of dropping discovery work. A separate, slower complete
+rescan permits previously exhausted hashes to be tried again after their
+cooldown without turning normal change polling into repeated catalog scans.
+
 The local flow is:
 
 ```text
@@ -232,7 +241,11 @@ aggregate DHT family cycles, bootstrap progress, datagram dispatch, derived
 index generations, materialization, maintenance, active routing discovery, and
 active metadata-peer discovery without exposing runtime or Asio types. Peer
 discovery reports pending hashes, in-flight queries, discovered peers, and
-exhausted traversals per address family. Inbound
+exhausted traversals per address family. Metadata backfill additionally reports
+records scanned, targets offered,
+records already carrying metadata, source generation, and whether a full scan
+is in progress. These counters distinguish a discovery bottleneck from an
+acquisition or storage bottleneck without exposing peer addresses. Inbound
 query counts are split into `ping`, `find_node`, `get_peers`, `announce_peer`,
 and unknown methods; responses and protocol errors are counted separately.
 This provides direct evidence that published UDP ingress is reaching Sakuin,

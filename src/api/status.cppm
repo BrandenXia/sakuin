@@ -26,6 +26,9 @@ struct DhtFamilyStatus {
   std::uint64_t peer_discovery_queries_started{};
   std::uint64_t peer_discovery_peers_found{};
   std::uint64_t peer_discovery_exhausted{};
+  std::uint64_t metadata_backfill_records_scanned{};
+  std::uint64_t metadata_backfill_targets_offered{};
+  std::uint64_t metadata_backfill_records_with_metadata{};
   std::uint64_t inbound_messages{};
   std::uint64_t inbound_queries{};
   std::uint64_t inbound_ping_queries{};
@@ -44,6 +47,9 @@ struct DhtFamilyStatus {
   std::size_t discovery_in_flight{};
   std::size_t peer_discovery_pending{};
   std::size_t peer_discovery_in_flight{};
+  std::uint64_t metadata_backfill_source_generation{};
+  bool metadata_backfill_scan_in_progress{};
+  bool metadata_backfill_full_rebuild{};
   std::size_t pending_actions{};
   std::size_t metadata_queued{};
   std::size_t metadata_in_flight{};
@@ -103,6 +109,12 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
       {"peer_discovery_queries_started", family.peer_discovery_queries_started},
       {"peer_discovery_peers_found", family.peer_discovery_peers_found},
       {"peer_discovery_exhausted", family.peer_discovery_exhausted},
+      {"metadata_backfill_records_scanned",
+       family.metadata_backfill_records_scanned},
+      {"metadata_backfill_targets_offered",
+       family.metadata_backfill_targets_offered},
+      {"metadata_backfill_records_with_metadata",
+       family.metadata_backfill_records_with_metadata},
       {"inbound_messages", family.inbound_messages},
       {"inbound_queries", family.inbound_queries},
       {"inbound_ping_queries", family.inbound_ping_queries},
@@ -121,6 +133,11 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
       {"discovery_in_flight", family.discovery_in_flight},
       {"peer_discovery_pending", family.peer_discovery_pending},
       {"peer_discovery_in_flight", family.peer_discovery_in_flight},
+      {"metadata_backfill_source_generation",
+       family.metadata_backfill_source_generation},
+      {"metadata_backfill_scan_in_progress",
+       family.metadata_backfill_scan_in_progress},
+      {"metadata_backfill_full_rebuild", family.metadata_backfill_full_rebuild},
       {"pending_actions", family.pending_actions},
       {"metadata_queued", family.metadata_queued},
       {"metadata_in_flight", family.metadata_in_flight},
