@@ -100,6 +100,15 @@ int main() {
   status.snapshot.ipv4.cycles = 42;
   status.snapshot.ipv4.routing_nodes = 13;
   status.snapshot.ipv4.metadata_in_flight = 2;
+  status.snapshot.ipv4.metadata_queued = 4;
+  status.snapshot.ipv4.metadata_pending_storage = 1;
+  status.snapshot.ipv4.metadata_backlog = 7;
+  status.snapshot.ipv4.metadata_attempts_started = 19;
+  status.snapshot.ipv4.metadata_fetches_succeeded = 8;
+  status.snapshot.ipv4.metadata_retryable_failures = 6;
+  status.snapshot.ipv4.metadata_permanent_failures = 3;
+  status.snapshot.ipv4.metadata_sink_succeeded = 7;
+  status.snapshot.ipv4.metadata_sink_failures = 2;
   status.snapshot.ipv4.observations_stored = 99;
   status.snapshot.ipv4.discovery_queries_started = 17;
   status.snapshot.ipv4.discovery_in_flight = 1;
@@ -469,6 +478,9 @@ int main() {
       !body(*operator_status)
            .contains("\"metadata_backfill_scan_in_progress\":true") ||
       !body(*operator_status).contains("\"metadata_in_flight\":2") ||
+      !body(*operator_status).contains("\"metadata_backlog\":7") ||
+      !body(*operator_status).contains("\"metadata_fetches_succeeded\":8") ||
+      !body(*operator_status).contains("\"metadata_sink_succeeded\":7") ||
       !body(*operator_status).contains("\"total_records\":2") ||
       !body(*operator_status).contains("\"adult_labeled\":0") ||
       !body(*operator_status).contains("\"movie\":1") ||
@@ -517,6 +529,17 @@ int main() {
       !body(*operator_metrics)
            .contains("sakuin_dht_metadata_backfill_scan_in_progress{family="
                      "\"ipv4\"} 1\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_metadata_fetches_succeeded_total{family="
+                     "\"ipv4\"} 8\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_metadata_fetch_failures_total{family="
+                     "\"ipv4\",outcome=\"retryable\"} 6\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_metadata_sink_succeeded_total{family="
+                     "\"ipv4\"} 7\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_metadata_backlog{family=\"ipv4\"} 7\n") ||
       !body(*operator_metrics)
            .contains("sakuin_dht_inbound_query_methods_total{family=\"ipv4\","
                      "method=\"get_peers\"} 7\n") ||

@@ -199,8 +199,14 @@ int main() {
     return 2;
   const auto now = core::Timestamp{std::chrono::seconds{100}};
   if (!(*controller)->poll(now) || (*controller)->in_flight() != 1 ||
-      factory.last_remote != candidate.peer || wakeups == 0)
+      (*controller)->backlog() != 1 || factory.last_remote != candidate.peer ||
+      wakeups == 0)
     return 3;
+  const auto started = (*controller)->take_activity();
+  if (started.attempts_started != 1 || started.fetches_succeeded != 0 ||
+      started.retryable_failures != 0 || started.permanent_failures != 0 ||
+      started.sink_succeeded != 0 || started.sink_failures != 0)
+    return 7;
 
   auto storage_failure = (*controller)->poll(now);
   if (storage_failure ||
@@ -209,12 +215,31 @@ int main() {
       (*controller)->pending_storage() != 1 || sink.errors.size() != 1 ||
       (*controller)->next_wakeup() != now + std::chrono::seconds{2})
     return 4;
+  const auto failed_storage = (*controller)->take_activity();
+  if (failed_storage.attempts_started != 0 ||
+      failed_storage.fetches_succeeded != 1 ||
+      failed_storage.retryable_failures != 0 ||
+      failed_storage.permanent_failures != 0 ||
+      failed_storage.sink_succeeded != 0 || failed_storage.sink_failures != 1 ||
+      (*controller)->backlog() != 1)
+    return 8;
   if (!(*controller)->poll(now) || (*controller)->pending_storage() != 1 ||
       !(*controller)->poll(now + std::chrono::seconds{2}) ||
       (*controller)->pending_storage() != 0 || (*controller)->next_wakeup() ||
       !sink.record || sink.record->info_hash != hash ||
       sink.record->name != "run")
     return 5;
+  const auto stored = (*controller)->take_activity();
+  if (stored.attempts_started != 0 || stored.fetches_succeeded != 0 ||
+      stored.retryable_failures != 0 || stored.permanent_failures != 0 ||
+      stored.sink_succeeded != 1 || stored.sink_failures != 0 ||
+      (*controller)->backlog() != 0)
+    return 9;
+  const auto empty = (*controller)->take_activity();
+  if (empty.attempts_started != 0 || empty.fetches_succeeded != 0 ||
+      empty.retryable_failures != 0 || empty.permanent_failures != 0 ||
+      empty.sink_succeeded != 0 || empty.sink_failures != 0)
+    return 10;
 
   (*controller)->stop();
   auto stopped = (*controller)->offer(candidate);

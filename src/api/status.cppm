@@ -21,6 +21,12 @@ struct DhtFamilyStatus {
   std::uint64_t errors{};
   std::uint64_t observations_stored{};
   std::uint64_t metadata_candidates_accepted{};
+  std::uint64_t metadata_attempts_started{};
+  std::uint64_t metadata_fetches_succeeded{};
+  std::uint64_t metadata_retryable_failures{};
+  std::uint64_t metadata_permanent_failures{};
+  std::uint64_t metadata_sink_succeeded{};
+  std::uint64_t metadata_sink_failures{};
   std::uint64_t routing_probes_accepted{};
   std::uint64_t discovery_queries_started{};
   std::uint64_t peer_discovery_queries_started{};
@@ -54,6 +60,7 @@ struct DhtFamilyStatus {
   std::size_t metadata_queued{};
   std::size_t metadata_in_flight{};
   std::size_t metadata_pending_storage{};
+  std::size_t metadata_backlog{};
   std::size_t bootstrap_candidates{};
   std::optional<bool> bootstrap_complete;
   std::optional<std::int64_t> last_cycle_ms;
@@ -104,6 +111,12 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
       {"errors", family.errors},
       {"observations_stored", family.observations_stored},
       {"metadata_candidates_accepted", family.metadata_candidates_accepted},
+      {"metadata_attempts_started", family.metadata_attempts_started},
+      {"metadata_fetches_succeeded", family.metadata_fetches_succeeded},
+      {"metadata_retryable_failures", family.metadata_retryable_failures},
+      {"metadata_permanent_failures", family.metadata_permanent_failures},
+      {"metadata_sink_succeeded", family.metadata_sink_succeeded},
+      {"metadata_sink_failures", family.metadata_sink_failures},
       {"routing_probes_accepted", family.routing_probes_accepted},
       {"discovery_queries_started", family.discovery_queries_started},
       {"peer_discovery_queries_started", family.peer_discovery_queries_started},
@@ -142,6 +155,7 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
       {"metadata_queued", family.metadata_queued},
       {"metadata_in_flight", family.metadata_in_flight},
       {"metadata_pending_storage", family.metadata_pending_storage},
+      {"metadata_backlog", family.metadata_backlog},
       {"bootstrap_candidates", family.bootstrap_candidates}};
   result["bootstrap_complete"] =
       family.bootstrap_complete ? nlohmann::json(*family.bootstrap_complete)

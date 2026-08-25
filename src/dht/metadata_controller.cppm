@@ -24,6 +24,15 @@ struct MetadataControllerOptions {
   std::function<void()> wake_owner;
 };
 
+struct MetadataAcquisitionActivity {
+  std::uint64_t attempts_started{};
+  std::uint64_t fetches_succeeded{};
+  std::uint64_t retryable_failures{};
+  std::uint64_t permanent_failures{};
+  std::uint64_t sink_succeeded{};
+  std::uint64_t sink_failures{};
+};
+
 // Owner-thread orchestration for callback transports. Runtime callbacks only
 // enqueue terminal values; poll() joins/reaps transports, advances queue state,
 // and invokes storage-facing observers. A sender/receiver owner can replace
@@ -44,6 +53,8 @@ public:
   std::size_t queued() const noexcept;
   std::size_t in_flight() const noexcept;
   std::size_t pending_storage() const noexcept;
+  std::size_t backlog() const noexcept;
+  MetadataAcquisitionActivity take_activity() noexcept;
 
 private:
   struct Completion {
@@ -75,6 +86,7 @@ private:
 
   void enqueue(Completion completion) noexcept;
   void report_failure(core::Error error) noexcept;
+  void record_failure(MetadataFetchOutcome outcome) noexcept;
   static MetadataFetchOutcome outcome(const core::Error &error) noexcept;
 
   PeerId peer_id_;
@@ -87,6 +99,7 @@ private:
   std::optional<core::Timestamp> next_storage_attempt_;
   mutable std::mutex completion_mutex_;
   std::vector<Completion> completions_;
+  MetadataAcquisitionActivity activity_;
   bool stopped_{};
 };
 
@@ -182,6 +195,14 @@ void MetadataAcquisitionController::report_failure(core::Error error) noexcept {
   }
 }
 
+void MetadataAcquisitionController::record_failure(
+    MetadataFetchOutcome value) noexcept {
+  if (value == MetadataFetchOutcome::RetryableFailure)
+    ++activity_.retryable_failures;
+  else if (value == MetadataFetchOutcome::PermanentFailure)
+    ++activity_.permanent_failures;
+}
+
 core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
   if (stopped_)
     return std::unexpected(core::Error{
@@ -208,13 +229,15 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
           first_error = advanced.error();
         report_failure(advanced.error());
       } else {
+        ++activity_.fetches_succeeded;
         pending_storage_.push_back(std::move(*record));
       }
       continue;
     }
     auto error = std::move(std::get<core::Error>(completion.value));
-    if (auto advanced =
-            queue_->complete(completion.ticket, outcome(error), now);
+    const auto fetch_outcome = outcome(error);
+    record_failure(fetch_outcome);
+    if (auto advanced = queue_->complete(completion.ticket, fetch_outcome, now);
         !advanced && !first_error)
       first_error = advanced.error();
     report_failure(std::move(error));
@@ -230,13 +253,17 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
     try {
       auto stored = sink_->on_metadata_fetched(record);
       if (!stored) {
+        ++activity_.sink_failures;
         if (!first_error)
           first_error = stored.error();
         pending_storage_.push_back(std::move(record));
         storage_failed = true;
         report_failure(stored.error());
+      } else {
+        ++activity_.sink_succeeded;
       }
     } catch (const std::exception &exception) {
+      ++activity_.sink_failures;
       core::Error error{core::ErrorCode::Internal,
                         std::string{"Metadata sink threw: "} +
                             exception.what()};
@@ -246,6 +273,7 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
       storage_failed = true;
       report_failure(std::move(error));
     } catch (...) {
+      ++activity_.sink_failures;
       core::Error error{core::ErrorCode::Internal,
                         "Metadata sink threw an unknown exception"};
       if (!first_error)
@@ -264,11 +292,14 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
   }
 
   for (auto &ticket : queue_->ready(now)) {
+    ++activity_.attempts_started;
     auto transport_options = options_.transport;
     transport_options.remote = ticket.candidate.peer;
     auto transport = factory_->create(std::move(transport_options));
     if (!transport) {
-      queue_->complete(ticket.id, outcome(transport.error()), now);
+      const auto fetch_outcome = outcome(transport.error());
+      record_failure(fetch_outcome);
+      queue_->complete(ticket.id, fetch_outcome, now);
       report_failure(transport.error());
       if (!first_error)
         first_error = transport.error();
@@ -279,7 +310,9 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
         ticket.candidate.info_hash, peer_id_, ticket.candidate.observed_at,
         **transport, *observer, options_.fetch);
     if (!session) {
-      queue_->complete(ticket.id, outcome(session.error()), now);
+      const auto fetch_outcome = outcome(session.error());
+      record_failure(fetch_outcome);
+      queue_->complete(ticket.id, fetch_outcome, now);
       report_failure(session.error());
       if (!first_error)
         first_error = session.error();
@@ -290,7 +323,9 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
                        .session = std::move(*session)};
     auto started = active.session->start();
     if (!started) {
-      queue_->complete(ticket.id, outcome(started.error()), now);
+      const auto fetch_outcome = outcome(started.error());
+      record_failure(fetch_outcome);
+      queue_->complete(ticket.id, fetch_outcome, now);
       report_failure(started.error());
       if (!first_error)
         first_error = started.error();
@@ -333,6 +368,23 @@ std::size_t MetadataAcquisitionController::in_flight() const noexcept {
 
 std::size_t MetadataAcquisitionController::pending_storage() const noexcept {
   return pending_storage_.size();
+}
+
+std::size_t MetadataAcquisitionController::backlog() const noexcept {
+  const auto maximum = std::numeric_limits<std::size_t>::max();
+  const auto queued_count = queued();
+  const auto active_count = in_flight();
+  const auto storage_count = pending_storage();
+  if (active_count > maximum - queued_count)
+    return maximum;
+  const auto acquiring = queued_count + active_count;
+  return storage_count > maximum - acquiring ? maximum
+                                             : acquiring + storage_count;
+}
+
+MetadataAcquisitionActivity
+MetadataAcquisitionController::take_activity() noexcept {
+  return std::exchange(activity_, {});
 }
 
 } // namespace sakuin::dht

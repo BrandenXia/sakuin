@@ -37,6 +37,12 @@ struct DhtRuntimePoll {
   std::size_t queries_expired{};
   std::size_t observations_stored{};
   std::size_t metadata_candidates_accepted{};
+  std::uint64_t metadata_attempts_started{};
+  std::uint64_t metadata_fetches_succeeded{};
+  std::uint64_t metadata_retryable_failures{};
+  std::uint64_t metadata_permanent_failures{};
+  std::uint64_t metadata_sink_succeeded{};
+  std::uint64_t metadata_sink_failures{};
   std::size_t routing_probes_accepted{};
   std::size_t discovery_queries_started{};
   std::size_t peer_discovery_queries_started{};
@@ -62,6 +68,7 @@ struct DhtRuntimePoll {
   std::size_t metadata_queued{};
   std::size_t metadata_in_flight{};
   std::size_t metadata_pending_storage{};
+  std::size_t metadata_backlog{};
   // Earliest owner-thread deadline after this poll. An empty value means the
   // owner may sleep until a callback explicitly wakes it.
   std::optional<core::Timestamp> next_wakeup;
@@ -664,9 +671,17 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
     result.outstanding_queries = node_->outstanding_queries();
   }
   if (metadata_) {
+    const auto activity = metadata_->take_activity();
+    result.metadata_attempts_started = activity.attempts_started;
+    result.metadata_fetches_succeeded = activity.fetches_succeeded;
+    result.metadata_retryable_failures = activity.retryable_failures;
+    result.metadata_permanent_failures = activity.permanent_failures;
+    result.metadata_sink_succeeded = activity.sink_succeeded;
+    result.metadata_sink_failures = activity.sink_failures;
     result.metadata_queued = metadata_->queued();
     result.metadata_in_flight = metadata_->in_flight();
     result.metadata_pending_storage = metadata_->pending_storage();
+    result.metadata_backlog = metadata_->backlog();
   }
   return result;
 }
