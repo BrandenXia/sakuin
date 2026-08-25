@@ -1,0 +1,37 @@
+# Curated regression cases, not a representative accuracy benchmark.
+# id	state	kind	minimum kind confidence	adult detection	required labels	forbidden labels	name	files (size|path;...)
+awaiting-metadata	awaiting_metadata	unknown	unknown	true	-	-	-	-
+movie-year-uhd	classified	movie	high	true	-	-	Example Movie 2024 2160p	8000000000|Example.Movie.2024.2160p.MKV;80000|Example.Movie.en.srt
+movie-single-video	classified	movie	medium	true	-	-	Feature Presentation	1000000000|feature.webm
+movie-year-lower-bound	classified	movie	high	true	-	-	Archive Film 1900	900000000|archive-film.mkv
+movie-year-upper-bound	classified	movie	high	true	-	-	Future Film 2099	900000000|future-film.mkv
+movie-year-outside-range	classified	movie	medium	true	-	-	Archive Film 1899	900000000|archive-film.mkv
+series-season-episode	classified	series	high	true	-	-	Example Show S02E07 1080p	2000000000|Example.Show.S02E07.1080p.mkv
+series-alternate-token	classified	series	high	true	-	-	Example Show 1x09	1500000000|Example.Show.1x09.mkv
+series-over-year	classified	series	high	true	-	-	Example Show 2024 S01E01	1500000000|Example.Show.2024.S01E01.mkv
+music-album	classified	music	high	true	-	-	Artist Album FLAC	30000000|Album/01 - Track.flac;31000000|Album/02 - Track.flac;2000000|Album/cover.jpg
+music-audio-only	classified	music	medium	true	-	-	Live Recording	70000000|01.flac;71000000|02.flac
+music-fuzzy-transposition	classified	music	high	true	-	-	Artist Discograpyh	70000000|01.flac;71000000|02.flac
+audiobook	classified	audiobook	high	true	-	-	Example Novel Unabridged Audiobook	80000000|Chapter 01.mp3;75000000|Chapter 02.mp3
+audiobook-fuzzy-deletion	classified	audiobook	high	true	-	-	Example Audiobok	80000000|Chapter 01.mp3;75000000|Chapter 02.mp3
+ebook-extension	classified	ebook	high	true	-	-	Reading Material	4000000|example.epub
+ebook-token	classified	ebook	high	true	-	-	Example Ebook Collection	4000000|example.pdf
+game-extension	classified	game	high	true	-	-	Console Release	12000000000|example.xci
+game-token	classified	game	medium	true	-	-	Classic Game ROM	2000000|payload.bin
+application-extension	classified	application	high	true	-	-	Package	120000000|example.rpm
+application-token	classified	application	medium	true	-	-	Software Installer	120000000|payload.bin
+application-fuzzy-transposition	classified	application	low	true	-	-	Softwrae Bundle	120000000|payload.bin
+mixed-payload	classified	mixed	medium	true	-	-	Mixed Collection	500000000|Feature.mkv;500000000|Soundtrack.flac
+ambiguous-video-software	ambiguous	movie	low	true	-	-	Software Bundle	1000000000|walkthrough.mkv
+unknown-payload	unknown	unknown	unknown	true	-	-	Unclassified Data	12|payload.bin
+adult-strong-token	classified	movie	high	true	adult:high	-	Explicit Porn Movie 2024	1000000000|Feature.mkv
+adult-context-token	classified	movie	high	true	adult:medium	-	Adult Movie 2024	1000000000|Feature.mkv
+adult-disabled	classified	movie	high	false	-	adult	Explicit Porn Movie 2024	1000000000|Feature.mkv
+adult-token-boundary	classified	movie	high	true	-	adult	Adulting Documentary 2024	1000000000|Feature.mkv
+adult-label-not-fuzzy	classified	movie	high	true	-	adult	Porb Movie 2024	1000000000|Feature.mkv
+anime-series	classified	series	high	true	anime:high	adult	Example Anime S01E01	1000000000|Example.Anime.S01E01.mkv
+anime-release-group	classified	series	high	true	anime:medium	adult	SubsPlease Example S01E01	1000000000|Example.S01E01.mkv
+anime-label-not-fuzzy	classified	series	high	true	-	anime,adult	Example Animw S01E01	1000000000|Example.S01E01.mkv
+hentai-independent-labels	classified	series	high	true	adult:high,anime:high	-	Example Hentai S01E01	1000000000|Example.S01E01.mkv
+short-token-not-fuzzy	unknown	unknown	unknown	true	-	-	Name Archive	12|payload.bin
+auxiliary-files-ignored	classified	movie	high	true	-	-	Feature Film 2025	1000000000|Feature.mkv;9000000000|artwork.png;1000000|notes.txt

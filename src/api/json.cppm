@@ -64,6 +64,8 @@ algorithm_name(index::DuplicateFingerprintAlgorithm algorithm) {
     return "exact_file_layout_v1";
   case index::DuplicateFingerprintAlgorithm::NormalizedMetadataV1:
     return "normalized_metadata_v1";
+  case index::DuplicateFingerprintAlgorithm::PayloadLayoutV1:
+    return "payload_layout_v1";
   }
   std::unreachable();
 }
@@ -185,6 +187,8 @@ std::string_view name(classification::MediaCategory value) {
     return "audiobook";
   case Application:
     return "application";
+  case Game:
+    return "game";
   case Books:
     return "books";
   case Ebook:
@@ -257,6 +261,8 @@ std::string_view name(classification::EvidenceCode value) {
     return "game_token";
   case ApplicationToken:
     return "application_token";
+  case FuzzySemanticToken:
+    return "fuzzy_semantic_token";
   case AdultToken:
     return "adult_token";
   case AnimeToken:

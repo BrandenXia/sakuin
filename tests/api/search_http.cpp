@@ -1,6 +1,7 @@
 import std;
 
 import sakuin.api;
+import sakuin.classification;
 import sakuin.core;
 import sakuin.index.duplicates;
 import sakuin.model.torrent;
@@ -71,12 +72,12 @@ int main() {
   record.files.push_back({.path = "linux.iso", .size = 4096});
   model::TorrentRecord movie;
   movie.info_hash.bytes.fill(0x33);
-  movie.name = "Example Movie 2024 1080p";
+  movie.name = "Example Anime Movie 2024 1080p";
   movie.total_size = 1'000'000;
   movie.first_seen = core::Timestamp{std::chrono::milliseconds{30}};
   movie.last_seen = core::Timestamp{std::chrono::milliseconds{40}};
   movie.files.push_back(
-      {.path = "Example.Movie.2024.1080p.mkv", .size = 1'000'000});
+      {.path = "Example.Anime.Movie.2024.1080p.mkv", .size = 1'000'000});
   if (!(*rebuild)->append(record) || !(*rebuild)->append(movie) ||
       !(*rebuild)->commit())
     return 4;
@@ -153,6 +154,9 @@ int main() {
       !body(*openapi).contains("\"version\":\"" + std::string{core::version} +
                                "\"") ||
       !body(*openapi).contains("\"/v1/search\"") ||
+      !body(*openapi).contains("\"classification_state\"") ||
+      !body(*openapi).contains("\"minimum_label_confidence\"") ||
+      !body(*openapi).contains("payload_layout_v1") ||
       !body(*openapi).contains("\"bearerAuth\"") ||
       body(*openapi).contains("sakuin_reader_"))
     return 33;
@@ -204,11 +208,74 @@ int main() {
   auto category_filtered = handler.handle(std::move(category_query));
   if (!category_filtered || category_filtered->status != 200 ||
       !body(*category_filtered).contains("\"total_matches\":1") ||
-      !body(*category_filtered).contains("Example Movie 2024 1080p") ||
+      !body(*category_filtered).contains("Example Anime Movie 2024 1080p") ||
       !body(*category_filtered).contains("\"code\":\"release_year_token\"") ||
       !body(*category_filtered).contains("\"subject\":\"movie\"") ||
       !body(*category_filtered).contains("\"weight\":"))
     return 38;
+  api::HttpRequest game_category_query{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?category=game&limit=10",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto game_category_filtered = handler.handle(std::move(game_category_query));
+  if (!game_category_filtered || game_category_filtered->status != 200 ||
+      !body(*game_category_filtered).contains("\"total_matches\":0"))
+    return 48;
+
+  api::HttpRequest classification_query{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?classification_state=classified&content_kind="
+                "movie&minimum_kind_confidence=high&limit=10",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto classification_filtered =
+      handler.handle(std::move(classification_query));
+  if (!classification_filtered || classification_filtered->status != 200 ||
+      !body(*classification_filtered).contains("\"total_matches\":1") ||
+      !body(*classification_filtered)
+           .contains("Example Anime Movie 2024 1080p"))
+    return 40;
+
+  api::HttpRequest unknown_classification_query{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?classification_state=unknown&content_kind=unknown",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto unknown_classification =
+      handler.handle(std::move(unknown_classification_query));
+  if (!unknown_classification || unknown_classification->status != 200 ||
+      !body(*unknown_classification).contains("\"total_matches\":1") ||
+      !body(*unknown_classification).contains("Linux Distribution"))
+    return 41;
+
+  api::HttpRequest label_query{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?label=anime&minimum_label_confidence=medium",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto label_filtered = handler.handle(std::move(label_query));
+  if (!label_filtered || label_filtered->status != 200 ||
+      !body(*label_filtered).contains("\"total_matches\":1") ||
+      !body(*label_filtered).contains("Example Anime Movie 2024 1080p"))
+    return 42;
+
+  api::HttpRequest invalid_classification{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?content_kind=video",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto invalid_classification_result =
+      handler.handle(std::move(invalid_classification));
+  if (!invalid_classification_result ||
+      invalid_classification_result->status != 400 ||
+      !body(*invalid_classification_result).contains("invalid_query"))
+    return 43;
+
+  api::HttpRequest orphan_label_confidence{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/search?minimum_label_confidence=high",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto orphan_label_result = handler.handle(std::move(orphan_label_confidence));
+  if (!orphan_label_result || orphan_label_result->status != 400 ||
+      !body(*orphan_label_result)
+           .contains("minimum_label_confidence requires at least one label"))
+    return 44;
 
   api::HttpRequest invalid{
       .method = api::HttpMethod::Get,
@@ -228,6 +295,16 @@ int main() {
       !body(*duplicate_groups).contains("\"source_generation\":7") ||
       !body(*duplicate_groups).contains("\"total_groups\":1") ||
       !body(*duplicate_groups).contains("abababababababab"))
+    return 9;
+
+  api::HttpRequest payload_duplicate_query{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/duplicates?algorithm=payload_layout_v1&limit=10",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto payload_duplicate_groups =
+      handler.handle(std::move(payload_duplicate_query));
+  if (!payload_duplicate_groups || payload_duplicate_groups->status != 200 ||
+      !body(*payload_duplicate_groups).contains("\"total_groups\":0"))
     return 9;
 
   api::HttpRequest duplicate_match{
@@ -255,8 +332,31 @@ int main() {
       !body(*caps).contains("<search available=\"yes\"") ||
       !body(*caps).contains("<movie-search available=\"yes\"") ||
       !body(*caps).contains("<audio-search available=\"yes\"") ||
-      !body(*caps).contains("<category id=\"2000\" name=\"Movies\""))
+      !body(*caps).contains("<category id=\"2000\" name=\"Movies\"") ||
+      !body(*caps).contains("<subcat id=\"4050\" name=\"Games\""))
     return 16;
+  auto game_request = api::parse_torznab_request("t=search&cat=4050");
+  if (!game_request || game_request->category_filter_matches_nothing ||
+      game_request->query.categories !=
+          std::vector{classification::MediaCategory::Game})
+    return 45;
+  auto pc_request = api::parse_torznab_request("t=search&cat=4000");
+  if (!pc_request ||
+      !std::ranges::contains(pc_request->query.categories,
+                             classification::MediaCategory::Application) ||
+      !std::ranges::contains(pc_request->query.categories,
+                             classification::MediaCategory::Game))
+    return 47;
+  search::SearchHit game_hit{
+      .name = "Example Game",
+      .total_size = 1024,
+      .file_count = 1,
+      .categories = {classification::MediaCategory::Game}};
+  auto game_feed = api::torznab_search_response(
+      {.hits = {std::move(game_hit)}, .total_matches = 1}, 0);
+  if (!body(game_feed).contains("<category>4050</category>") ||
+      !body(game_feed).contains("name=\"category\" value=\"4050\""))
+    return 46;
 
   auto token = credential("reader", secret);
   token.erase(0, std::string_view{"Bearer "}.size());
@@ -274,6 +374,10 @@ int main() {
       {.method = api::HttpMethod::Get,
        .target = "/api?t=movie&q=example&limit=10&apikey=" + token});
   if (!torznab_movie ||
+      !body(*torznab_movie).contains("<category>2000</category>") ||
+      !body(*torznab_movie).contains("<category>2040</category>") ||
+      body(*torznab_movie).contains("<category>Movies</category>") ||
+      body(*torznab_movie).contains("<category>Movies/HD</category>") ||
       !body(*torznab_movie).contains("name=\"category\" value=\"2000\"") ||
       !body(*torznab_movie).contains("name=\"category\" value=\"2040\"") ||
       !body(*torznab_movie).contains("total=\"1\""))

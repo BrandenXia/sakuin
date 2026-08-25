@@ -4,6 +4,7 @@ export import sakuin.storage.blob.reader;
 export import sakuin.storage.blob.writer;
 export import sakuin.storage.blob.store;
 export import sakuin.storage.blob.local;
+export import sakuin.storage.blob.s3;
 
 export import sakuin.storage.format.location;
 export import sakuin.storage.format.block;

@@ -160,8 +160,11 @@ int main() {
   const auto adult_movie =
       torrent(5, "Explicit Porn Movie 2024 1080p", 1'000'000,
               {"Explicit.Porn.Movie.2024.1080p.mkv"}, 50);
+  const auto ambiguous_movie =
+      torrent(6, "Software Bundle", 1'000'000, {"walkthrough.mkv"}, 60);
   if (!(*classified_rebuild)->append(safe_movie) ||
       !(*classified_rebuild)->append(adult_movie) ||
+      !(*classified_rebuild)->append(ambiguous_movie) ||
       !(*classified_rebuild)->commit())
     return 17;
   auto included = classified_index.search({.limit = 10});
@@ -174,16 +177,44 @@ int main() {
        .adult_content = search::AdultContentMode::Include,
        .offset = 1,
        .limit = 1});
-  if (!included || included->total_matches != 2 || !excluded ||
-      excluded->total_matches != 1 || !only || only->total_matches != 1 ||
+  if (!included || included->total_matches != 3 || !excluded ||
+      excluded->total_matches != 2 || !only || only->total_matches != 1 ||
       !movie_page || movie_page->total_matches != 2 ||
       movie_page->hits.size() != 1 ||
       !std::ranges::contains(movie_page->hits.front().categories,
                              classification::MediaCategory::Movie))
     return 18;
+  auto ambiguous_page = classified_index.search(
+      {.classification_state = classification::ClassificationState::Ambiguous,
+       .limit = 10});
+  auto confident_movies = classified_index.search(
+      {.content_kind = classification::ContentKind::Movie,
+       .minimum_kind_confidence = classification::Confidence::High,
+       .limit = 10});
+  auto adult_labeled = classified_index.search(
+      {.labels = {classification::ContentLabel::Adult},
+       .minimum_label_confidence = classification::Confidence::High,
+       .limit = 10});
+  auto adult_labeled_hidden = classified_index.search(
+      {.labels = {classification::ContentLabel::Adult},
+       .minimum_label_confidence = classification::Confidence::High,
+       .adult_content = search::AdultContentMode::Exclude,
+       .limit = 10});
+  auto adult_anime_labeled =
+      classified_index.search({.labels = {classification::ContentLabel::Adult,
+                                          classification::ContentLabel::Anime},
+                               .limit = 10});
+  if (!ambiguous_page || ambiguous_page->total_matches != 1 ||
+      ambiguous_page->hits.front().name != "Software Bundle" ||
+      !confident_movies || confident_movies->total_matches != 2 ||
+      !adult_labeled || adult_labeled->total_matches != 1 ||
+      adult_labeled->hits.front().name != "Explicit Porn Movie 2024 1080p" ||
+      !adult_labeled_hidden || adult_labeled_hidden->total_matches != 0 ||
+      !adult_anime_labeled || adult_anime_labeled->total_matches != 0)
+    return 24;
   const auto classification_stats = classified_index.classification_stats();
   if (!classification_stats.enabled ||
-      classification_stats.total_records != 2 ||
+      classification_stats.total_records != 3 ||
       classification_stats.adult_labeled != 1 ||
       classification_stats.category_count(
           classification::MediaCategory::Movie) != 2 ||
@@ -205,5 +236,28 @@ int main() {
           classification::ClassificationState::Unknown) != 1 ||
       disabled_stats.category_count(classification::MediaCategory::Other) != 1)
     return 21;
+
+  search::InMemorySearchIndex completeness_index;
+  auto completeness_rebuild = completeness_index.begin_rebuild(1);
+  auto placeholder = torrent(7, "placeholder", 0, {"placeholder"}, 70);
+  placeholder.name.reset();
+  placeholder.files.clear();
+  const auto zero_byte = torrent(8, "Empty File", 0, {"empty.txt"}, 80);
+  if (!completeness_rebuild || !(*completeness_rebuild)->append(placeholder) ||
+      !(*completeness_rebuild)->append(zero_byte) ||
+      !(*completeness_rebuild)->commit())
+    return 22;
+  auto complete = completeness_index.search({.limit = 10});
+  std::string placeholder_hash;
+  for (std::size_t index = 0; index < core::InfoHash{}.bytes.size(); ++index)
+    placeholder_hash += "07";
+  auto placeholder_by_hash = completeness_index.search(
+      {.text = std::move(placeholder_hash), .limit = 10});
+  if (!complete || complete->total_matches != 1 ||
+      complete->hits.front().name != "Empty File" ||
+      complete->hits.front().total_size != 0 ||
+      complete->hits.front().file_count != 1 || !placeholder_by_hash ||
+      placeholder_by_hash->total_matches != 0)
+    return 23;
   return 0;
 }

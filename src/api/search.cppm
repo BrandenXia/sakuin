@@ -336,6 +336,8 @@ categories(const std::map<std::string, std::string, std::less<>> &parameters) {
         return Audiobook;
       if (value == "application")
         return Application;
+      if (value == "game")
+        return Game;
       if (value == "books")
         return Books;
       if (value == "ebook")
@@ -359,6 +361,104 @@ categories(const std::map<std::string, std::string, std::less<>> &parameters) {
   return result;
 }
 
+core::Result<std::optional<classification::ClassificationState>>
+classification_state(
+    const std::map<std::string, std::string, std::less<>> &parameters) {
+  const auto found = parameters.find("classification_state");
+  if (found == parameters.end())
+    return std::optional<classification::ClassificationState>{};
+  using enum classification::ClassificationState;
+  constexpr std::array values{
+      std::pair{"awaiting_metadata", AwaitingMetadata},
+      std::pair{"classified", Classified},
+      std::pair{"ambiguous", Ambiguous},
+      std::pair{"unknown", Unknown},
+  };
+  const auto value = std::ranges::find(values, found->second,
+                                       &decltype(values)::value_type::first);
+  if (value == values.end())
+    return std::unexpected(core::Error{
+        core::ErrorCode::InvalidQuery,
+        "classification_state must be awaiting_metadata, classified, "
+        "ambiguous, or unknown"});
+  return std::optional{value->second};
+}
+
+core::Result<std::optional<classification::ContentKind>> content_kind(
+    const std::map<std::string, std::string, std::less<>> &parameters) {
+  const auto found = parameters.find("content_kind");
+  if (found == parameters.end())
+    return std::optional<classification::ContentKind>{};
+  using enum classification::ContentKind;
+  constexpr std::array values{
+      std::pair{"unknown", Unknown},     std::pair{"movie", Movie},
+      std::pair{"series", Series},       std::pair{"music", Music},
+      std::pair{"audiobook", Audiobook}, std::pair{"ebook", Ebook},
+      std::pair{"game", Game},           std::pair{"application", Application},
+      std::pair{"mixed", Mixed},
+  };
+  const auto value = std::ranges::find(values, found->second,
+                                       &decltype(values)::value_type::first);
+  if (value == values.end())
+    return std::unexpected(core::Error{
+        core::ErrorCode::InvalidQuery,
+        "content_kind must be unknown, movie, series, music, audiobook, "
+        "ebook, game, application, or mixed"});
+  return std::optional{value->second};
+}
+
+core::Result<std::optional<classification::Confidence>> optional_confidence(
+    const std::map<std::string, std::string, std::less<>> &parameters,
+    std::string_view name) {
+  const auto found = parameters.find(name);
+  if (found == parameters.end())
+    return std::optional<classification::Confidence>{};
+  using enum classification::Confidence;
+  constexpr std::array values{std::pair{"low", Low},
+                              std::pair{"medium", Medium},
+                              std::pair{"high", High}};
+  const auto value = std::ranges::find(values, found->second,
+                                       &decltype(values)::value_type::first);
+  if (value == values.end())
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidQuery,
+                    std::string{name} + " must be low, medium, or high"});
+  return std::optional{value->second};
+}
+
+core::Result<std::vector<classification::ContentLabel>>
+labels(const std::map<std::string, std::string, std::less<>> &parameters) {
+  const auto found = parameters.find("label");
+  if (found == parameters.end())
+    return {};
+  if (found->second.empty())
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidQuery, "label must not be empty"});
+  std::vector<classification::ContentLabel> result;
+  std::string_view remaining{found->second};
+  while (!remaining.empty()) {
+    const auto separator = remaining.find(',');
+    const auto value = remaining.substr(0, separator);
+    const auto label = [&]() -> std::optional<classification::ContentLabel> {
+      if (value == "adult")
+        return classification::ContentLabel::Adult;
+      if (value == "anime")
+        return classification::ContentLabel::Anime;
+      return std::nullopt;
+    }();
+    if (!label)
+      return std::unexpected(
+          core::Error{core::ErrorCode::InvalidQuery,
+                      "Unknown classification label: " + std::string{value}});
+    if (!std::ranges::contains(result, *label))
+      result.push_back(*label);
+    if (separator == std::string_view::npos)
+      break;
+    remaining.remove_prefix(separator + 1);
+  }
+  return result;
+}
+
 core::Result<search::SearchQuery> search_query(std::string_view encoded) {
   auto parameters = query_parameters(encoded);
   if (!parameters)
@@ -368,7 +468,10 @@ core::Result<search::SearchQuery> search_query(std::string_view encoded) {
         name != "min_files" && name != "max_files" &&
         name != "first_seen_at_or_after_ms" &&
         name != "last_seen_at_or_before_ms" && name != "offset" &&
-        name != "limit" && name != "category")
+        name != "limit" && name != "category" &&
+        name != "classification_state" && name != "content_kind" &&
+        name != "minimum_kind_confidence" && name != "label" &&
+        name != "minimum_label_confidence")
       return std::unexpected(core::Error{core::ErrorCode::InvalidQuery,
                                          "Unknown query parameter: " + name});
   }
@@ -382,29 +485,52 @@ core::Result<search::SearchQuery> search_query(std::string_view encoded) {
   auto offset = optional_number<std::size_t>(*parameters, "offset");
   auto limit = optional_number<std::size_t>(*parameters, "limit");
   auto parsed_categories = categories(*parameters);
+  auto parsed_state = classification_state(*parameters);
+  auto parsed_kind = content_kind(*parameters);
+  auto minimum_kind =
+      optional_confidence(*parameters, "minimum_kind_confidence");
+  auto parsed_labels = labels(*parameters);
+  auto minimum_label =
+      optional_confidence(*parameters, "minimum_label_confidence");
   if (!minimum || !maximum || !minimum_files || !maximum_files || !first_seen ||
-      !last_seen || !offset || !limit || !parsed_categories)
-    return std::unexpected(!minimum         ? minimum.error()
-                           : !maximum       ? maximum.error()
-                           : !minimum_files ? minimum_files.error()
-                           : !maximum_files ? maximum_files.error()
-                           : !first_seen    ? first_seen.error()
-                           : !last_seen     ? last_seen.error()
-                           : !offset        ? offset.error()
-                           : !limit         ? limit.error()
-                                            : parsed_categories.error());
+      !last_seen || !offset || !limit || !parsed_categories || !parsed_state ||
+      !parsed_kind || !minimum_kind || !parsed_labels || !minimum_label)
+    return std::unexpected(!minimum             ? minimum.error()
+                           : !maximum           ? maximum.error()
+                           : !minimum_files     ? minimum_files.error()
+                           : !maximum_files     ? maximum_files.error()
+                           : !first_seen        ? first_seen.error()
+                           : !last_seen         ? last_seen.error()
+                           : !offset            ? offset.error()
+                           : !limit             ? limit.error()
+                           : !parsed_categories ? parsed_categories.error()
+                           : !parsed_state      ? parsed_state.error()
+                           : !parsed_kind       ? parsed_kind.error()
+                           : !minimum_kind      ? minimum_kind.error()
+                           : !parsed_labels     ? parsed_labels.error()
+                                                : minimum_label.error());
+  if (*minimum_label && parsed_labels->empty())
+    return std::unexpected(
+        core::Error{core::ErrorCode::InvalidQuery,
+                    "minimum_label_confidence requires at least one label"});
   const auto text = parameters->find("q");
-  return search::SearchQuery{.text = text == parameters->end() ? std::string{}
-                                                               : text->second,
-                             .minimum_size = *minimum,
-                             .maximum_size = *maximum,
-                             .minimum_file_count = *minimum_files,
-                             .maximum_file_count = *maximum_files,
-                             .first_seen_at_or_after = *first_seen,
-                             .last_seen_at_or_before = *last_seen,
-                             .categories = std::move(*parsed_categories),
-                             .offset = offset->value_or(0),
-                             .limit = limit->value_or(50)};
+  return search::SearchQuery{
+      .text = text == parameters->end() ? std::string{} : text->second,
+      .minimum_size = *minimum,
+      .maximum_size = *maximum,
+      .minimum_file_count = *minimum_files,
+      .maximum_file_count = *maximum_files,
+      .first_seen_at_or_after = *first_seen,
+      .last_seen_at_or_before = *last_seen,
+      .classification_state = *parsed_state,
+      .content_kind = *parsed_kind,
+      .minimum_kind_confidence = *minimum_kind,
+      .labels = std::move(*parsed_labels),
+      .minimum_label_confidence =
+          minimum_label->value_or(classification::Confidence::Low),
+      .categories = std::move(*parsed_categories),
+      .offset = offset->value_or(0),
+      .limit = limit->value_or(50)};
 }
 
 struct DuplicateGroupsQuery {
@@ -435,10 +561,13 @@ duplicate_groups_query(std::string_view encoded) {
   else if (algorithm->second == "normalized_metadata_v1")
     result.algorithm =
         index::DuplicateFingerprintAlgorithm::NormalizedMetadataV1;
+  else if (algorithm->second == "payload_layout_v1")
+    result.algorithm = index::DuplicateFingerprintAlgorithm::PayloadLayoutV1;
   else
     return std::unexpected(core::Error{
         core::ErrorCode::InvalidQuery,
-        "algorithm must be exact_file_layout_v1 or normalized_metadata_v1"});
+        "algorithm must be exact_file_layout_v1, normalized_metadata_v1, or "
+        "payload_layout_v1"});
 
   auto minimum = optional_number<std::size_t>(*parameters, "min_members");
   auto offset = optional_number<std::size_t>(*parameters, "offset");

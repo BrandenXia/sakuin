@@ -94,6 +94,11 @@ core::Result<core::ByteBuffer> openapi_document() {
           {"$ref": "#/components/parameters/FirstSeenAfter"},
           {"$ref": "#/components/parameters/LastSeenBefore"},
           {"$ref": "#/components/parameters/Category"},
+          {"$ref": "#/components/parameters/ClassificationState"},
+          {"$ref": "#/components/parameters/ContentKind"},
+          {"$ref": "#/components/parameters/MinimumKindConfidence"},
+          {"$ref": "#/components/parameters/ClassificationLabel"},
+          {"$ref": "#/components/parameters/MinimumLabelConfidence"},
           {"$ref": "#/components/parameters/Offset"},
           {"$ref": "#/components/parameters/Limit"}
         ],
@@ -121,7 +126,7 @@ core::Result<core::ByteBuffer> openapi_document() {
             "name": "algorithm",
             "in": "query",
             "required": true,
-            "schema": {"type": "string", "enum": ["exact_file_layout_v1", "normalized_metadata_v1"]}
+            "schema": {"type": "string", "enum": ["exact_file_layout_v1", "normalized_metadata_v1", "payload_layout_v1"]}
           },
           {"name": "min_members", "in": "query", "schema": {"type": "integer", "minimum": 2, "default": 2}},
           {"$ref": "#/components/parameters/Offset"},
@@ -239,7 +244,12 @@ core::Result<core::ByteBuffer> openapi_document() {
       "MaximumFiles": {"name": "max_files", "in": "query", "schema": {"type": "integer", "minimum": 0}},
       "FirstSeenAfter": {"name": "first_seen_at_or_after_ms", "in": "query", "schema": {"type": "integer"}},
       "LastSeenBefore": {"name": "last_seen_at_or_before_ms", "in": "query", "schema": {"type": "integer"}},
-      "Category": {"name": "category", "in": "query", "description": "Comma-separated semantic categories, matched with OR semantics.", "schema": {"type": "string", "examples": ["movie,movie_uhd", "series_anime", "ebook"]}},
+      "Category": {"name": "category", "in": "query", "description": "Comma-separated semantic categories, matched with OR semantics.", "schema": {"type": "string", "examples": ["movie,movie_uhd", "series_anime", "game", "ebook"]}},
+      "ClassificationState": {"name": "classification_state", "in": "query", "description": "Exact classifier lifecycle state.", "schema": {"type": "string", "enum": ["awaiting_metadata", "classified", "ambiguous", "unknown"]}},
+      "ContentKind": {"name": "content_kind", "in": "query", "description": "Exact classifier content kind.", "schema": {"type": "string", "enum": ["unknown", "movie", "series", "music", "audiobook", "ebook", "game", "application", "mixed"]}},
+      "MinimumKindConfidence": {"name": "minimum_kind_confidence", "in": "query", "schema": {"type": "string", "enum": ["low", "medium", "high"]}},
+      "ClassificationLabel": {"name": "label", "in": "query", "description": "Comma-separated classifier labels. Every label must be present; Adult visibility policy still applies.", "schema": {"type": "string", "examples": ["anime", "adult,anime"]}},
+      "MinimumLabelConfidence": {"name": "minimum_label_confidence", "in": "query", "description": "Minimum confidence for every requested label. Requires label; omitted means low.", "schema": {"type": "string", "enum": ["low", "medium", "high"]}},
       "Offset": {"name": "offset", "in": "query", "schema": {"type": "integer", "minimum": 0, "default": 0}},
       "Limit": {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 50}},
       "InfoHash": {"name": "infohash", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[0-9A-Fa-f]{40}$"}}
@@ -281,7 +291,7 @@ core::Result<core::ByteBuffer> openapi_document() {
           "kind": {"type": "string", "enum": ["unknown", "movie", "series", "music", "audiobook", "ebook", "game", "application", "mixed"]},
           "confidence": {"type": "string", "enum": ["unknown", "low", "medium", "high"]},
           "labels": {"type": "array", "items": {"type": "object", "required": ["name", "confidence"], "properties": {"name": {"type": "string", "enum": ["adult", "anime"]}, "confidence": {"type": "string", "enum": ["unknown", "low", "medium", "high"]}}}},
-          "categories": {"type": "array", "items": {"type": "string", "enum": ["movie", "movie_sd", "movie_hd", "movie_uhd", "series", "series_sd", "series_hd", "series_uhd", "series_anime", "audio", "audiobook", "application", "books", "ebook", "adult", "other"]}},
+          "categories": {"type": "array", "items": {"type": "string", "enum": ["movie", "movie_sd", "movie_hd", "movie_uhd", "series", "series_sd", "series_hd", "series_uhd", "series_anime", "audio", "audiobook", "application", "game", "books", "ebook", "adult", "other"]}},
           "evidence": {"type": "array", "items": {"$ref": "#/components/schemas/ClassificationEvidence"}},
           "resolution": {"type": ["string", "null"], "enum": ["sd", "720p", "1080p", "2160p", null]},
           "algorithm_version": {"type": "integer", "minimum": 1},
@@ -292,7 +302,7 @@ core::Result<core::ByteBuffer> openapi_document() {
         "type": "object",
         "required": ["code", "subject", "weight"],
         "properties": {
-          "code": {"type": "string", "enum": ["video_payload_dominant", "audio_payload_dominant", "ebook_payload_dominant", "game_payload_dominant", "application_payload_dominant", "multiple_payload_families", "single_dominant_video", "season_episode_token", "release_year_token", "music_release_token", "audiobook_token", "ebook_token", "game_token", "application_token", "adult_token", "anime_token", "resolution_token"]},
+          "code": {"type": "string", "enum": ["video_payload_dominant", "audio_payload_dominant", "ebook_payload_dominant", "game_payload_dominant", "application_payload_dominant", "multiple_payload_families", "single_dominant_video", "season_episode_token", "release_year_token", "music_release_token", "audiobook_token", "ebook_token", "game_token", "application_token", "fuzzy_semantic_token", "adult_token", "anime_token", "resolution_token"]},
           "subject": {"type": "string", "enum": ["movie", "series", "music", "audiobook", "ebook", "game", "application", "mixed", "adult", "anime", "resolution"]},
           "weight": {"type": "integer"}
         }

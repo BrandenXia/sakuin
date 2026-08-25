@@ -96,7 +96,7 @@ checksummed compressed blocks
     ↓ immutable segment
 manifest generation
     ↓ BlobStore
-local filesystem
+local filesystem or S3-compatible object storage
 ```
 
 The segment reader knows about blocks, checksums, sparse indexes, Bloom filters,
@@ -130,6 +130,16 @@ A snapshot pins its exact generation for repeatable reads. Compaction creates
 replacement segments and publishes a new manifest, while existing snapshots
 continue reading the old objects. Garbage collection removes an object only
 after it is unreachable from every live pinned generation.
+
+The optional S3 backend moves immutable content-addressed blobs behind the
+`BlobStore` boundary. It deliberately leaves manifests, the single-writer
+lock, derived indexes, and operational state under `storage.local_root`, so the
+manifest remains the local atomic transaction boundary. Uploads and downloads
+use bounded local staging; a downloaded object is size-checked and hashed
+before a reader can observe it. Requests use SigV4 with credentials supplied
+through `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and the optional
+`AWS_SESSION_TOKEN`. Path-style bucket URLs support AWS S3 and compatible
+endpoints without adding provider-specific configuration.
 
 ### Compaction and retention
 
@@ -192,13 +202,19 @@ Search and duplicate state is derived and stored separately from canonical
 segments. Both can be removed and rebuilt.
 
 The search view indexes torrent name, file path, infohash, total size, file
-count, and observation timestamps. It supports text and structured filters with
-bounded pagination.
+count, observation timestamps, and derived classifications. It supports text,
+structured metadata filters, semantic categories, and optional classifier
+state, kind, confidence, and label facets with bounded pagination. Classifier
+facets do not override the independently configured Adult visibility policy.
 
-Duplicate detection currently publishes two explicitly versioned fingerprints:
-an exact sorted file-layout identity and a normalized name/path identity.
-Versioning the algorithm avoids silently changing group semantics when future
-normalization or fuzzy matching is introduced.
+Duplicate detection publishes three explicitly versioned fingerprints: an
+exact sorted file-layout identity, a normalized name/path identity, and a
+conservative payload-layout similarity signature. The latter ignores names and
+directories while retaining exact file sizes and normalized extensions, so it
+can group renamed or reorganized payloads. Small single-file torrents are
+excluded from that signature because their layout is not discriminative enough.
+These are likely-duplicate signals rather than content hashes. Versioning the
+algorithms avoids silently changing group semantics as detection expands.
 
 ## API and credentials
 
@@ -249,8 +265,9 @@ on the maintenance owner thread rather than blocking an Asio request thread.
 
 The `/api` compatibility route implements Torznab capabilities and UTF-8
 XML/RSS search responses. Semantic classifications map to the advertised
-Movies, TV, Audio, PC, Books, XXX, and Other category families. Generic and
-specialized movie, TV, music/audio, and book searches apply category filters
+Movies, TV, Audio, PC, Books, XXX, and Other category families. Applications
+use PC while games use its standard Games subcategory. Generic and specialized
+movie, TV, music/audio, and book searches apply category filters
 inside the derived index before totals and pagination. Unknown category IDs are
 ignored as Torznab specifies; a request containing only unknown IDs is empty.
 Results use magnet links because the canonical store retains decoded torrent
@@ -274,6 +291,23 @@ state. They also include each bounded evidence code, subject, and signed rule
 weight so clients and operators can explain a classification without inspecting
 classifier internals. The rules inspect bounded untrusted strings without
 opening paths, extracting archives, or performing network lookups.
+Strong content-kind signals also tolerate one insertion, deletion,
+substitution, or adjacent transposition using a bounded deterministic matcher.
+Fuzzy evidence is weighted below an exact token and is exposed separately for
+auditing. Short signals, structured episode/resolution tokens, and Adult or
+Anime labels remain exact-only to limit false positives. The built-in rules
+require no operator setup; optional custom rule packs can layer on this model
+later without becoming required configuration.
+
+Classifier changes are checked against a version-controlled regression corpus
+with explicit expected state, kind, minimum confidence, label requirements, and
+label exclusions. The corpus includes adult detection enabled and disabled
+cases so detection remains a configurable annotation policy rather than a
+visibility decision. `xmake test sakuin-classifier-eval/classification-corpus`
+runs the corpus. The evaluator emits deterministic coverage counts by resulting
+state, kind, and label. These counts describe regression coverage only; the
+hand-curated cases are not presented as population accuracy, precision, or
+recall measurements.
 
 API credentials live in a separate operational store. The CLI generates the
 secret once and persists a salted verifier, owner-only pepper, and permission
@@ -363,9 +397,9 @@ Neither is confused with canonical observations and torrents.
 ## Testing and benchmarks
 
 The test suite covers codecs, corrupted segments, format versions, manifests,
-snapshot pinning, compaction, retention, migration, DHT protocol and runtime,
-metadata acquisition, search, API security, traffic budgets, remote work,
-result idempotency, and crash recovery.
+snapshot pinning, compaction, retention, migration, local and fake-S3 blob
+stores, DHT protocol and runtime, metadata acquisition, search, API security,
+traffic budgets, remote work, result idempotency, and crash recovery.
 
 The separate storage benchmark measures append and scan throughput,
 compression ratio, compaction and COLD archival throughput, write amplification,
@@ -378,12 +412,14 @@ xmake run sakuin-storage-benchmark 100000 65536
 
 ## Known boundaries
 
-- The canonical backend is currently the local filesystem; S3-compatible
-  storage remains future work.
+- S3-compatible storage currently offloads immutable segment blobs only;
+  manifests, coordination, and derived state remain local and single-writer.
 - The search engine is a local derived implementation rather than an external
   cluster.
 - Coordinator recovery is durable on one host but not replicated.
-- Duplicate matching is deterministic metadata fingerprinting, not semantic or
-  fuzzy similarity.
+- Duplicate matching uses exact content IDs, normalized metadata, and renamed
+  payload-layout fingerprints; it does not yet perform probabilistic semantic
+  similarity.
 - There is currently no browser UI. Classification is deterministic and
-  metadata-based; it does not yet use fuzzy similarity or learned models.
+  metadata-based. Strong kind hints have bounded typo tolerance, but there are
+  no learned models or operator-defined classifier rules yet.

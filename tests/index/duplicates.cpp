@@ -60,7 +60,10 @@ int main() {
                            record(4, "Ubuntu Image", 101,
                                   {{.path = "docs/readme.txt", .size = 10},
                                    {.path = "payload.bin", .size = 91}}),
-                           record(5, std::nullopt, 0, {})};
+                           record(5, std::nullopt, 0, {}),
+                           record(6, "Renamed release", 100,
+                                  {{.path = "notes/guide.TXT", .size = 10},
+                                   {.path = "data/content.BIN", .size = 90}})};
   auto write = torrents.begin_write();
   if (!write || !(*write)->append(records) || !(*write)->commit())
     return 2;
@@ -68,10 +71,10 @@ int main() {
   auto snapshot = torrents.keyed_snapshot();
   auto duplicates = index::DuplicateIndex::rebuild(**snapshot);
   if (!duplicates || duplicates->get()->stats().source_generation != 1 ||
-      duplicates->get()->stats().records_read != 5 ||
-      duplicates->get()->stats().records_indexed != 4 ||
-      duplicates->get()->stats().fingerprints != 8 ||
-      duplicates->get()->stats().groups != 2)
+      duplicates->get()->stats().records_read != 6 ||
+      duplicates->get()->stats().records_indexed != 5 ||
+      duplicates->get()->stats().fingerprints != 15 ||
+      duplicates->get()->stats().groups != 3)
     return 3;
 
   auto exact =
@@ -80,19 +83,28 @@ int main() {
   auto normalized =
       (*duplicates)
           ->groups(index::DuplicateFingerprintAlgorithm::NormalizedMetadataV1);
+  auto payload =
+      (*duplicates)
+          ->groups(index::DuplicateFingerprintAlgorithm::PayloadLayoutV1);
   if (!exact || exact->size() != 1 || exact->front().torrents.size() != 2 ||
       exact->front().torrents[0] != info_hash(1) ||
       exact->front().torrents[1] != info_hash(2) || !normalized ||
       normalized->size() != 1 || normalized->front().torrents.size() != 2 ||
       normalized->front().torrents[0] != info_hash(1) ||
-      normalized->front().torrents[1] != info_hash(3))
+      normalized->front().torrents[1] != info_hash(3) || !payload ||
+      payload->size() != 1 || payload->front().torrents.size() != 4 ||
+      payload->front().torrents[0] != info_hash(1) ||
+      payload->front().torrents[1] != info_hash(2) ||
+      payload->front().torrents[2] != info_hash(3) ||
+      payload->front().torrents[3] != info_hash(6))
     return 4;
 
-  if ((*duplicates)->matches(info_hash(1)).size() != 2 ||
-      (*duplicates)->matches(info_hash(2)).size() != 1 ||
-      (*duplicates)->matches(info_hash(3)).size() != 1 ||
+  if ((*duplicates)->matches(info_hash(1)).size() != 3 ||
+      (*duplicates)->matches(info_hash(2)).size() != 2 ||
+      (*duplicates)->matches(info_hash(3)).size() != 2 ||
       !(*duplicates)->matches(info_hash(4)).empty() ||
-      !(*duplicates)->matches(info_hash(5)).empty())
+      !(*duplicates)->matches(info_hash(5)).empty() ||
+      (*duplicates)->matches(info_hash(6)).size() != 1)
     return 5;
   if ((*duplicates)
           ->groups(index::DuplicateFingerprintAlgorithm::ExactFileLayoutV1, 1))
@@ -104,5 +116,15 @@ int main() {
       records[1], index::DuplicateFingerprintAlgorithm::ExactFileLayoutV1);
   if (!first || !*first || !reordered || !*reordered || **first != **reordered)
     return 7;
+  auto renamed = index::duplicate_fingerprint(
+      records[5], index::DuplicateFingerprintAlgorithm::PayloadLayoutV1);
+  auto payload_first = index::duplicate_fingerprint(
+      records[0], index::DuplicateFingerprintAlgorithm::PayloadLayoutV1);
+  const auto small = record(7, "small", 42, {{.path = "one.bin", .size = 42}});
+  auto small_payload = index::duplicate_fingerprint(
+      small, index::DuplicateFingerprintAlgorithm::PayloadLayoutV1);
+  if (!renamed || !*renamed || !payload_first || !*payload_first ||
+      **renamed != **payload_first || !small_payload || *small_payload)
+    return 8;
   return 0;
 }

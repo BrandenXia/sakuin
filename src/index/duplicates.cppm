@@ -18,7 +18,8 @@ export namespace sakuin::index {
 // be rebuilt or compared without silently changing identity.
 enum class DuplicateFingerprintAlgorithm : std::uint8_t {
   ExactFileLayoutV1,
-  NormalizedMetadataV1
+  NormalizedMetadataV1,
+  PayloadLayoutV1
 };
 
 struct DuplicateFingerprint {
@@ -107,6 +108,17 @@ private:
 namespace sakuin::index {
 namespace {
 
+constexpr std::array DuplicateFingerprintAlgorithms{
+    DuplicateFingerprintAlgorithm::ExactFileLayoutV1,
+    DuplicateFingerprintAlgorithm::NormalizedMetadataV1,
+    DuplicateFingerprintAlgorithm::PayloadLayoutV1};
+
+// A tiny single file does not carry enough structure for name-independent
+// matching. Large files retain enough entropy in their exact byte length to
+// make the payload-layout signal useful while still remaining explicitly a
+// likely-duplicate fingerprint rather than a content hash.
+constexpr std::uint64_t MinimumSingleFilePayloadBytes = 1024U * 1024U;
+
 void append_u64(core::ByteBuffer &output, std::uint64_t value) {
   for (unsigned shift = 0; shift < 64; shift += 8)
     output.push_back(static_cast<std::byte>(value >> shift));
@@ -142,24 +154,50 @@ std::string normalized_text(std::string_view value, bool path) {
   return result;
 }
 
+std::string normalized_extension(std::string_view path) {
+  const auto separator = path.find_last_of("/\\");
+  const auto basename = separator == std::string_view::npos ? 0 : separator + 1;
+  const auto dot = path.find_last_of('.');
+  if (dot == std::string_view::npos || dot <= basename ||
+      dot + 1 == path.size())
+    return {};
+  return normalized_text(path.substr(dot + 1), false);
+}
+
 core::ByteBuffer fingerprint_material(const model::TorrentRecord &record,
                                       DuplicateFingerprintAlgorithm algorithm) {
   core::ByteBuffer result;
-  const auto domain =
-      algorithm == DuplicateFingerprintAlgorithm::ExactFileLayoutV1
-          ? std::string_view{"sakuin.duplicate.exact-file-layout.v1"}
-          : std::string_view{"sakuin.duplicate.normalized-metadata.v1"};
+  const auto domain = [&] {
+    switch (algorithm) {
+    case DuplicateFingerprintAlgorithm::ExactFileLayoutV1:
+      return std::string_view{"sakuin.duplicate.exact-file-layout.v1"};
+    case DuplicateFingerprintAlgorithm::NormalizedMetadataV1:
+      return std::string_view{"sakuin.duplicate.normalized-metadata.v1"};
+    case DuplicateFingerprintAlgorithm::PayloadLayoutV1:
+      return std::string_view{"sakuin.duplicate.payload-layout.v1"};
+    }
+    std::unreachable();
+  }();
   append_string(result, domain);
   append_u64(result, record.total_size);
 
   std::vector<std::pair<std::string, std::uint64_t>> files;
   files.reserve(record.files.size());
-  for (const auto &file : record.files)
-    files.emplace_back(algorithm ==
-                               DuplicateFingerprintAlgorithm::ExactFileLayoutV1
-                           ? file.path
-                           : normalized_text(file.path, true),
-                       file.size);
+  for (const auto &file : record.files) {
+    std::string identity;
+    switch (algorithm) {
+    case DuplicateFingerprintAlgorithm::ExactFileLayoutV1:
+      identity = file.path;
+      break;
+    case DuplicateFingerprintAlgorithm::NormalizedMetadataV1:
+      identity = normalized_text(file.path, true);
+      break;
+    case DuplicateFingerprintAlgorithm::PayloadLayoutV1:
+      identity = normalized_extension(file.path);
+      break;
+    }
+    files.emplace_back(std::move(identity), file.size);
+  }
   std::ranges::sort(files);
   append_u64(result, files.size());
   for (const auto &[path, size] : files) {
@@ -178,13 +216,18 @@ core::Result<std::optional<DuplicateFingerprint>>
 duplicate_fingerprint(const model::TorrentRecord &record,
                       DuplicateFingerprintAlgorithm algorithm) {
   if (algorithm != DuplicateFingerprintAlgorithm::ExactFileLayoutV1 &&
-      algorithm != DuplicateFingerprintAlgorithm::NormalizedMetadataV1)
+      algorithm != DuplicateFingerprintAlgorithm::NormalizedMetadataV1 &&
+      algorithm != DuplicateFingerprintAlgorithm::PayloadLayoutV1)
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
                     "Unknown duplicate fingerprint algorithm"});
   // Observation-only materializations contain no metadata and must not all
   // collapse into one meaningless empty group.
   if (record.files.empty())
+    return std::optional<DuplicateFingerprint>{};
+  if (algorithm == DuplicateFingerprintAlgorithm::PayloadLayoutV1 &&
+      record.files.size() == 1 &&
+      record.files.front().size < MinimumSingleFilePayloadBytes)
     return std::optional<DuplicateFingerprint>{};
   auto material = fingerprint_material(record, algorithm);
   return std::optional<DuplicateFingerprint>{DuplicateFingerprint{
@@ -223,9 +266,7 @@ DuplicateIndex::rebuild(storage::RecordStream<model::TorrentRecord> &source,
       break;
     ++result->stats_.records_read;
     bool indexed{};
-    for (const auto algorithm :
-         {DuplicateFingerprintAlgorithm::ExactFileLayoutV1,
-          DuplicateFingerprintAlgorithm::NormalizedMetadataV1}) {
+    for (const auto algorithm : DuplicateFingerprintAlgorithms) {
       auto fingerprint = duplicate_fingerprint(**next, algorithm);
       if (!fingerprint)
         return std::unexpected(fingerprint.error());
@@ -284,9 +325,7 @@ DuplicateIndex::apply(std::span<const model::TorrentRecord> updates,
     }
 
     std::vector<DuplicateFingerprint> replacements;
-    for (const auto algorithm :
-         {DuplicateFingerprintAlgorithm::ExactFileLayoutV1,
-          DuplicateFingerprintAlgorithm::NormalizedMetadataV1}) {
+    for (const auto algorithm : DuplicateFingerprintAlgorithms) {
       auto fingerprint = duplicate_fingerprint(record, algorithm);
       if (!fingerprint)
         return std::unexpected(fingerprint.error());
@@ -325,7 +364,9 @@ DuplicateIndex::from_state(DuplicateIndexState state) {
     if (entry.fingerprint.algorithm !=
             DuplicateFingerprintAlgorithm::ExactFileLayoutV1 &&
         entry.fingerprint.algorithm !=
-            DuplicateFingerprintAlgorithm::NormalizedMetadataV1)
+            DuplicateFingerprintAlgorithm::NormalizedMetadataV1 &&
+        entry.fingerprint.algorithm !=
+            DuplicateFingerprintAlgorithm::PayloadLayoutV1)
       return std::unexpected(
           core::Error{core::ErrorCode::UnsupportedFormat,
                       "Duplicate index uses an unknown algorithm"});

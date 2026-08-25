@@ -13,13 +13,14 @@ duplicate indexes can be rebuilt from it.
 
 - Crawls the public BitTorrent DHT and acquires torrent metadata.
 - Searches torrent names, paths, sizes, file counts, dates, and infohashes.
-- Detects exact file-layout and normalized-metadata duplicates.
+- Detects exact, normalized-metadata, and renamed payload-layout duplicates.
 - Preserves historical observations with configurable retention and
   compression.
 - Enforces configurable DHT traffic budgets.
 - Protects the HTTP API with scoped API keys and rate limits.
 - Runs as one local service, with optional authenticated remote workers.
-- Stores all persistent data in a portable local volume.
+- Stores its portable catalog state in a local volume, with optional
+  S3-compatible storage for immutable segment blobs.
 
 ## How it compares
 
@@ -29,7 +30,7 @@ but they make different tradeoffs.
 
 | | Sakuin | Bitmagnet |
 |---|---|---|
-| Primary storage | Portable immutable files | PostgreSQL |
+| Primary storage | Portable immutable files; optional S3 blob offload | PostgreSQL |
 | Minimum deployment | One application container and one data volume | Application plus PostgreSQL |
 | Historical data | Explicit observation history and tiered retention | Database-oriented current catalog |
 | Duplicate grouping | File-layout and normalized-metadata fingerprints | Classification-oriented processing |
@@ -40,8 +41,9 @@ but they make different tradeoffs.
 Sakuin's main advantages are simple data ownership, no database administration,
 storage-efficient history, and a design that can scale crawling separately
 from canonical storage. Its current disadvantages are equally important: there
-is no web UI, no S3 backend yet, fewer media/classification integrations, and
-less real-world deployment history than Bitmagnet.
+is no web UI, the S3 mode still keeps transactional catalog state on one local
+volume, there are fewer media/classification integrations, and there is less
+real-world deployment history than Bitmagnet.
 
 ## Quick deployment
 
@@ -110,13 +112,28 @@ single-file deployment, use the corresponding Compose commands directly:
 Set `SAKUIN_IMAGE=ghcr.io/brandenxia/sakuin:vX.Y.Z` in an adjacent `.env` file
 to pin a release.
 
+The Compose file also supports an optional S3-compatible blob backend. In the
+same `.env` file, set `SAKUIN_STORAGE_BACKEND=s3`,
+`SAKUIN_STORAGE_S3_BUCKET`, and the standard `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` variables; set the endpoint and region variables for a
+non-default provider. Keep the data volume: manifests, locks, derived indexes,
+and bounded transfer staging remain local. Temporary AWS session credentials
+can include `AWS_SESSION_TOKEN`.
+
 Torznab clients can use `http://127.0.0.1:8080/api` as the indexer URL and the
 complete `sakuin_...` reader token as `apikey`. Sakuin advertises generic,
-movie, TV, music/audio, and book search, with standard Torznab categories.
+movie, TV, music/audio, and book search, with standard Torznab categories,
+including distinct PC application and game results.
 Results use magnet links because Sakuin indexes metadata rather than hosting
 `.torrent` files. Adult classification is only a label: visibility is an
 operator setting and defaults to including every result. Native JSON search
 also returns bounded rule evidence so classifications can be audited.
+Strong content-kind hints tolerate simple one-character misspellings out of the
+box, while sensitive labels remain exact-token-only.
+For classifier review workflows, `/v1/search` can filter by exact state and
+kind, minimum confidence, and required labels; the published OpenAPI document
+lists the accepted values. These facets never bypass the operator's Adult
+visibility setting.
 
 Prometheus can scrape `/metrics` (or `/v1/metrics`) with the operator token as
 an `Authorization: Bearer` header. The endpoint reports service uptime, DHT
@@ -156,6 +173,13 @@ xmake run sakuin-api-key --state-dir ./data/operational/api \
   create --id reader --permissions search
 xmake run sakuin --config=sakuin.toml
 ```
+
+For S3-compatible blob storage, select `backend = "s3"` and fill in the
+commented `[storage.s3]` example, then provide credentials through the standard
+AWS environment variables. Sakuin uses path-style bucket URLs and verifies
+downloaded blobs against their content IDs before exposing them to readers.
+The local root is still required for the transactional catalog and operational
+state.
 
 Storage administration is available through `sakuin admin verify`, `compact`,
 and `gc`. See [`docs/architecture.md`](docs/architecture.md) for the design,

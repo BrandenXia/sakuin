@@ -101,12 +101,26 @@ int main() {
   if (game.kind != ContentKind::Game ||
       game.kind_confidence != Confidence::High)
     return 7;
+  if (!std::ranges::contains(sakuin::classification::media_categories(game),
+                             MediaCategory::Game))
+    return 19;
 
   const auto application = classify(
       record("Example Software", {FileRecord{"example.rpm", 120'000'000}}));
   if (application.kind != ContentKind::Application ||
       application.kind_confidence != Confidence::High)
     return 8;
+
+  const auto fuzzy_application = classify(
+      record("Softwrae Bundle", {FileRecord{"payload.bin", 120'000'000}}));
+  if (fuzzy_application.kind != ContentKind::Application ||
+      fuzzy_application.kind_confidence != Confidence::Low ||
+      fuzzy_application.algorithm_version != 2 ||
+      !std::ranges::contains(
+          fuzzy_application.evidence,
+          sakuin::classification::EvidenceCode::FuzzySemanticToken,
+          &sakuin::classification::Evidence::code))
+    return 20;
 
   const auto mixed = classify(
       record("Mixed collection", {FileRecord{"Feature.mkv", 500'000'000},
