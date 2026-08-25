@@ -209,6 +209,12 @@ does not prevent a dual-stack node from starting its IPv6 family with other
 contacts, while startup still fails when none of the configured contacts
 resolve for any enabled family.
 
+Bootstrap status separates success from terminal failure. `bootstrap_complete`
+becomes true only after the bootstrap-owned traversal settles with at least one
+successful `find_node` response; exhausting every seed and retry instead sets
+`bootstrap_exhausted`. Unrelated routing, discovery, and peer queries do not
+delay either state.
+
 The release Compose file creates a dual-stack bridge and enables both DHT
 families by default. Docker assigns the bridge an IPv6 subnet when none is
 specified and performs the host-side forwarding for the published UDP port.

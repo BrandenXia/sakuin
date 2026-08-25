@@ -167,6 +167,7 @@ public:
     if (cycle.poll.bootstrap) {
       status.bootstrap_candidates = cycle.poll.bootstrap->known_candidates;
       status.bootstrap_complete = cycle.poll.bootstrap->complete;
+      status.bootstrap_exhausted = cycle.poll.bootstrap->exhausted;
     }
   }
 

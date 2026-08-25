@@ -21,7 +21,11 @@ struct BootstrapOptions {
 struct BootstrapStep {
   std::vector<DatagramSend> sends;
   std::size_t known_candidates{};
+  // Complete means that the bootstrap-owned traversal has settled after at
+  // least one successful find_node response. Exhausted is the terminal
+  // all-failure state; it must never be reported as successful bootstrap.
   bool complete{};
+  bool exhausted{};
   std::optional<core::Timestamp> next_wakeup;
 };
 
@@ -220,12 +224,15 @@ core::Result<BootstrapStep> BootstrapPlanner::poll(core::Timestamp now) {
   }
 
   step.known_candidates = candidates_.size();
-  step.complete = node_->outstanding_queries() == 0 &&
-                  std::ranges::all_of(candidates_, [&](const auto &candidate) {
-                    return candidate.completed ||
-                           candidate.attempts >= options_.maximum_attempts;
-                  });
-  if (!step.complete && capacity != 0) {
+  const auto settled = std::ranges::all_of(candidates_, [&](const auto &entry) {
+    return entry.completed ||
+           (!entry.outstanding && entry.attempts >= options_.maximum_attempts);
+  });
+  const auto succeeded =
+      std::ranges::any_of(candidates_, &Candidate::completed);
+  step.complete = settled && succeeded;
+  step.exhausted = settled && !succeeded;
+  if (!settled && capacity != 0) {
     for (const auto &candidate : candidates_) {
       if (candidate.completed || candidate.outstanding ||
           candidate.attempts >= options_.maximum_attempts)
