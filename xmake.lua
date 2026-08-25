@@ -129,6 +129,11 @@ target("llvm-dht-runtime-repro")
   add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
            "sakuin-model-codecs", "sakuin-dht")
 
+target("llvm-peer-discovery-repro")
+  set_kind("static")
+  add_files("repro/runtime.cppm", {public = true})
+  add_deps("sakuin-dht")
+
 target("sakuin-service")
   set_kind("static")
   add_files("src/service/**.cpp")
