@@ -398,9 +398,30 @@ core::Result<core::ByteBuffer> openapi_document() {
           "classification": {"$ref": "#/components/schemas/ClassificationIndexStats"}
         }
       },
+      "ServiceErrorStatus": {
+        "type": "object",
+        "required": ["source", "message", "count", "last_seen_ms", "active", "recovered_at_ms"],
+        "properties": {
+          "source": {"type": "string"},
+          "message": {"type": "string"},
+          "count": {"type": "integer", "minimum": 1},
+          "last_seen_ms": {"type": "integer"},
+          "active": {"type": "boolean"},
+          "recovered_at_ms": {"type": ["integer", "null"]}
+        }
+      },
+      "ServiceErrors": {
+        "type": "object",
+        "required": ["total", "active", "sources"],
+        "properties": {
+          "total": {"type": "integer", "minimum": 0},
+          "active": {"type": "integer", "minimum": 0},
+          "sources": {"type": "array", "items": {"$ref": "#/components/schemas/ServiceErrorStatus"}}
+        }
+      },
       "ServiceStatus": {
         "type": "object",
-        "required": ["version", "state", "started_at_ms", "uptime_ms", "dht", "search", "materialization", "duplicates", "maintenance", "last_service_error"],
+        "required": ["version", "state", "started_at_ms", "uptime_ms", "dht", "search", "materialization", "duplicates", "maintenance", "service_errors", "last_service_error"],
         "properties": {
           "version": {"type": "string"},
           "state": {"type": "string"},
@@ -411,7 +432,8 @@ core::Result<core::ByteBuffer> openapi_document() {
           "materialization": {"type": "object"},
           "duplicates": {"type": "object"},
           "maintenance": {"type": "object"},
-          "last_service_error": {"type": ["string", "null"]}
+          "service_errors": {"$ref": "#/components/schemas/ServiceErrors"},
+          "last_service_error": {"oneOf": [{"$ref": "#/components/schemas/ServiceErrorStatus"}, {"type": "null"}]}
         }
       }
     }

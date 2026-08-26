@@ -130,6 +130,11 @@ int main() {
   status.snapshot.ipv4.bootstrap_exhausted = false;
   status.snapshot.search_source_generation = 7;
   status.snapshot.search_records_indexed = 21;
+  api::note_service_error(status.snapshot, "materialization",
+                          "Dataset changed during write", 1'000);
+  api::note_service_error(status.snapshot, "materialization",
+                          "Dataset changed during write", 2'000);
+  api::note_service_recovery(status.snapshot, "materialization", 3'000);
   std::size_t refreshes{};
   std::vector<bool> maintenance_requests;
   api::SearchHttpHandler handler{
@@ -179,6 +184,7 @@ int main() {
       !body(*openapi).contains("learned_content_model") ||
       !body(*openapi).contains("\"minimum_label_confidence\"") ||
       !body(*openapi).contains("payload_layout_v1") ||
+      !body(*openapi).contains("ServiceErrorStatus") ||
       !body(*openapi).contains("\"bearerAuth\"") ||
       body(*openapi).contains("sakuin_reader_"))
     return 33;
@@ -489,6 +495,14 @@ int main() {
       !body(*operator_status).contains("\"movie\":1") ||
       !body(*operator_status).contains("\"learned\":{") ||
       !body(*operator_status).contains("\"training_records\":1") ||
+      !body(*operator_status).contains("\"service_errors\":{") ||
+      !body(*operator_status).contains("\"active\":0") ||
+      !body(*operator_status).contains("\"count\":2") ||
+      !body(*operator_status)
+           .contains("\"last_seen_ms\":2000,\"message\":\"Dataset changed "
+                     "during write\"") ||
+      !body(*operator_status).contains("\"recovered_at_ms\":3000") ||
+      !body(*operator_status).contains("\"source\":\"materialization\"") ||
       !body(*operator_status).contains("\"last_error\":null") ||
       body(*operator_status).contains("\"last_error\":[null]") ||
       !body(*operator_status).contains("\"state\":\"running\""))
@@ -558,6 +572,19 @@ int main() {
       !body(*operator_metrics)
            .contains("sakuin_search_records_indexed_total 21\n"))
     return 24;
+  if (!body(*operator_metrics)
+           .contains("sakuin_service_errors_total{source=\"materialization\"} "
+                     "2\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_service_error_active{source=\"materialization\"} "
+                     "0\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_service_error_last_seen_timestamp_seconds{source="
+                     "\"materialization\"} 2.000000\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_service_error_recovered_timestamp_seconds{source="
+                     "\"materialization\"} 3.000000\n"))
+    return 40;
   if (!body(*operator_metrics).contains("sakuin_classification_enabled 1\n") ||
       !body(*operator_metrics)
            .contains("sakuin_classification_learned_enabled 1\n") ||

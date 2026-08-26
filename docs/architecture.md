@@ -296,6 +296,13 @@ remain behind the authenticated status and metrics routes.
 text format. Both require an operator credential. Labels are bounded to service
 state and IP address family; peer addresses and error messages are omitted to
 avoid sensitive output and unbounded time-series cardinality.
+Service errors are retained per bounded subsystem with a cumulative count,
+last-seen timestamp, and explicit active or recovered state. Successful
+subsystem callbacks close recoverable incidents without erasing their history;
+`last_service_error` therefore describes the most recent incident rather than
+acting as an indefinitely sticky error string. Prometheus exports the same
+counts, state, and timestamps using subsystem labels while continuing to omit
+error text.
 Operational decisions use deltas or rates across sampled counter values, never
 the absolute magnitude of a cumulative counter. The deployment helper can
 sample the discovery-to-metadata pipeline without an external time-series
