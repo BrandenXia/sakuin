@@ -67,6 +67,7 @@ struct DhtFamilyStatus {
   std::size_t outstanding_queries{};
   std::size_t discovery_in_flight{};
   std::size_t peer_discovery_pending{};
+  std::size_t peer_discovery_active{};
   std::size_t peer_discovery_in_flight{};
   std::uint64_t metadata_backfill_source_generation{};
   bool metadata_backfill_scan_in_progress{};
@@ -190,6 +191,7 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
       {"outstanding_queries", family.outstanding_queries},
       {"discovery_in_flight", family.discovery_in_flight},
       {"peer_discovery_pending", family.peer_discovery_pending},
+      {"peer_discovery_active", family.peer_discovery_active},
       {"peer_discovery_in_flight", family.peer_discovery_in_flight},
       {"metadata_backfill_source_generation",
        family.metadata_backfill_source_generation},

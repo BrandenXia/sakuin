@@ -147,6 +147,8 @@ void family_samples(std::string &output, std::string_view name,
          family.discovery_in_flight);
   sample(output, "sakuin_dht_peer_discovery_pending", labels,
          family.peer_discovery_pending);
+  sample(output, "sakuin_dht_peer_discovery_active", labels,
+         family.peer_discovery_active);
   sample(output, "sakuin_dht_peer_discovery_in_flight", labels,
          family.peer_discovery_in_flight);
   sample(output, "sakuin_dht_metadata_backfill_source_generation", labels,
@@ -379,6 +381,10 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "Periodic routing-discovery queries awaiting responses.", "gauge");
     metadata(output, "sakuin_dht_peer_discovery_pending",
              "Observed infohashes awaiting or undergoing peer discovery.",
+             "gauge");
+    metadata(output, "sakuin_dht_peer_discovery_active",
+             "Infohash traversals admitted to the bounded active scheduling "
+             "window.",
              "gauge");
     metadata(output, "sakuin_dht_peer_discovery_in_flight",
              "Active get_peers discovery queries awaiting responses.", "gauge");

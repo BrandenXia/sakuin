@@ -26,6 +26,7 @@ struct PeerDiscoveryStep {
   std::vector<DatagramSend> sends;
   std::vector<PeerMetadataCandidate> candidates;
   std::size_t pending{};
+  std::size_t active{};
   std::size_t in_flight{};
   std::size_t queries_started{};
   std::size_t responses_received{};
@@ -55,6 +56,7 @@ public:
   std::size_t pending() const noexcept {
     return entries_.size() + ready_.size();
   }
+  std::size_t active() const noexcept;
   std::size_t in_flight() const noexcept;
 
 private:
@@ -88,12 +90,14 @@ private:
   void finish(std::vector<Entry>::iterator entry, core::Timestamp now);
   void purge_cooldowns(core::Timestamp now);
   bool cooling_down(const core::InfoHash &info_hash, core::Timestamp now) const;
+  std::size_t active_limit() const noexcept;
 
   DhtNode *node_;
   PeerDiscoveryOptions options_;
   std::vector<Entry> entries_;
-  // The next hash to receive a query. Keeping this cursor across polls avoids
-  // allowing early queue entries or fast responders to monopolize capacity.
+  // Only enough leading entries to fill the query budget are active at once.
+  // This lets iterative traversals reach a result while the cursor preserves
+  // round-robin fairness inside that bounded FIFO working set.
   std::size_t schedule_cursor_{};
   std::deque<Cooldown> cooldowns_;
   std::vector<PeerMetadataCandidate> ready_;
@@ -202,7 +206,7 @@ void PeerDiscoveryPlanner::finish(std::vector<Entry>::iterator entry,
   } else {
     if (erased < schedule_cursor_)
       --schedule_cursor_;
-    if (schedule_cursor_ >= entries_.size())
+    if (schedule_cursor_ >= active())
       schedule_cursor_ = 0;
   }
 }
@@ -223,9 +227,8 @@ PeerDiscoveryPlanner::poll(core::Timestamp now) {
   auto capacity = options_.maximum_in_flight -
                   std::min(in_flight(), options_.maximum_in_flight);
   std::size_t visits_without_query{};
-  while (capacity != 0 && !entries_.empty() &&
-         visits_without_query < entries_.size()) {
-    if (schedule_cursor_ >= entries_.size())
+  while (capacity != 0 && active() != 0 && visits_without_query < active()) {
+    if (schedule_cursor_ >= active())
       schedule_cursor_ = 0;
     const auto index = schedule_cursor_;
     auto &entry = entries_[index];
@@ -280,7 +283,7 @@ PeerDiscoveryPlanner::poll(core::Timestamp now) {
       step.sends.push_back(std::move(*query));
       --capacity;
       visits_without_query = 0;
-      schedule_cursor_ = (index + 1) % entries_.size();
+      schedule_cursor_ = (index + 1) % active();
       continue;
     }
 
@@ -300,6 +303,7 @@ PeerDiscoveryPlanner::poll(core::Timestamp now) {
     ++visits_without_query;
   }
   step.pending = pending();
+  step.active = active();
   step.in_flight = in_flight();
   return step;
 }
@@ -402,6 +406,14 @@ std::size_t PeerDiscoveryPlanner::in_flight() const noexcept {
                          [](std::size_t count, const auto &entry) {
                            return count + entry.outstanding.size();
                          });
+}
+
+std::size_t PeerDiscoveryPlanner::active_limit() const noexcept {
+  return 1 + (options_.maximum_in_flight - 1) / options_.parallelism_per_hash;
+}
+
+std::size_t PeerDiscoveryPlanner::active() const noexcept {
+  return std::min(entries_.size(), active_limit());
 }
 
 } // namespace sakuin::dht

@@ -458,6 +458,7 @@ int main() {
       observations.records.front().info_hash != wanted ||
       (*pump)->pending() != 0 || !second.peer_discovery ||
       second.peer_discovery->queries_started != 2 ||
+      second.peer_discovery->active != 1 ||
       second.peer_discovery->sends.size() != 2)
     return 8;
 
@@ -495,6 +496,7 @@ int main() {
       active_completed.peer_discovery_peers_found != 1 ||
       active_completed.metadata_candidates_accepted != 1 ||
       active_completed.peer_discovery->pending != 0 ||
+      active_completed.peer_discovery->active != 0 ||
       routing_node.outstanding_queries() != 0)
     return 45;
 
