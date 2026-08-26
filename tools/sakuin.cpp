@@ -199,6 +199,8 @@ public:
         cycle.poll.discovery ? cycle.poll.discovery->in_flight : 0;
     status.peer_discovery_pending =
         cycle.poll.peer_discovery ? cycle.poll.peer_discovery->pending : 0;
+    status.peer_discovery_active =
+        cycle.poll.peer_discovery ? cycle.poll.peer_discovery->active : 0;
     status.peer_discovery_in_flight =
         cycle.poll.peer_discovery ? cycle.poll.peer_discovery->in_flight : 0;
     status.metadata_backfill_source_generation =

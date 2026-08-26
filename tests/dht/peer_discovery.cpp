@@ -170,8 +170,8 @@ int main() {
   auto fair_planner = dht::PeerDiscoveryPlanner::create(
       fair_node, {.maximum_pending = 8,
                   .maximum_in_flight = 4,
-                  .parallelism_per_hash = 3,
-                  .maximum_queries_per_hash = 8,
+                  .parallelism_per_hash = 2,
+                  .maximum_queries_per_hash = 2,
                   .retry_delay = std::chrono::minutes{5}});
   const std::array fair_hashes{hash(61), hash(62), hash(63)};
   if (!fair_planner)
@@ -180,7 +180,8 @@ int main() {
     if (!(*fair_planner)->offer(info_hash, seconds(500)).value_or(false))
       return 17;
   auto fair_first = (*fair_planner)->poll(seconds(500));
-  if (!fair_first || fair_first->sends.size() != 4)
+  if (!fair_first || fair_first->sends.size() != 4 ||
+      fair_first->pending != 3 || fair_first->active != 2)
     return 18;
   std::array<std::size_t, 3> first_counts{};
   for (const auto &send : fair_first->sends) {
@@ -192,29 +193,27 @@ int main() {
       return 20;
     ++first_counts[static_cast<std::size_t>(found - fair_hashes.begin())];
   }
-  if (first_counts != std::array<std::size_t, 3>{2, 1, 1})
+  if (first_counts != std::array<std::size_t, 3>{2, 2, 0})
     return 21;
-  for (std::size_t index = 0; index < fair_first->sends.size(); ++index) {
-    auto completion =
-        respond(fair_node, fair_first->sends[index],
-                id(static_cast<std::uint8_t>(61 + index)), {}, seconds(501));
-    if (!completion || !(*fair_planner)->consume(*completion, seconds(501)))
+  auto fair_expired = fair_node.expire_queries(seconds(502));
+  if (fair_expired.size() != 4)
+    return 22;
+  for (const auto &timeout : fair_expired)
+    if (!(*fair_planner)->consume_timeout(timeout, seconds(502)))
       return 22;
-  }
-  auto fair_second = (*fair_planner)->poll(seconds(501));
-  if (!fair_second || fair_second->sends.size() != 4)
+  auto fair_second = (*fair_planner)->poll(seconds(502));
+  if (!fair_second || fair_second->sends.size() != 2 ||
+      fair_second->queries_timed_out != 4 || fair_second->exhausted != 2 ||
+      fair_second->pending != 1 || fair_second->active != 1)
     return 23;
-  std::array<std::size_t, 3> total_counts = first_counts;
   for (const auto &send : fair_second->sends) {
     const auto *request = query(send);
     if (!request || !request->info_hash)
       return 24;
-    const auto found = std::ranges::find(fair_hashes, *request->info_hash);
-    if (found == fair_hashes.end())
+    if (*request->info_hash != fair_hashes.back())
       return 25;
-    ++total_counts[static_cast<std::size_t>(found - fair_hashes.begin())];
   }
-  if (total_counts != std::array<std::size_t, 3>{3, 3, 2})
+  if ((*fair_planner)->active() != 1)
     return 26;
 
   dht::DhtNode timeout_node{id(50),
