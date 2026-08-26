@@ -186,7 +186,9 @@ target("sakuin-config-tests")
   set_kind("binary")
   add_files("tests/config/config.cpp")
   add_deps("sakuin-core", "sakuin-config")
-  add_tests("config")
+  add_tests("config", {
+    runargs = {path.absolute("config/sakuin.docker.toml")}
+  })
 
 target("sakuin-classification-tests")
   set_kind("binary")

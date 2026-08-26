@@ -65,8 +65,10 @@ timeouts, BEP 42 identity, traffic budgets, storage sizing and retention,
 materialization, duplicate indexing, API authentication, and distributed work.
 
 [`config/sakuin.example.toml`](../config/sakuin.example.toml) documents the full
-surface. [`config/sakuin.docker.toml`](../config/sakuin.docker.toml) is the small
-single-node container profile.
+surface. [`config/sakuin.docker.toml`](../config/sakuin.docker.toml) mirrors
+those defaults with only the container paths and API bind address adjusted.
+Release CI compares the two profiles so new defaults cannot silently leave the
+container deployment behind.
 
 ## Canonical model
 
