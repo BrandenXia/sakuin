@@ -68,6 +68,13 @@ int main() {
     return 4;
   (*planner)->consume(*actions, seconds(1));
 
+  // Contacts learned after the first successful response belong to normal
+  // routing discovery. They must not keep extending bootstrap's completion
+  // frontier on a live DHT.
+  const dht::NodeContact late_contact{
+      .id = node(30), .endpoint = endpoint(4, 6881), .last_seen = seconds(1)};
+  node_engine.routing_table().observe(late_contact);
+
   auto expansion = (*planner)->poll(seconds(1));
   if (!expansion || expansion->sends.size() != 1 ||
       expansion->sends.front().destination != discovered.endpoint ||
