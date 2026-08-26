@@ -5,49 +5,159 @@ listen_port = 6881
 
 [network.dht]
 private_network = false
-# Explicit entries supplied by SAKUIN_DHT_BOOTSTRAP take precedence.
+maximum_in_flight = 128
+query_timeout_ms = 15000
+bootstrap_maximum_in_flight = 8
+bootstrap_maximum_attempts = 3
+bootstrap_retry_delay_ms = 5000
 bootstrap = []
+# The release image installs the standalone fallback list here.
 bootstrap_file = "/opt/sakuin/share/sakuin/dht-bootstrap.txt"
 
 [network.dht.identity]
 mode = "bep42"
+observation_quorum = 3
+vote_window_ms = 600000
+
+[network.dht.routing]
+maximum_queued = 1024
+maximum_in_flight = 8
+maximum_attempts = 2
+retry_delay_ms = 5000
 
 [network.dht.metadata]
 enabled = true
+maximum_in_flight = 64
+maximum_queued = 4096
+maximum_attempts_per_peer = 3
+initial_retry_delay_ms = 30000
+maximum_retry_delay_ms = 1800000
+connect_timeout_ms = 10000
+idle_timeout_ms = 30000
+maximum_metadata_bytes = 4194304
+maximum_outstanding_requests = 4
+maximum_queued_write_bytes = 1048576
+storage_conflict_attempts = 3
+storage_retry_delay_ms = 1000
+
+[network.dht.metadata.discovery]
+enabled = true
+maximum_pending = 8192
+maximum_in_flight = 64
+parallelism_per_hash = 3
+maximum_queries_per_hash = 24
+retry_delay_ms = 300000
+
+[network.dht.metadata.discovery.backfill]
+enabled = true
+maximum_records_per_poll = 256
+refresh_interval_ms = 60000
+full_rescan_interval_ms = 1800000
+retry_delay_ms = 1000
+
+[network.traffic]
+window_ms = 3600000
+grant_bytes = 65536
 
 [storage]
 backend = "local"
+# Container state lives on the persistent Compose volume.
 local_root = "/var/lib/sakuin"
+block_target_bytes = 2097152
+segment_target_bytes = 134217728
+
+[storage.compression]
+codec = "zstd"
+level = 3
+
+[storage.compaction]
+minimum_segments = 4
+maximum_warm_segments = 8
+warm_block_target_bytes = 65536
 
 [storage.retention]
 enabled = false
+observation_cold_age_ms = 2592000000
+observation_max_age_ms = 31536000000
+cold_block_target_bytes = 8388608
+cold_compression_codec = "zstd"
+cold_compression_level = 9
 
 [storage.maintenance]
 enabled = true
+interval_ms = 900000
+verification_interval_ms = 86400000
 
 [storage.materialization]
 enabled = true
+interval_ms = 60000
 
 [indexing.duplicates]
 enabled = true
+interval_ms = 300000
 
 [indexing.classification]
 enabled = true
+learned_fallback_enabled = true
 adult_detection_enabled = true
 adult_content_policy = "include"
 adult_minimum_confidence = "high"
+maximum_files_to_inspect = 100000
+maximum_path_bytes = 4096
+maximum_tokens = 16384
 
 [api]
 enabled = true
 credential_store_directory = "/var/lib/sakuin/operational/api"
+# The Compose port mapping remains loopback-only by default.
 listen_address = "0.0.0.0"
 listen_port = 8080
+maximum_connections = 256
+read_buffer_bytes = 16384
+request_timeout_ms = 15000
+maximum_target_bytes = 8192
+maximum_header_bytes = 32768
+maximum_header_count = 100
+maximum_body_bytes = 1048576
 
 [api.rate_limit]
 enabled = true
+requests_per_window = 120
+window_ms = 60000
+
+[distributed]
+maximum_work_items = 65536
+maximum_payload_bytes = 1048576
+maximum_result_bytes = 8388608
+worker_timeout_ms = 30000
+lease_duration_ms = 120000
+heartbeat_interval_ms = 10000
 
 [distributed.coordinator]
 enabled = false
+recovery_enabled = true
+recovery_maximum_bytes = 536870912
+maximum_terminal_work_items = 16384
+terminal_work_retention_ms = 604800000
+listen_address = "127.0.0.1"
+listen_port = 7100
+maximum_connections = 256
+read_buffer_bytes = 16384
+maximum_frame_bytes = 2097152
+maximum_queued_write_bytes = 4194304
+maximum_result_reassembly_bytes = 134217728
+maximum_result_transfers = 64
+result_transfer_timeout_ms = 120000
+idle_timeout_ms = 30000
 
 [distributed.worker]
 enabled = false
+id = "worker-1"
+coordinator_address = "127.0.0.1"
+coordinator_port = 7100
+observation_batch_size = 4096
+read_buffer_bytes = 16384
+maximum_queued_write_bytes = 4194304
+connect_timeout_ms = 10000
+request_timeout_ms = 10000
+idle_timeout_ms = 30000
