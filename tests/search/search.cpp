@@ -231,11 +231,51 @@ int main() {
     return 20;
   const auto disabled_stats = disabled_index.classification_stats();
   if (disabled_stats.enabled || disabled_stats.total_records != 1 ||
-      disabled_stats.adult_labeled != 0 ||
+      disabled_stats.learned_enabled || disabled_stats.adult_labeled != 0 ||
       disabled_stats.state_count(
           classification::ClassificationState::Unknown) != 1 ||
       disabled_stats.category_count(classification::MediaCategory::Other) != 1)
     return 21;
+
+  search::InMemorySearchIndex learned_index(
+      {.learned = {.minimum_examples_per_kind = 3,
+                   .minimum_feature_occurrences = 2,
+                   .minimum_probability = 0.65,
+                   .minimum_margin = 0.20}});
+  auto learned_rebuild = learned_index.begin_rebuild(1);
+  const std::array learned_records{
+      torrent(20, "Workbench Tool Suite", 120'000'000, {"workbench.rpm"}, 1),
+      torrent(21, "Workbench Tool Package", 130'000'000, {"workbench.exe"}, 2),
+      torrent(22, "Workbench Tool Release", 140'000'000, {"workbench.apk"}, 3),
+      torrent(23, "Cinema Feature 2021", 2'000'000'000, {"cinema-2021.mkv"}, 4),
+      torrent(24, "Cinema Feature 2022", 2'100'000'000, {"cinema-2022.mp4"}, 5),
+      torrent(25, "Cinema Feature 2023", 2'200'000'000, {"cinema-2023.webm"},
+              6),
+      torrent(26, "Workbench Tool Archive", 125'000'000, {"payload.bin"}, 7)};
+  if (!learned_rebuild)
+    return 25;
+  for (const auto &learned_record : learned_records)
+    if (!(*learned_rebuild)->append(learned_record))
+      return 26;
+  if (!(*learned_rebuild)->commit())
+    return 27;
+  auto learned_result = learned_index.search({.text = "archive", .limit = 10});
+  const auto learned_stats = learned_index.classification_stats();
+  if (!learned_result || learned_result->total_matches != 1 ||
+      learned_result->hits.front().classification.kind !=
+          classification::ContentKind::Application ||
+      learned_result->hits.front().classification.kind_confidence !=
+          classification::Confidence::Medium ||
+      !std::ranges::contains(
+          learned_result->hits.front().classification.evidence,
+          classification::EvidenceCode::LearnedContentModel,
+          &classification::Evidence::code) ||
+      !learned_stats.learned_enabled || !learned_stats.learned_ready ||
+      learned_stats.learned_training_records != 6 ||
+      learned_stats.learned_classified_records != 1 ||
+      learned_stats.learned_eligible_kinds != 2 ||
+      learned_stats.learned_vocabulary_size == 0)
+    return 28;
 
   search::InMemorySearchIndex completeness_index;
   auto completeness_rebuild = completeness_index.begin_rebuild(1);

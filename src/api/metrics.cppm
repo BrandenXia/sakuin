@@ -63,6 +63,18 @@ void family_samples(std::string &output, std::string_view name,
          family.observations_stored);
   sample(output, "sakuin_dht_metadata_candidates_accepted_total", labels,
          family.metadata_candidates_accepted);
+  sample(output, "sakuin_dht_metadata_attempts_started_total", labels,
+         family.metadata_attempts_started);
+  sample(output, "sakuin_dht_metadata_fetches_succeeded_total", labels,
+         family.metadata_fetches_succeeded);
+  sample(output, "sakuin_dht_metadata_fetch_failures_total",
+         labels + ",outcome=\"retryable\"", family.metadata_retryable_failures);
+  sample(output, "sakuin_dht_metadata_fetch_failures_total",
+         labels + ",outcome=\"permanent\"", family.metadata_permanent_failures);
+  sample(output, "sakuin_dht_metadata_sink_succeeded_total", labels,
+         family.metadata_sink_succeeded);
+  sample(output, "sakuin_dht_metadata_sink_failures_total", labels,
+         family.metadata_sink_failures);
   sample(output, "sakuin_dht_routing_probes_accepted_total", labels,
          family.routing_probes_accepted);
   sample(output, "sakuin_dht_discovery_queries_started_total", labels,
@@ -127,11 +139,16 @@ void family_samples(std::string &output, std::string_view name,
          family.metadata_in_flight);
   sample(output, "sakuin_dht_metadata_pending_storage", labels,
          family.metadata_pending_storage);
+  sample(output, "sakuin_dht_metadata_backlog", labels,
+         family.metadata_backlog);
   sample(output, "sakuin_dht_bootstrap_candidates", labels,
          family.bootstrap_candidates);
   if (family.bootstrap_complete)
     sample(output, "sakuin_dht_bootstrap_complete", labels,
            *family.bootstrap_complete ? 1 : 0);
+  if (family.bootstrap_exhausted)
+    sample(output, "sakuin_dht_bootstrap_exhausted", labels,
+           *family.bootstrap_exhausted ? 1 : 0);
   if (family.last_cycle_ms)
     sample(output, "sakuin_dht_last_cycle_timestamp_seconds", labels,
            static_cast<double>(*family.last_cycle_ms) / 1000.0);
@@ -237,6 +254,21 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "DHT observations stored in canonical storage.", "counter");
     metadata(output, "sakuin_dht_metadata_candidates_accepted_total",
              "Metadata acquisition candidates accepted.", "counter");
+    metadata(output, "sakuin_dht_metadata_attempts_started_total",
+             "Metadata acquisition attempts started.", "counter");
+    metadata(output, "sakuin_dht_metadata_fetches_succeeded_total",
+             "Metadata payloads downloaded and verified successfully.",
+             "counter");
+    metadata(output, "sakuin_dht_metadata_fetch_failures_total",
+             "Metadata acquisition failures by retry outcome.", "counter");
+    metadata(output, "sakuin_dht_metadata_sink_succeeded_total",
+             "Fetched metadata accepted by the configured result or storage "
+             "sink.",
+             "counter");
+    metadata(output, "sakuin_dht_metadata_sink_failures_total",
+             "Fetched metadata delivery attempts rejected by the configured "
+             "result or storage sink.",
+             "counter");
     metadata(output, "sakuin_dht_routing_probes_accepted_total",
              "Routing probes accepted.", "counter");
     metadata(output, "sakuin_dht_discovery_queries_started_total",
@@ -305,11 +337,20 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
     metadata(output, "sakuin_dht_metadata_in_flight",
              "Metadata acquisitions currently in flight.", "gauge");
     metadata(output, "sakuin_dht_metadata_pending_storage",
-             "Acquired metadata waiting for canonical storage.", "gauge");
+             "Acquired metadata waiting for the configured result or storage "
+             "sink.",
+             "gauge");
+    metadata(output, "sakuin_dht_metadata_backlog",
+             "Metadata work queued, in flight, or waiting for its sink.",
+             "gauge");
     metadata(output, "sakuin_dht_bootstrap_candidates",
              "Known bootstrap candidates.", "gauge");
     metadata(output, "sakuin_dht_bootstrap_complete",
-             "Whether DHT bootstrap has completed.", "gauge");
+             "Whether DHT bootstrap settled after a successful response.",
+             "gauge");
+    metadata(output, "sakuin_dht_bootstrap_exhausted",
+             "Whether DHT bootstrap settled without any successful response.",
+             "gauge");
     metadata(output, "sakuin_dht_last_cycle_timestamp_seconds",
              "Unix time of the last completed DHT cycle.", "gauge");
     metadata(output, "sakuin_dht_last_inbound_query_timestamp_seconds",
@@ -356,6 +397,37 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "gauge");
     sample(output, "sakuin_classification_adult_labeled_records", {},
            status.search_classification.adult_labeled);
+    metadata(output, "sakuin_classification_learned_enabled",
+             "Whether the learned content-kind fallback is enabled.", "gauge");
+    sample(output, "sakuin_classification_learned_enabled", {},
+           status.search_classification.learned_enabled ? 1 : 0);
+    metadata(output, "sakuin_classification_learned_ready",
+             "Whether the local learned model has enough training coverage.",
+             "gauge");
+    sample(output, "sakuin_classification_learned_ready", {},
+           status.search_classification.learned_ready ? 1 : 0);
+    metadata(output, "sakuin_classification_learned_training_records",
+             "High-confidence deterministic records used to train the local "
+             "content-kind model.",
+             "gauge");
+    sample(output, "sakuin_classification_learned_training_records", {},
+           status.search_classification.learned_training_records);
+    metadata(output, "sakuin_classification_learned_classified_records",
+             "Current records whose content kind was supplied by the learned "
+             "fallback.",
+             "gauge");
+    sample(output, "sakuin_classification_learned_classified_records", {},
+           status.search_classification.learned_classified_records);
+    metadata(output, "sakuin_classification_learned_eligible_kinds",
+             "Content kinds with enough examples in the local learned model.",
+             "gauge");
+    sample(output, "sakuin_classification_learned_eligible_kinds", {},
+           status.search_classification.learned_eligible_kinds);
+    metadata(output, "sakuin_classification_learned_vocabulary_size",
+             "Bounded feature vocabulary size of the local learned model.",
+             "gauge");
+    sample(output, "sakuin_classification_learned_vocabulary_size", {},
+           status.search_classification.learned_vocabulary_size);
     metadata(output, "sakuin_classification_category_records",
              "Current search-index records by semantic category.", "gauge");
     for (std::size_t index = 0; index < search::MediaCategoryCount; ++index) {

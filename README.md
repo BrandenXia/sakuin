@@ -96,6 +96,7 @@ Useful commands from a repository checkout:
 ```bash
 ./scripts/deploy.sh status YOUR_OPERATOR_TOKEN
 ./scripts/deploy.sh metrics YOUR_OPERATOR_TOKEN
+./scripts/deploy.sh activity YOUR_OPERATOR_TOKEN 30
 ./scripts/deploy.sh maintenance YOUR_OPERATOR_TOKEN
 ./scripts/deploy.sh maintenance YOUR_OPERATOR_TOKEN verify
 ./scripts/deploy.sh logs
@@ -138,6 +139,11 @@ operator setting and defaults to including every result. Native JSON search
 also returns bounded rule evidence so classifications can be audited.
 Strong content-kind hints tolerate simple one-character misspellings out of the
 box, while sensitive labels remain exact-token-only.
+For metadata-complete results that deterministic rules still leave unknown or
+ambiguous, an enabled-by-default local learned fallback adapts to recurring
+content-kind vocabulary in the node's own high-confidence records. Its
+predictions are conservative and auditable; it never learns sensitive labels,
+changes Adult visibility, or overrides a deterministic classified result.
 For classifier review workflows, `/v1/search` can filter by exact state and
 kind, minimum confidence, and required labels; the published OpenAPI document
 lists the accepted values. These facets never bypass the operator's Adult
@@ -152,6 +158,12 @@ active routing-discovery work, which makes passive reachability and crawler
 progress visible without packet captures.
 Classifier coverage, ambiguity, bounded-input truncation, and semantic category
 counts are included so operators can assess classification quality in place.
+Counters are cumulative for Prometheus compatibility; assess live crawler
+behavior with counter deltas or rates over a time window. From a repository
+deployment, `./scripts/deploy.sh activity OPERATOR_TOKEN 30` samples twice and
+reports reset-aware deltas and per-second rates for the discovery-to-metadata
+pipeline. In Prometheus, use `rate(..._total[5m])` or
+`increase(..._total[5m])` for the same purpose instead of comparing totals.
 
 `/v1/health` is a liveness check for the HTTP process. `/v1/ready` stays at
 HTTP 503 until the composed service and every enabled DHT address-family worker

@@ -100,6 +100,15 @@ int main() {
   status.snapshot.ipv4.cycles = 42;
   status.snapshot.ipv4.routing_nodes = 13;
   status.snapshot.ipv4.metadata_in_flight = 2;
+  status.snapshot.ipv4.metadata_queued = 4;
+  status.snapshot.ipv4.metadata_pending_storage = 1;
+  status.snapshot.ipv4.metadata_backlog = 7;
+  status.snapshot.ipv4.metadata_attempts_started = 19;
+  status.snapshot.ipv4.metadata_fetches_succeeded = 8;
+  status.snapshot.ipv4.metadata_retryable_failures = 6;
+  status.snapshot.ipv4.metadata_permanent_failures = 3;
+  status.snapshot.ipv4.metadata_sink_succeeded = 7;
+  status.snapshot.ipv4.metadata_sink_failures = 2;
   status.snapshot.ipv4.observations_stored = 99;
   status.snapshot.ipv4.discovery_queries_started = 17;
   status.snapshot.ipv4.discovery_in_flight = 1;
@@ -118,6 +127,7 @@ int main() {
   status.snapshot.ipv4.inbound_get_peers_queries = 7;
   status.snapshot.ipv4.last_inbound_query_ms = 12'000;
   status.snapshot.ipv4.bootstrap_complete = true;
+  status.snapshot.ipv4.bootstrap_exhausted = false;
   status.snapshot.search_source_generation = 7;
   status.snapshot.search_records_indexed = 21;
   std::size_t refreshes{};
@@ -166,6 +176,7 @@ int main() {
                                "\"") ||
       !body(*openapi).contains("\"/v1/search\"") ||
       !body(*openapi).contains("\"classification_state\"") ||
+      !body(*openapi).contains("learned_content_model") ||
       !body(*openapi).contains("\"minimum_label_confidence\"") ||
       !body(*openapi).contains("payload_layout_v1") ||
       !body(*openapi).contains("\"bearerAuth\"") ||
@@ -469,9 +480,15 @@ int main() {
       !body(*operator_status)
            .contains("\"metadata_backfill_scan_in_progress\":true") ||
       !body(*operator_status).contains("\"metadata_in_flight\":2") ||
+      !body(*operator_status).contains("\"metadata_backlog\":7") ||
+      !body(*operator_status).contains("\"metadata_fetches_succeeded\":8") ||
+      !body(*operator_status).contains("\"metadata_sink_succeeded\":7") ||
+      !body(*operator_status).contains("\"bootstrap_exhausted\":false") ||
       !body(*operator_status).contains("\"total_records\":2") ||
       !body(*operator_status).contains("\"adult_labeled\":0") ||
       !body(*operator_status).contains("\"movie\":1") ||
+      !body(*operator_status).contains("\"learned\":{") ||
+      !body(*operator_status).contains("\"training_records\":1") ||
       !body(*operator_status).contains("\"last_error\":null") ||
       body(*operator_status).contains("\"last_error\":[null]") ||
       !body(*operator_status).contains("\"state\":\"running\""))
@@ -503,6 +520,8 @@ int main() {
       !body(*operator_metrics)
            .contains("sakuin_dht_bootstrap_complete{family=\"ipv4\"} 1\n") ||
       !body(*operator_metrics)
+           .contains("sakuin_dht_bootstrap_exhausted{family=\"ipv4\"} 0\n") ||
+      !body(*operator_metrics)
            .contains("sakuin_dht_discovery_queries_started_total{family="
                      "\"ipv4\"} 17\n") ||
       !body(*operator_metrics)
@@ -518,6 +537,17 @@ int main() {
            .contains("sakuin_dht_metadata_backfill_scan_in_progress{family="
                      "\"ipv4\"} 1\n") ||
       !body(*operator_metrics)
+           .contains("sakuin_dht_metadata_fetches_succeeded_total{family="
+                     "\"ipv4\"} 8\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_metadata_fetch_failures_total{family="
+                     "\"ipv4\",outcome=\"retryable\"} 6\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_metadata_sink_succeeded_total{family="
+                     "\"ipv4\"} 7\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_metadata_backlog{family=\"ipv4\"} 7\n") ||
+      !body(*operator_metrics)
            .contains("sakuin_dht_inbound_query_methods_total{family=\"ipv4\","
                      "method=\"get_peers\"} 7\n") ||
       !body(*operator_metrics)
@@ -529,6 +559,12 @@ int main() {
            .contains("sakuin_search_records_indexed_total 21\n"))
     return 24;
   if (!body(*operator_metrics).contains("sakuin_classification_enabled 1\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_classification_learned_enabled 1\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_classification_learned_ready 0\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_classification_learned_training_records 1\n") ||
       !body(*operator_metrics)
            .contains("sakuin_classification_adult_labeled_records 0\n") ||
       !body(*operator_metrics)

@@ -3,7 +3,7 @@ import std;
 import sakuin.config;
 import sakuin.core;
 
-int main() {
+int main(int argument_count, char **arguments) {
   using namespace sakuin;
   constexpr std::string_view source = R"toml(
 [network]
@@ -109,6 +109,7 @@ interval_ms = 120000
 
 [indexing.classification]
 enabled = true
+learned_fallback_enabled = true
 adult_detection_enabled = true
 adult_content_policy = "only"
 adult_minimum_confidence = "medium"
@@ -224,6 +225,8 @@ tls_server_name = "coordinator.internal"
                 std::string{"60000"}},
       std::pair{std::string{"SAKUIN_CLASSIFICATION_ADULT_CONTENT_POLICY"},
                 std::string{"exclude"}},
+      std::pair{std::string{"SAKUIN_CLASSIFICATION_LEARNED_FALLBACK_ENABLED"},
+                std::string{"false"}},
       std::pair{std::string{"SAKUIN_CLASSIFICATION_ADULT_MINIMUM_CONFIDENCE"},
                 std::string{"low"}},
       std::pair{std::string{"SAKUIN_DISTRIBUTED_MAXIMUM_WORK_ITEMS"},
@@ -338,6 +341,7 @@ tls_server_name = "coordinator.internal"
       !loaded.indexing.duplicates.enabled ||
       loaded.indexing.duplicates.interval != std::chrono::minutes{1} ||
       !loaded.indexing.classification.enabled ||
+      loaded.indexing.classification.learned_fallback_enabled ||
       !loaded.indexing.classification.adult_detection_enabled ||
       loaded.indexing.classification.adult_content_policy !=
           config::AdultContentPolicy::Exclude ||
@@ -507,5 +511,26 @@ tls_server_name = "coordinator.internal"
       fallback->network.dht.bootstrap[0] != "router.example:6881" ||
       fallback->network.dht.bootstrap_file != fallback_file)
     return 21;
+  if (argument_count != 2)
+    return 24;
+  const std::array docker_environment{std::pair{
+      std::string{"SAKUIN_DHT_BOOTSTRAP"}, std::string{"router.example:6881"}}};
+  auto docker = config::load({.toml_file = std::filesystem::path{arguments[1]},
+                              .environment = docker_environment});
+  if (!docker) {
+    std::cerr << docker.error().message << '\n';
+    return 25;
+  }
+  if (docker->storage.local_root != "/var/lib/sakuin" ||
+      docker->api.credential_store_directory !=
+          "/var/lib/sakuin/operational/api" ||
+      docker->api.listen_address != "0.0.0.0" ||
+      docker->network.dht.bootstrap_file !=
+          "/opt/sakuin/share/sakuin/dht-bootstrap.txt" ||
+      docker->network.dht.maximum_in_flight != 128 ||
+      docker->network.dht.metadata.discovery.maximum_in_flight != 64 ||
+      !docker->network.dht.metadata.discovery.backfill.enabled ||
+      !docker->indexing.classification.learned_fallback_enabled)
+    return 26;
   return 0;
 }

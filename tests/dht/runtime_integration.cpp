@@ -402,7 +402,8 @@ int main() {
     return 34;
   auto bootstrap_complete =
       (*bootstrap_pump)->poll(bootstrap_now + std::chrono::seconds{3});
-  if (!bootstrap_complete.bootstrap || !bootstrap_complete.bootstrap->complete)
+  if (!bootstrap_complete.bootstrap || bootstrap_complete.bootstrap->complete ||
+      !bootstrap_complete.bootstrap->exhausted)
     return 35;
   bootstrap_driver.stop();
 

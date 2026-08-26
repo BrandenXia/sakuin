@@ -65,8 +65,10 @@ timeouts, BEP 42 identity, traffic budgets, storage sizing and retention,
 materialization, duplicate indexing, API authentication, and distributed work.
 
 [`config/sakuin.example.toml`](../config/sakuin.example.toml) documents the full
-surface. [`config/sakuin.docker.toml`](../config/sakuin.docker.toml) is the small
-single-node container profile.
+surface. [`config/sakuin.docker.toml`](../config/sakuin.docker.toml) mirrors
+those defaults with only the container paths and API bind address adjusted.
+Release CI compares the two profiles so new defaults cannot silently leave the
+container deployment behind.
 
 ## Canonical model
 
@@ -168,7 +170,11 @@ responses, and converts compact peer endpoints into metadata candidates. Each
 infohash has independent parallelism and query limits plus a cooldown, so
 improved metadata coverage does not require unbounded DHT fan-out. IPv4 and
 IPv6 traversals remain isolated even when a response contains contacts for both
-families.
+families. A persistent round-robin cursor grants at most one new query to a
+hash per scheduling pass, preventing early queue entries and fast responders
+from monopolizing the global discovery window. The default window uses half of
+the DHT node's global outstanding-query allowance, leaving capacity for
+bootstrap and routing maintenance while increasing discovery throughput.
 
 Existing canonical records without fetched metadata are also fed into this
 planner by a bounded backfill scan. The scan starts with a complete keyed view,
@@ -204,6 +210,12 @@ DNS absence is evaluated per address family. An IPv4-only router therefore
 does not prevent a dual-stack node from starting its IPv6 family with other
 contacts, while startup still fails when none of the configured contacts
 resolve for any enabled family.
+
+Bootstrap status separates success from terminal failure. `bootstrap_complete`
+becomes true only after the bootstrap-owned traversal settles with at least one
+successful `find_node` response; exhausting every seed and retry instead sets
+`bootstrap_exhausted`. Unrelated routing, discovery, and peer queries do not
+delay either state.
 
 The release Compose file creates a dual-stack bridge and enables both DHT
 families by default. Docker assigns the bridge an IPv6 subnet when none is
@@ -245,7 +257,12 @@ exhausted traversals per address family. Metadata backfill additionally reports
 records scanned, targets offered,
 records already carrying metadata, source generation, and whether a full scan
 is in progress. These counters distinguish a discovery bottleneck from an
-acquisition or storage bottleneck without exposing peer addresses. Inbound
+acquisition or storage bottleneck without exposing peer addresses.
+Metadata acquisition exposes attempts, verified fetches, retryable and
+permanent failures, and result/storage-sink outcomes as monotonic counters.
+Its backlog gauge is the sum of candidates queued, acquisitions in flight, and
+verified records waiting for their configured sink; the three component gauges
+remain available for locating the congested stage. Inbound
 query counts are split into `ping`, `find_node`, `get_peers`, `announce_peer`,
 and unknown methods; responses and protocol errors are counted separately.
 This provides direct evidence that published UDP ingress is reaching Sakuin,
@@ -279,6 +296,12 @@ remain behind the authenticated status and metrics routes.
 text format. Both require an operator credential. Labels are bounded to service
 state and IP address family; peer addresses and error messages are omitted to
 avoid sensitive output and unbounded time-series cardinality.
+Operational decisions use deltas or rates across sampled counter values, never
+the absolute magnitude of a cumulative counter. The deployment helper can
+sample the discovery-to-metadata pipeline without an external time-series
+database and identifies new or reset series explicitly. Prometheus deployments
+retain the cumulative counters and derive equivalent windows with `rate` or
+`increase`.
 
 When maintenance is enabled, authenticated operators may enqueue a pass through
 `POST /v1/operations/storage-maintenance`, optionally including verification.
@@ -342,6 +365,25 @@ runs the corpus. The evaluator emits deterministic coverage counts by resulting
 state, kind, and label. These counts describe regression coverage only; the
 hand-curated cases are not presented as population accuracy, precision, or
 recall measurements.
+
+An optional learned content-kind fallback complements those rules without
+replacing them. During each derived search rebuild, Sakuin trains a bounded
+multinomial Naive Bayes model from the same node's high-confidence deterministic
+results. Candidate features and per-record extraction are capped, low-support
+features are discarded, the final vocabulary is bounded, and a kind needs a
+minimum local training set before it is eligible. Uniform kind priors prevent
+the most common local media kind from winning solely because it is common.
+
+The learned stage runs only for records that contain metadata and remain
+`Unknown` or `Ambiguous` after deterministic classification. Accepted
+predictions require both posterior and margin thresholds, are capped at Medium
+confidence, and carry `learned_content_model` evidence. Deterministic
+`Classified` results are authoritative. Adult and Anime labels, resolution, and
+all operator visibility policy remain deterministic and are never learned or
+overridden. The model is disposable derived state rebuilt from canonical
+torrent metadata; no model artifact becomes a source of truth. Status and
+metrics expose whether it is ready, its training/vocabulary coverage, and how
+many current records use it.
 
 API credentials live in a separate operational store. The CLI generates the
 secret once and persists a salted verifier, owner-only pepper, and permission

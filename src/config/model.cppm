@@ -32,7 +32,7 @@ struct MetadataDiscoveryBackfillConfig {
 struct MetadataDiscoveryConfig {
   bool enabled{true};
   std::size_t maximum_pending{8'192};
-  std::size_t maximum_in_flight{16};
+  std::size_t maximum_in_flight{64};
   std::size_t parallelism_per_hash{3};
   std::size_t maximum_queries_per_hash{24};
   core::Duration retry_delay{std::chrono::minutes{5}};
@@ -170,6 +170,10 @@ struct DuplicateIndexConfig {
 
 struct ClassificationConfig {
   bool enabled{true};
+  // Learns content-kind vocabulary from this node's high-confidence
+  // deterministic results and only fills metadata-complete Unknown/Ambiguous
+  // cases. Labels and deterministic Classified results are never overridden.
+  bool learned_fallback_enabled{true};
   bool adult_detection_enabled{true};
   // Classification only supplies a label. Search visibility is an explicit
   // operator policy and defaults to retaining every result.
@@ -697,6 +701,11 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.indexing.classification.enabled = *value;
+    } else if (name == "indexing.classification.learned_fallback_enabled") {
+      auto value = boolean_value(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.indexing.classification.learned_fallback_enabled = *value;
     } else if (name == "indexing.classification.adult_detection_enabled") {
       auto value = boolean_value(text, name);
       if (!value)

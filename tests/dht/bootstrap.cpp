@@ -92,8 +92,31 @@ int main() {
   if (!last || last->sends.size() != 1)
     return 9;
   (*planner)->delivery_failed(last->sends.front(), seconds(18));
+  core::InfoHash unrelated_hash;
+  unrelated_hash.bytes.fill(0x44);
+  if (!node_engine.get_peers(endpoint(9, 6881), unrelated_hash, seconds(19)))
+    return 12;
   auto complete = (*planner)->poll(seconds(19));
-  if (!complete || !complete->complete || !complete->sends.empty())
+  if (!complete || !complete->complete || complete->exhausted ||
+      !complete->sends.empty() || node_engine.outstanding_queries() != 1)
     return 10;
+
+  dht::DhtNode unreachable_node{node(101), *tokens};
+  auto unreachable =
+      dht::BootstrapPlanner::create(unreachable_node, routers,
+                                    {.maximum_in_flight = 1,
+                                     .maximum_attempts = 1,
+                                     .retry_delay = std::chrono::seconds{1}});
+  if (!unreachable)
+    return 13;
+  auto unreachable_attempt = (*unreachable)->poll(seconds(20));
+  if (!unreachable_attempt || unreachable_attempt->sends.size() != 1 ||
+      !(*unreachable)
+           ->delivery_failed(unreachable_attempt->sends.front(), seconds(20)))
+    return 14;
+  auto exhausted = (*unreachable)->poll(seconds(21));
+  if (!exhausted || exhausted->complete || !exhausted->exhausted ||
+      !exhausted->sends.empty())
+    return 15;
   return 0;
 }

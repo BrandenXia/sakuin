@@ -36,6 +36,7 @@ private:
 
   struct IndexedRecord {
     model::TorrentRecord record;
+    classification::Classification deterministic;
     classification::Classification classification;
     std::vector<classification::MediaCategory> categories;
   };
@@ -50,8 +51,10 @@ private:
   core::Result<void>
   publish_updates(std::uint64_t source_generation,
                   std::span<const model::TorrentRecord> updates);
-  ClassificationIndexStats
-  summarize(std::span<const IndexedRecord> records) const noexcept;
+  void rebuild_classification(State &state) const;
+  ClassificationIndexStats summarize(
+      std::span<const IndexedRecord> records,
+      const classification::LearnedClassifierStats &learned) const noexcept;
 
   mutable std::shared_mutex mutex_;
   SearchClassificationOptions options_;
@@ -226,6 +229,8 @@ InMemorySearchIndex::InMemorySearchIndex(SearchClassificationOptions options)
     : options_(std::move(options)) {
   auto initial = std::make_shared<State>();
   initial->classification.enabled = options_.enabled;
+  initial->classification.learned_enabled =
+      options_.enabled && options_.learned.enabled;
   state_ = std::move(initial);
 }
 
@@ -267,20 +272,13 @@ core::Result<void> InMemorySearchIndex::publish_updates(
         std::ranges::find_if(replacement->records, [&](const auto &indexed) {
           return indexed.record.info_hash == update.info_hash;
         });
-    classification::Classification classified{.info_hash = update.info_hash};
-    if (options_.enabled)
-      classified = classification::classify(update, options_.classifier);
-    IndexedRecord indexed{.record = update,
-                          .classification = std::move(classified)};
-    indexed.categories = classification::media_categories(
-        indexed.classification, options_.category_minimum,
-        options_.adult_minimum);
+    IndexedRecord indexed{.record = update};
     if (existing == replacement->records.end())
       replacement->records.push_back(std::move(indexed));
     else
       *existing = std::move(indexed);
   }
-  replacement->classification = summarize(replacement->records);
+  rebuild_classification(*replacement);
   state_ = std::move(replacement);
   return {};
 }
@@ -295,25 +293,49 @@ core::Result<void> MemoryRebuildSession::commit() {
   state->source_generation = generation_;
   state->records.reserve(records_.size());
   for (auto &record : records_) {
-    classification::Classification classified{.info_hash = record.info_hash};
-    if (owner_->options_.enabled)
-      classified =
-          classification::classify(record, owner_->options_.classifier);
-    InMemorySearchIndex::IndexedRecord indexed{
-        .record = std::move(record), .classification = std::move(classified)};
-    indexed.categories = classification::media_categories(
-        indexed.classification, owner_->options_.category_minimum,
-        owner_->options_.adult_minimum);
-    state->records.push_back(std::move(indexed));
+    state->records.push_back(
+        InMemorySearchIndex::IndexedRecord{.record = std::move(record)});
   }
-  state->classification = owner_->summarize(state->records);
+  owner_->rebuild_classification(*state);
   return owner_->publish(std::move(state));
 }
 
+void InMemorySearchIndex::rebuild_classification(State &state) const {
+  std::vector<classification::LearnedTrainingExample> examples;
+  examples.reserve(state.records.size());
+  for (auto &record : state.records) {
+    record.deterministic =
+        classification::Classification{.info_hash = record.record.info_hash};
+    if (options_.enabled)
+      record.deterministic =
+          classification::classify(record.record, options_.classifier);
+    examples.push_back(
+        {.record = &record.record, .classification = &record.deterministic});
+  }
+  auto learned_options = options_.learned;
+  learned_options.enabled = options_.enabled && learned_options.enabled;
+  const auto learned = classification::LearnedContentClassifier::train(
+      examples, options_.classifier, learned_options);
+  for (auto &record : state.records) {
+    record.classification = learned.apply(record.record, record.deterministic);
+    record.categories = classification::media_categories(
+        record.classification, options_.category_minimum,
+        options_.adult_minimum);
+  }
+  state.classification = summarize(state.records, learned.stats());
+}
+
 ClassificationIndexStats InMemorySearchIndex::summarize(
-    std::span<const IndexedRecord> records) const noexcept {
-  ClassificationIndexStats result{.enabled = options_.enabled,
-                                  .total_records = records.size()};
+    std::span<const IndexedRecord> records,
+    const classification::LearnedClassifierStats &learned) const noexcept {
+  ClassificationIndexStats result{
+      .enabled = options_.enabled,
+      .total_records = records.size(),
+      .learned_enabled = learned.enabled,
+      .learned_ready = learned.ready,
+      .learned_training_records = learned.training_records,
+      .learned_eligible_kinds = learned.eligible_kinds,
+      .learned_vocabulary_size = learned.vocabulary_size};
   for (const auto &record : records) {
     ++result.states[std::to_underlying(record.classification.state)];
     if (record.classification.input_truncated)
@@ -321,6 +343,10 @@ ClassificationIndexStats InMemorySearchIndex::summarize(
     if (classification::label_confidence(record.classification,
                                          classification::ContentLabel::Adult))
       ++result.adult_labeled;
+    if (std::ranges::contains(record.classification.evidence,
+                              classification::EvidenceCode::LearnedContentModel,
+                              &classification::Evidence::code))
+      ++result.learned_classified_records;
     for (const auto category : record.categories)
       ++result.categories[std::to_underlying(category)];
   }

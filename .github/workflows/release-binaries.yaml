@@ -44,6 +44,11 @@ jobs:
       - name: Validate deployment files
         run: |
           shellcheck scripts/deploy.sh scripts/package-linux.sh
+          python3 scripts/check-docker-config.py
+          awk -v window_seconds=10 -f scripts/metrics-delta.awk \
+            tests/fixtures/metrics/before.prom \
+            tests/fixtures/metrics/after.prom | \
+            diff --unified tests/fixtures/metrics/expected.tsv -
           docker compose config --quiet
 
       - name: Install Xmake

@@ -186,13 +186,21 @@ target("sakuin-config-tests")
   set_kind("binary")
   add_files("tests/config/config.cpp")
   add_deps("sakuin-core", "sakuin-config")
-  add_tests("config")
+  add_tests("config", {
+    runargs = {path.absolute("config/sakuin.docker.toml")}
+  })
 
 target("sakuin-classification-tests")
   set_kind("binary")
   add_files("tests/classification/rules.cpp")
   add_deps("sakuin-core", "sakuin-model", "sakuin-classification")
   add_tests("classification")
+
+target("sakuin-learned-classification-tests")
+  set_kind("binary")
+  add_files("tests/classification/learned.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-classification")
+  add_tests("learned-classification")
 
 target("sakuin-classifier-eval")
   set_kind("binary")

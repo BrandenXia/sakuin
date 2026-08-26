@@ -21,7 +21,7 @@ sakuin::core::InfoHash hash(std::uint8_t suffix) {
 
 sakuin::runtime::DatagramEndpoint endpoint(std::uint8_t suffix) {
   auto address = sakuin::runtime::IpAddress::loopback_v4();
-  address.bytes.back() = static_cast<std::uint8_t>(suffix + 1);
+  address.bytes[3] = static_cast<std::uint8_t>(suffix + 1);
   return {.address = address,
           .port = static_cast<std::uint16_t>(6'000 + suffix)};
 }
@@ -135,7 +135,7 @@ int main() {
                     dht::bencode::Value{std::move(*compact_alternate_peer)}}}}},
               seconds(14));
   if (!peer_response || !(*planner)->consume(*peer_response, seconds(14)) ||
-      (*planner)->pending() != 0 || node.outstanding_queries() != 0)
+      (*planner)->pending() != 2 || node.outstanding_queries() != 0)
     return 6;
 
   auto completed = (*planner)->poll(seconds(14));
@@ -155,6 +155,64 @@ int main() {
   if ((*planner)->offer(wanted, seconds(15)).value_or(true) ||
       !(*planner)->offer(wanted, seconds(315)).value_or(false))
     return 8;
+
+  dht::DhtNode fair_node{id(60),
+                         *tokens,
+                         {.query_timeout = std::chrono::seconds{2},
+                          .address_family = runtime::AddressFamily::IPv4}};
+  for (std::uint8_t suffix = 61; suffix < 69; ++suffix)
+    fair_node.routing_table().observe({.id = id(suffix),
+                                       .endpoint = endpoint(suffix),
+                                       .last_seen = seconds(1)});
+  auto fair_planner = dht::PeerDiscoveryPlanner::create(
+      fair_node, {.maximum_pending = 8,
+                  .maximum_in_flight = 4,
+                  .parallelism_per_hash = 3,
+                  .maximum_queries_per_hash = 8,
+                  .retry_delay = std::chrono::minutes{5}});
+  const std::array fair_hashes{hash(61), hash(62), hash(63)};
+  if (!fair_planner)
+    return 16;
+  for (const auto &info_hash : fair_hashes)
+    if (!(*fair_planner)->offer(info_hash, seconds(500)).value_or(false))
+      return 17;
+  auto fair_first = (*fair_planner)->poll(seconds(500));
+  if (!fair_first || fair_first->sends.size() != 4)
+    return 18;
+  std::array<std::size_t, 3> first_counts{};
+  for (const auto &send : fair_first->sends) {
+    const auto *request = query(send);
+    if (!request || !request->info_hash)
+      return 19;
+    const auto found = std::ranges::find(fair_hashes, *request->info_hash);
+    if (found == fair_hashes.end())
+      return 20;
+    ++first_counts[static_cast<std::size_t>(found - fair_hashes.begin())];
+  }
+  if (first_counts != std::array<std::size_t, 3>{2, 1, 1})
+    return 21;
+  for (std::size_t index = 0; index < fair_first->sends.size(); ++index) {
+    auto completion =
+        respond(fair_node, fair_first->sends[index],
+                id(static_cast<std::uint8_t>(61 + index)), {}, seconds(501));
+    if (!completion || !(*fair_planner)->consume(*completion, seconds(501)))
+      return 22;
+  }
+  auto fair_second = (*fair_planner)->poll(seconds(501));
+  if (!fair_second || fair_second->sends.size() != 4)
+    return 23;
+  std::array<std::size_t, 3> total_counts = first_counts;
+  for (const auto &send : fair_second->sends) {
+    const auto *request = query(send);
+    if (!request || !request->info_hash)
+      return 24;
+    const auto found = std::ranges::find(fair_hashes, *request->info_hash);
+    if (found == fair_hashes.end())
+      return 25;
+    ++total_counts[static_cast<std::size_t>(found - fair_hashes.begin())];
+  }
+  if (total_counts != std::array<std::size_t, 3>{3, 3, 2})
+    return 26;
 
   dht::DhtNode timeout_node{id(50),
                             *tokens,

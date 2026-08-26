@@ -15,6 +15,7 @@ enum class AdultContentMode { Include, Exclude, Only };
 struct SearchClassificationOptions {
   bool enabled{true};
   classification::ClassifierOptions classifier;
+  classification::LearnedClassifierOptions learned;
   classification::Confidence category_minimum{
       classification::Confidence::Medium};
   classification::Confidence adult_minimum{classification::Confidence::High};
@@ -76,6 +77,12 @@ struct ClassificationIndexStats {
   // Counts every Adult label produced by the classifier. The Adult semantic
   // category below applies the configured confidence threshold separately.
   std::uint64_t adult_labeled{};
+  bool learned_enabled{};
+  bool learned_ready{};
+  std::uint64_t learned_training_records{};
+  std::uint64_t learned_classified_records{};
+  std::uint64_t learned_eligible_kinds{};
+  std::uint64_t learned_vocabulary_size{};
   std::array<std::uint64_t, MediaCategoryCount> categories{};
 
   std::uint64_t
