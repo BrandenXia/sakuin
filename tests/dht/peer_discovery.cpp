@@ -118,6 +118,8 @@ int main() {
 
   auto second = (*planner)->poll(seconds(13));
   if (!second || second->sends.size() != 1 || second->queries_started != 1 ||
+      second->responses_received != 1 || second->queries_timed_out != 0 ||
+      second->delivery_failures != 0 || second->succeeded != 0 ||
       second->sends.front().destination != closer.endpoint ||
       second->in_flight != 2)
     return 5;
@@ -140,7 +142,8 @@ int main() {
 
   auto completed = (*planner)->poll(seconds(14));
   if (!completed || completed->candidates.size() != 2 ||
-      completed->peers_found != 2 ||
+      completed->responses_received != 1 || completed->peers_found != 2 ||
+      completed->succeeded != 1 || completed->queries_timed_out != 0 ||
       completed->candidates.front().info_hash != wanted ||
       completed->candidates.front().peer.address != peer.address ||
       completed->candidates.front().peer.port != peer.port)
@@ -236,8 +239,9 @@ int main() {
       !(*timeout_planner)->consume_timeout(expired.front(), seconds(22)))
     return 10;
   auto exhausted = (*timeout_planner)->poll(seconds(22));
-  if (!exhausted || exhausted->exhausted != 1 ||
-      (*timeout_planner)->pending() != 0)
+  if (!exhausted || exhausted->queries_timed_out != 1 ||
+      exhausted->delivery_failures != 0 || exhausted->succeeded != 0 ||
+      exhausted->exhausted != 1 || (*timeout_planner)->pending() != 0)
     return 11;
 
   if (!(*timeout_planner)->offer(hash(21), seconds(400)).value_or(false))
@@ -248,5 +252,10 @@ int main() {
            ->delivery_failed(failed_send->sends.front(), seconds(400)) ||
       timeout_node.outstanding_queries() != 0)
     return 13;
+  auto delivery_failure = (*timeout_planner)->poll(seconds(400));
+  if (!delivery_failure || delivery_failure->delivery_failures != 1 ||
+      delivery_failure->queries_timed_out != 0 ||
+      delivery_failure->exhausted != 1)
+    return 27;
   return 0;
 }

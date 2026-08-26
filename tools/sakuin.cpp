@@ -139,13 +139,34 @@ public:
         cycle.poll.metadata_retryable_failures;
     status.metadata_permanent_failures +=
         cycle.poll.metadata_permanent_failures;
+    status.metadata_failure_reasons.io +=
+        cycle.poll.metadata_failure_reasons.io;
+    status.metadata_failure_reasons.timeout +=
+        cycle.poll.metadata_failure_reasons.timeout;
+    status.metadata_failure_reasons.storage_unavailable +=
+        cycle.poll.metadata_failure_reasons.storage_unavailable;
+    status.metadata_failure_reasons.invalid_metadata +=
+        cycle.poll.metadata_failure_reasons.invalid_metadata;
+    status.metadata_failure_reasons.protocol +=
+        cycle.poll.metadata_failure_reasons.protocol;
+    status.metadata_failure_reasons.quota +=
+        cycle.poll.metadata_failure_reasons.quota;
+    status.metadata_failure_reasons.other +=
+        cycle.poll.metadata_failure_reasons.other;
     status.metadata_sink_succeeded += cycle.poll.metadata_sink_succeeded;
     status.metadata_sink_failures += cycle.poll.metadata_sink_failures;
     status.routing_probes_accepted += cycle.poll.routing_probes_accepted;
     status.discovery_queries_started += cycle.poll.discovery_queries_started;
     status.peer_discovery_queries_started +=
         cycle.poll.peer_discovery_queries_started;
+    status.peer_discovery_responses_received +=
+        cycle.poll.peer_discovery_responses_received;
+    status.peer_discovery_queries_timed_out +=
+        cycle.poll.peer_discovery_queries_timed_out;
+    status.peer_discovery_delivery_failures +=
+        cycle.poll.peer_discovery_delivery_failures;
     status.peer_discovery_peers_found += cycle.poll.peer_discovery_peers_found;
+    status.peer_discovery_succeeded += cycle.poll.peer_discovery_succeeded;
     status.peer_discovery_exhausted += cycle.poll.peer_discovery_exhausted;
     status.metadata_backfill_records_scanned +=
         cycle.poll.metadata_backfill_records_scanned;

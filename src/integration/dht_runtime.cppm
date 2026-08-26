@@ -41,12 +41,17 @@ struct DhtRuntimePoll {
   std::uint64_t metadata_fetches_succeeded{};
   std::uint64_t metadata_retryable_failures{};
   std::uint64_t metadata_permanent_failures{};
+  dht::MetadataFailureReasons metadata_failure_reasons;
   std::uint64_t metadata_sink_succeeded{};
   std::uint64_t metadata_sink_failures{};
   std::size_t routing_probes_accepted{};
   std::size_t discovery_queries_started{};
   std::size_t peer_discovery_queries_started{};
+  std::size_t peer_discovery_responses_received{};
+  std::size_t peer_discovery_queries_timed_out{};
+  std::size_t peer_discovery_delivery_failures{};
   std::size_t peer_discovery_peers_found{};
+  std::size_t peer_discovery_succeeded{};
   std::size_t peer_discovery_exhausted{};
   std::size_t metadata_backfill_records_scanned{};
   std::size_t metadata_backfill_targets_offered{};
@@ -604,7 +609,11 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
       auto step = peer_discovery_->poll(now);
       if (step) {
         result.peer_discovery_queries_started += step->queries_started;
+        result.peer_discovery_responses_received += step->responses_received;
+        result.peer_discovery_queries_timed_out += step->queries_timed_out;
+        result.peer_discovery_delivery_failures += step->delivery_failures;
         result.peer_discovery_peers_found += step->peers_found;
+        result.peer_discovery_succeeded += step->succeeded;
         result.peer_discovery_exhausted += step->exhausted;
         if (metadata_) {
           for (const auto &candidate : step->candidates) {
@@ -676,6 +685,7 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
     result.metadata_fetches_succeeded = activity.fetches_succeeded;
     result.metadata_retryable_failures = activity.retryable_failures;
     result.metadata_permanent_failures = activity.permanent_failures;
+    result.metadata_failure_reasons = activity.failure_reasons;
     result.metadata_sink_succeeded = activity.sink_succeeded;
     result.metadata_sink_failures = activity.sink_failures;
     result.metadata_queued = metadata_->queued();
