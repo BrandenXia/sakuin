@@ -49,6 +49,39 @@ std::string_view family_name(sakuin::runtime::AddressFamily family) {
   return family == sakuin::runtime::AddressFamily::IPv4 ? "IPv4" : "IPv6";
 }
 
+std::string_view family_error_source(sakuin::runtime::AddressFamily family) {
+  return family == sakuin::runtime::AddressFamily::IPv4 ? "dht.ipv4"
+                                                        : "dht.ipv6";
+}
+
+std::string_view
+maintenance_dataset_name(sakuin::service::LocalDataset dataset) {
+  return dataset == sakuin::service::LocalDataset::Observations ? "observations"
+                                                                : "torrents";
+}
+
+std::string_view
+maintenance_operation_name(sakuin::service::MaintenanceOperation operation) {
+  switch (operation) {
+  case sakuin::service::MaintenanceOperation::Retention:
+    return "retention";
+  case sakuin::service::MaintenanceOperation::Compaction:
+    return "compaction";
+  case sakuin::service::MaintenanceOperation::Verification:
+    return "verification";
+  case sakuin::service::MaintenanceOperation::GarbageCollection:
+    return "garbage_collection";
+  }
+  std::unreachable();
+}
+
+std::string
+maintenance_error_source(sakuin::service::LocalDataset dataset,
+                         sakuin::service::MaintenanceOperation operation) {
+  return "maintenance." + std::string{maintenance_dataset_name(dataset)} + "." +
+         std::string{maintenance_operation_name(operation)};
+}
+
 class Observer final : public sakuin::service::DhtRuntimeObserver,
                        public sakuin::service::ApiServiceObserver,
                        public sakuin::service::StorageMaintenanceObserver,
@@ -169,6 +202,8 @@ public:
       status.bootstrap_complete = cycle.poll.bootstrap->complete;
       status.bootstrap_exhausted = cycle.poll.bootstrap->exhausted;
     }
+    sakuin::api::note_service_recovery(snapshot_, family_error_source(family),
+                                       now_ms());
   }
 
   void on_family_error(sakuin::runtime::AddressFamily family,
@@ -179,7 +214,9 @@ public:
       ++status.errors;
       status.last_error_ms = now_ms();
       status.last_error = error.message;
-      snapshot_.last_service_error = error.message;
+      sakuin::api::note_service_error(snapshot_,
+                                      std::string{family_error_source(family)},
+                                      error.message, *status.last_error_ms);
     }
     spdlog::error("DHT {}: {}", family_name(family), error.message);
   }
@@ -194,7 +231,7 @@ public:
   }
 
   void on_api_error(sakuin::core::Error error) override {
-    record_service_error(error.message);
+    record_service_error("api", error.message);
     spdlog::error("API: {}", error.message);
   }
 
@@ -204,22 +241,31 @@ public:
       std::lock_guard lock{mutex_};
       snapshot_.search_source_generation = result.source_generation;
       snapshot_.search_records_indexed += result.records_indexed;
+      sakuin::api::note_service_recovery(snapshot_, "search", now_ms());
     }
     if (result.records_indexed != 0)
       spdlog::info("Search index advanced to generation {} using {} records",
                    result.source_generation, result.records_indexed);
   }
 
+  void on_search_index_error(sakuin::core::Error error) override {
+    record_service_error("search", error.message);
+    if (error.code == sakuin::core::ErrorCode::Conflict)
+      spdlog::warn("Search-index refresh deferred: {}", error.message);
+    else
+      spdlog::error("Search-index refresh: {}", error.message);
+  }
+
   void
   on_maintenance_completed(sakuin::service::MaintenanceEvent event) override {
+    const auto source =
+        maintenance_error_source(event.dataset, event.operation);
     {
       std::lock_guard lock{mutex_};
       ++snapshot_.maintenance_operations;
+      sakuin::api::note_service_recovery(snapshot_, source, now_ms());
     }
-    const auto dataset =
-        event.dataset == sakuin::service::LocalDataset::Observations
-            ? "observations"
-            : "torrents";
+    const auto dataset = maintenance_dataset_name(event.dataset);
     switch (event.operation) {
     case sakuin::service::MaintenanceOperation::Retention:
       if (event.segments_affected != 0)
@@ -250,27 +296,15 @@ public:
   void on_maintenance_error(sakuin::service::LocalDataset dataset,
                             sakuin::service::MaintenanceOperation operation,
                             sakuin::core::Error error) override {
+    const auto source = maintenance_error_source(dataset, operation);
     {
       std::lock_guard lock{mutex_};
       ++snapshot_.maintenance_errors;
-      snapshot_.last_service_error = error.message;
+      sakuin::api::note_service_error(snapshot_, source, error.message,
+                                      now_ms());
     }
-    const auto dataset_name =
-        dataset == sakuin::service::LocalDataset::Observations ? "observations"
-                                                               : "torrents";
-    const auto operation_name = [&] {
-      switch (operation) {
-      case sakuin::service::MaintenanceOperation::Retention:
-        return "retention";
-      case sakuin::service::MaintenanceOperation::Compaction:
-        return "compaction";
-      case sakuin::service::MaintenanceOperation::Verification:
-        return "verification";
-      case sakuin::service::MaintenanceOperation::GarbageCollection:
-        return "garbage collection";
-      }
-      std::unreachable();
-    }();
+    const auto dataset_name = maintenance_dataset_name(dataset);
+    const auto operation_name = maintenance_operation_name(operation);
     if (error.code == sakuin::core::ErrorCode::Conflict)
       spdlog::warn("Storage {} {} deferred: {}", dataset_name, operation_name,
                    error.message);
@@ -285,6 +319,8 @@ public:
       std::lock_guard lock{mutex_};
       snapshot_.materialized_observations += result.observations_read;
       snapshot_.materialized_torrent_updates += result.torrents_updated;
+      sakuin::api::note_service_recovery(snapshot_, "materialization",
+                                         now_ms());
     }
     if (result.observations_read != 0)
       spdlog::info(
@@ -295,7 +331,7 @@ public:
   }
 
   void on_materialization_error(sakuin::core::Error error) override {
-    record_service_error(error.message);
+    record_service_error("materialization", error.message);
     if (error.code == sakuin::core::ErrorCode::Conflict)
       spdlog::warn("Torrent materialization deferred: {}", error.message);
     else
@@ -308,6 +344,7 @@ public:
       std::lock_guard lock{mutex_};
       snapshot_.duplicate_source_generation = result.source_generation;
       snapshot_.duplicate_records_processed += result.records_processed;
+      sakuin::api::note_service_recovery(snapshot_, "duplicates", now_ms());
     }
     if (result.records_processed == 0)
       return;
@@ -317,7 +354,7 @@ public:
   }
 
   void on_duplicate_index_error(sakuin::core::Error error) override {
-    record_service_error(error.message);
+    record_service_error("duplicates", error.message);
     if (error.code == sakuin::core::ErrorCode::Conflict)
       spdlog::warn("Duplicate-index refresh deferred: {}", error.message);
     else
@@ -327,7 +364,7 @@ public:
   void on_distributed_work_error(
       std::optional<sakuin::runtime::StreamSessionId> session,
       sakuin::core::Error error) override {
-    record_service_error(error.message);
+    record_service_error("distributed", error.message);
     if (session)
       spdlog::warn("Distributed work session {}: {}", *session, error.message);
     else
@@ -347,9 +384,10 @@ private:
                                                           : snapshot_.ipv6;
   }
 
-  void record_service_error(std::string message) {
+  void record_service_error(std::string source, std::string message) {
     std::lock_guard lock{mutex_};
-    snapshot_.last_service_error = std::move(message);
+    sakuin::api::note_service_error(snapshot_, std::move(source),
+                                    std::move(message), now_ms());
   }
 
   mutable std::mutex mutex_;

@@ -241,6 +241,29 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "Time elapsed since the current service run started.", "gauge");
     sample(output, "sakuin_uptime_seconds", {},
            static_cast<double>(status.uptime_ms) / 1000.0);
+    metadata(output, "sakuin_service_errors_total",
+             "Service errors observed during the current process run by "
+             "bounded subsystem.",
+             "counter");
+    metadata(output, "sakuin_service_error_active",
+             "Whether a service subsystem error remains unrecovered.", "gauge");
+    metadata(output, "sakuin_service_error_last_seen_timestamp_seconds",
+             "Unix time when a service subsystem last reported an error.",
+             "gauge");
+    metadata(output, "sakuin_service_error_recovered_timestamp_seconds",
+             "Unix time when a service subsystem most recently recovered.",
+             "gauge");
+    for (const auto &error : status.service_errors) {
+      const auto labels = "source=\"" + escaped_label(error.source) + "\"";
+      sample(output, "sakuin_service_errors_total", labels, error.count);
+      sample(output, "sakuin_service_error_active", labels,
+             error.active ? 1 : 0);
+      sample(output, "sakuin_service_error_last_seen_timestamp_seconds", labels,
+             static_cast<double>(error.last_seen_ms) / 1000.0);
+      if (error.recovered_at_ms)
+        sample(output, "sakuin_service_error_recovered_timestamp_seconds",
+               labels, static_cast<double>(*error.recovered_at_ms) / 1000.0);
+    }
 
     metadata(output, "sakuin_dht_enabled",
              "Whether the DHT address family is enabled.", "gauge");

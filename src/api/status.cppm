@@ -70,6 +70,15 @@ struct DhtFamilyStatus {
   std::optional<std::string> last_error;
 };
 
+struct ServiceErrorStatus {
+  std::string source;
+  std::string message;
+  std::uint64_t count{};
+  std::int64_t last_seen_ms{};
+  bool active{};
+  std::optional<std::int64_t> recovered_at_ms;
+};
+
 struct ServiceStatus {
   std::string version{core::version};
   std::string state{"starting"};
@@ -86,7 +95,7 @@ struct ServiceStatus {
   std::uint64_t duplicate_records_processed{};
   std::uint64_t maintenance_operations{};
   std::uint64_t maintenance_errors{};
-  std::optional<std::string> last_service_error;
+  std::vector<ServiceErrorStatus> service_errors;
 };
 
 class StatusProvider {
@@ -96,6 +105,10 @@ public:
 };
 
 bool service_ready(const ServiceStatus &status) noexcept;
+void note_service_error(ServiceStatus &status, std::string source,
+                        std::string message, std::int64_t observed_at_ms);
+void note_service_recovery(ServiceStatus &status, std::string_view source,
+                           std::int64_t recovered_at_ms) noexcept;
 core::Result<core::ByteBuffer> json_readiness(bool ready);
 core::Result<core::ByteBuffer> json_status(const ServiceStatus &status);
 
@@ -179,6 +192,18 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
   return result;
 }
 
+nlohmann::json service_error_json(const ServiceErrorStatus &error) {
+  nlohmann::json result{{"source", error.source},
+                        {"message", error.message},
+                        {"count", error.count},
+                        {"last_seen_ms", error.last_seen_ms},
+                        {"active", error.active}};
+  result["recovered_at_ms"] = error.recovered_at_ms
+                                  ? nlohmann::json(*error.recovered_at_ms)
+                                  : nlohmann::json(nullptr);
+  return result;
+}
+
 std::string_view category_name(classification::MediaCategory category) {
   using enum classification::MediaCategory;
   switch (category) {
@@ -259,6 +284,36 @@ bool service_ready(const ServiceStatus &status) noexcept {
          (!status.ipv6.enabled || status.ipv6.running);
 }
 
+void note_service_error(ServiceStatus &status, std::string source,
+                        std::string message, std::int64_t observed_at_ms) {
+  auto found = std::ranges::find(status.service_errors, source,
+                                 &ServiceErrorStatus::source);
+  if (found == status.service_errors.end()) {
+    status.service_errors.push_back(
+        ServiceErrorStatus{.source = std::move(source),
+                           .message = std::move(message),
+                           .count = 1,
+                           .last_seen_ms = observed_at_ms,
+                           .active = true});
+    return;
+  }
+  found->message = std::move(message);
+  ++found->count;
+  found->last_seen_ms = observed_at_ms;
+  found->active = true;
+  found->recovered_at_ms.reset();
+}
+
+void note_service_recovery(ServiceStatus &status, std::string_view source,
+                           std::int64_t recovered_at_ms) noexcept {
+  const auto found = std::ranges::find(status.service_errors, source,
+                                       &ServiceErrorStatus::source);
+  if (found == status.service_errors.end() || !found->active)
+    return;
+  found->active = false;
+  found->recovered_at_ms = recovered_at_ms;
+}
+
 core::Result<core::ByteBuffer> json_readiness(bool ready) {
   try {
     const auto text =
@@ -297,9 +352,22 @@ core::Result<core::ByteBuffer> json_status(const ServiceStatus &status) {
         {"maintenance",
          {{"operations", status.maintenance_operations},
           {"errors", status.maintenance_errors}}}};
+    nlohmann::json errors = nlohmann::json::array();
+    std::uint64_t total_errors{};
+    std::size_t active_errors{};
+    const ServiceErrorStatus *last_error{};
+    for (const auto &error : status.service_errors) {
+      errors.push_back(service_error_json(error));
+      total_errors += error.count;
+      active_errors += error.active ? 1 : 0;
+      if (!last_error || error.last_seen_ms > last_error->last_seen_ms)
+        last_error = &error;
+    }
+    document["service_errors"] = {{"total", total_errors},
+                                  {"active", active_errors},
+                                  {"sources", std::move(errors)}};
     document["last_service_error"] =
-        status.last_service_error ? nlohmann::json(*status.last_service_error)
-                                  : nlohmann::json(nullptr);
+        last_error ? service_error_json(*last_error) : nlohmann::json(nullptr);
     const auto text = document.dump();
     const auto bytes = std::as_bytes(std::span{text});
     return core::ByteBuffer{bytes.begin(), bytes.end()};

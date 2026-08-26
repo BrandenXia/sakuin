@@ -33,6 +33,9 @@ public:
   virtual ~ApiServiceObserver() = default;
   virtual void on_api_error(core::Error error) = 0;
   virtual void on_search_index_refreshed(search::SearchRebuildResult) {}
+  virtual void on_search_index_error(core::Error error) {
+    on_api_error(std::move(error));
+  }
 };
 
 // Local API composition backed by the canonical torrent dataset. Search is a
@@ -203,10 +206,10 @@ struct LocalApiService::Impl final : runtime::HttpServerEvents {
   std::atomic<bool> active{};
 
   void on_http_server_error(core::Error error) override {
-    report(std::move(error));
+    report_api_error(std::move(error));
   }
 
-  void report(core::Error error) noexcept {
+  void report_api_error(core::Error error) noexcept {
     try {
       observer->on_api_error(std::move(error));
     } catch (...) {
@@ -218,8 +221,16 @@ struct LocalApiService::Impl final : runtime::HttpServerEvents {
     try {
       observer->on_search_index_refreshed(result);
     } catch (...) {
-      report({core::ErrorCode::Internal,
-              "Search-index refresh observer threw an exception"});
+      report_search_error({core::ErrorCode::Internal,
+                           "Search-index refresh observer threw an exception"});
+    }
+  }
+
+  void report_search_error(core::Error error) noexcept {
+    try {
+      observer->on_search_index_error(std::move(error));
+    } catch (...) {
+      // Runtime observers cannot unwind through API-owned threads.
     }
   }
 
@@ -260,15 +271,16 @@ struct LocalApiService::Impl final : runtime::HttpServerEvents {
       }
       auto refreshed = refresh();
       if (!refreshed) {
-        report(refreshed.error());
+        report_search_error(refreshed.error());
         // Do not spin on a persistent storage failure. A later commit or an
         // explicit refresh can retry the snapshot.
         std::lock_guard lock{requests_mutex};
         requested_generation =
             indexed_generation.load(std::memory_order_acquire);
       } else if (refreshed->source_generation < requested) {
-        report({core::ErrorCode::Conflict,
-                "Search snapshot generation lagged a committed torrent"});
+        report_search_error(
+            {core::ErrorCode::Conflict,
+             "Search snapshot generation lagged a committed torrent"});
         std::lock_guard lock{requests_mutex};
         requested_generation =
             indexed_generation.load(std::memory_order_acquire);
