@@ -107,13 +107,20 @@ int main() {
   status.snapshot.ipv4.metadata_fetches_succeeded = 8;
   status.snapshot.ipv4.metadata_retryable_failures = 6;
   status.snapshot.ipv4.metadata_permanent_failures = 3;
+  status.snapshot.ipv4.metadata_failure_reasons.io = 2;
+  status.snapshot.ipv4.metadata_failure_reasons.timeout = 4;
+  status.snapshot.ipv4.metadata_failure_reasons.invalid_metadata = 3;
   status.snapshot.ipv4.metadata_sink_succeeded = 7;
   status.snapshot.ipv4.metadata_sink_failures = 2;
   status.snapshot.ipv4.observations_stored = 99;
   status.snapshot.ipv4.discovery_queries_started = 17;
   status.snapshot.ipv4.discovery_in_flight = 1;
   status.snapshot.ipv4.peer_discovery_queries_started = 23;
+  status.snapshot.ipv4.peer_discovery_responses_received = 10;
+  status.snapshot.ipv4.peer_discovery_queries_timed_out = 12;
+  status.snapshot.ipv4.peer_discovery_delivery_failures = 1;
   status.snapshot.ipv4.peer_discovery_peers_found = 5;
+  status.snapshot.ipv4.peer_discovery_succeeded = 3;
   status.snapshot.ipv4.peer_discovery_exhausted = 4;
   status.snapshot.ipv4.peer_discovery_pending = 9;
   status.snapshot.ipv4.peer_discovery_in_flight = 3;
@@ -130,6 +137,11 @@ int main() {
   status.snapshot.ipv4.bootstrap_exhausted = false;
   status.snapshot.search_source_generation = 7;
   status.snapshot.search_records_indexed = 21;
+  api::note_service_error(status.snapshot, "materialization",
+                          "Dataset changed during write", 1'000);
+  api::note_service_error(status.snapshot, "materialization",
+                          "Dataset changed during write", 2'000);
+  api::note_service_recovery(status.snapshot, "materialization", 3'000);
   std::size_t refreshes{};
   std::vector<bool> maintenance_requests;
   api::SearchHttpHandler handler{
@@ -179,6 +191,7 @@ int main() {
       !body(*openapi).contains("learned_content_model") ||
       !body(*openapi).contains("\"minimum_label_confidence\"") ||
       !body(*openapi).contains("payload_layout_v1") ||
+      !body(*openapi).contains("ServiceErrorStatus") ||
       !body(*openapi).contains("\"bearerAuth\"") ||
       body(*openapi).contains("sakuin_reader_"))
     return 33;
@@ -482,6 +495,10 @@ int main() {
       !body(*operator_status).contains("\"metadata_in_flight\":2") ||
       !body(*operator_status).contains("\"metadata_backlog\":7") ||
       !body(*operator_status).contains("\"metadata_fetches_succeeded\":8") ||
+      !body(*operator_status).contains("\"invalid_metadata\":3") ||
+      !body(*operator_status)
+           .contains("\"peer_discovery_queries_timed_out\":12") ||
+      !body(*operator_status).contains("\"peer_discovery_succeeded\":3") ||
       !body(*operator_status).contains("\"metadata_sink_succeeded\":7") ||
       !body(*operator_status).contains("\"bootstrap_exhausted\":false") ||
       !body(*operator_status).contains("\"total_records\":2") ||
@@ -489,6 +506,14 @@ int main() {
       !body(*operator_status).contains("\"movie\":1") ||
       !body(*operator_status).contains("\"learned\":{") ||
       !body(*operator_status).contains("\"training_records\":1") ||
+      !body(*operator_status).contains("\"service_errors\":{") ||
+      !body(*operator_status).contains("\"active\":0") ||
+      !body(*operator_status).contains("\"count\":2") ||
+      !body(*operator_status)
+           .contains("\"last_seen_ms\":2000,\"message\":\"Dataset changed "
+                     "during write\"") ||
+      !body(*operator_status).contains("\"recovered_at_ms\":3000") ||
+      !body(*operator_status).contains("\"source\":\"materialization\"") ||
       !body(*operator_status).contains("\"last_error\":null") ||
       body(*operator_status).contains("\"last_error\":[null]") ||
       !body(*operator_status).contains("\"state\":\"running\""))
@@ -543,6 +568,18 @@ int main() {
            .contains("sakuin_dht_metadata_fetch_failures_total{family="
                      "\"ipv4\",outcome=\"retryable\"} 6\n") ||
       !body(*operator_metrics)
+           .contains("sakuin_dht_metadata_fetch_failure_reasons_total{family="
+                     "\"ipv4\",reason=\"timeout\"} 4\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_peer_discovery_responses_received_total{"
+                     "family=\"ipv4\"} 10\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_peer_discovery_queries_timed_out_total{family="
+                     "\"ipv4\"} 12\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_peer_discovery_succeeded_total{family="
+                     "\"ipv4\"} 3\n") ||
+      !body(*operator_metrics)
            .contains("sakuin_dht_metadata_sink_succeeded_total{family="
                      "\"ipv4\"} 7\n") ||
       !body(*operator_metrics)
@@ -558,6 +595,19 @@ int main() {
       !body(*operator_metrics)
            .contains("sakuin_search_records_indexed_total 21\n"))
     return 24;
+  if (!body(*operator_metrics)
+           .contains("sakuin_service_errors_total{source=\"materialization\"} "
+                     "2\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_service_error_active{source=\"materialization\"} "
+                     "0\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_service_error_last_seen_timestamp_seconds{source="
+                     "\"materialization\"} 2.000000\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_service_error_recovered_timestamp_seconds{source="
+                     "\"materialization\"} 3.000000\n"))
+    return 40;
   if (!body(*operator_metrics).contains("sakuin_classification_enabled 1\n") ||
       !body(*operator_metrics)
            .contains("sakuin_classification_learned_enabled 1\n") ||

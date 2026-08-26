@@ -5,12 +5,17 @@
 function tracked(name) {
   return name == "sakuin_dht_observations_stored_total" || \
          name == "sakuin_dht_peer_discovery_queries_started_total" || \
+         name == "sakuin_dht_peer_discovery_responses_received_total" || \
+         name == "sakuin_dht_peer_discovery_queries_timed_out_total" || \
+         name == "sakuin_dht_peer_discovery_delivery_failures_total" || \
          name == "sakuin_dht_peer_discovery_peers_found_total" || \
+         name == "sakuin_dht_peer_discovery_succeeded_total" || \
          name == "sakuin_dht_peer_discovery_exhausted_total" || \
          name == "sakuin_dht_metadata_candidates_accepted_total" || \
          name == "sakuin_dht_metadata_attempts_started_total" || \
          name == "sakuin_dht_metadata_fetches_succeeded_total" || \
          name == "sakuin_dht_metadata_fetch_failures_total" || \
+         name == "sakuin_dht_metadata_fetch_failure_reasons_total" || \
          name == "sakuin_dht_metadata_sink_succeeded_total" || \
          name == "sakuin_dht_metadata_sink_failures_total"
 }

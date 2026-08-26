@@ -28,7 +28,11 @@ struct PeerDiscoveryStep {
   std::size_t pending{};
   std::size_t in_flight{};
   std::size_t queries_started{};
+  std::size_t responses_received{};
+  std::size_t queries_timed_out{};
+  std::size_t delivery_failures{};
   std::size_t peers_found{};
+  std::size_t succeeded{};
   std::size_t exhausted{};
 };
 
@@ -93,6 +97,10 @@ private:
   std::size_t schedule_cursor_{};
   std::deque<Cooldown> cooldowns_;
   std::vector<PeerMetadataCandidate> ready_;
+  std::size_t responses_since_poll_{};
+  std::size_t timeouts_since_poll_{};
+  std::size_t delivery_failures_since_poll_{};
+  std::size_t succeeded_since_poll_{};
   std::size_t exhausted_since_poll_{};
 };
 
@@ -205,7 +213,11 @@ PeerDiscoveryPlanner::poll(core::Timestamp now) {
   PeerDiscoveryStep step;
   step.candidates = std::move(ready_);
   ready_.clear();
+  step.responses_received = std::exchange(responses_since_poll_, 0);
+  step.queries_timed_out = std::exchange(timeouts_since_poll_, 0);
+  step.delivery_failures = std::exchange(delivery_failures_since_poll_, 0);
   step.peers_found = step.candidates.size();
+  step.succeeded = std::exchange(succeeded_since_poll_, 0);
   step.exhausted = std::exchange(exhausted_since_poll_, 0);
 
   auto capacity = options_.maximum_in_flight -
@@ -301,6 +313,7 @@ bool PeerDiscoveryPlanner::consume(const DhtActions &actions,
                           actions.query_completion->remote);
   if (entry == entries_.end())
     return false;
+  ++responses_since_poll_;
   const auto query =
       std::ranges::find_if(entry->outstanding, [&](const auto &outstanding) {
         return outstanding.remote == actions.query_completion->remote &&
@@ -321,6 +334,7 @@ bool PeerDiscoveryPlanner::consume(const DhtActions &actions,
       ready_.push_back(
           {.info_hash = entry->info_hash, .peer = peer, .observed_at = now});
     }
+    ++succeeded_since_poll_;
     finish(entry, now);
   }
   return true;
@@ -344,6 +358,7 @@ bool PeerDiscoveryPlanner::consume_timeout(const QueryTimeout &timeout,
   const auto entry = find(timeout.transaction, timeout.remote);
   if (entry == entries_.end())
     return false;
+  ++timeouts_since_poll_;
   const auto query =
       std::ranges::find_if(entry->outstanding, [&](const auto &outstanding) {
         return outstanding.remote == timeout.remote &&
@@ -365,6 +380,7 @@ bool PeerDiscoveryPlanner::delivery_failed(const DatagramSend &send,
   const auto entry = find(send.query_transaction, send.destination);
   if (entry == entries_.end())
     return false;
+  ++delivery_failures_since_poll_;
   node_->cancel_query(send.query_transaction, send.destination);
   const auto query =
       std::ranges::find_if(entry->outstanding, [&](const auto &outstanding) {

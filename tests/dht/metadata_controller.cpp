@@ -150,6 +150,20 @@ private:
   sakuin::core::ByteBuffer metadata_;
 };
 
+class FailingFactory final : public sakuin::runtime::StreamTransportFactory {
+public:
+  explicit FailingFactory(sakuin::core::Error error)
+      : error_(std::move(error)) {}
+
+  sakuin::core::Result<std::shared_ptr<sakuin::runtime::StreamTransport>>
+  create(sakuin::runtime::StreamTransportOptions) override {
+    return std::unexpected(error_);
+  }
+
+private:
+  sakuin::core::Error error_;
+};
+
 class Sink final : public sakuin::dht::MetadataFetchObserver {
 public:
   sakuin::core::Result<void>
@@ -245,5 +259,38 @@ int main() {
   auto stopped = (*controller)->offer(candidate);
   if (stopped || stopped.error().code != core::ErrorCode::Conflict)
     return 6;
+
+  FailingFactory timeout_factory{
+      {core::ErrorCode::Timeout, "Synthetic peer timeout"}};
+  auto timeout_controller = dht::MetadataAcquisitionController::create(
+      peer_id, timeout_factory, sink);
+  if (!timeout_controller ||
+      !(*timeout_controller)->offer(candidate).value_or(false))
+    return 11;
+  auto timeout_result = (*timeout_controller)->poll(now);
+  const auto timeout_activity = (*timeout_controller)->take_activity();
+  if (timeout_result ||
+      timeout_result.error().code != core::ErrorCode::Timeout ||
+      timeout_activity.attempts_started != 1 ||
+      timeout_activity.retryable_failures != 1 ||
+      timeout_activity.permanent_failures != 0 ||
+      timeout_activity.failure_reasons.timeout != 1)
+    return 12;
+
+  FailingFactory invalid_factory{
+      {core::ErrorCode::ChecksumMismatch, "Synthetic metadata mismatch"}};
+  auto invalid_controller = dht::MetadataAcquisitionController::create(
+      peer_id, invalid_factory, sink);
+  if (!invalid_controller ||
+      !(*invalid_controller)->offer(candidate).value_or(false))
+    return 13;
+  auto invalid_result = (*invalid_controller)->poll(now);
+  const auto invalid_activity = (*invalid_controller)->take_activity();
+  if (invalid_result ||
+      invalid_result.error().code != core::ErrorCode::ChecksumMismatch ||
+      invalid_activity.retryable_failures != 0 ||
+      invalid_activity.permanent_failures != 1 ||
+      invalid_activity.failure_reasons.invalid_metadata != 1)
+    return 14;
   return 0;
 }

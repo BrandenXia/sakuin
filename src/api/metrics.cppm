@@ -11,8 +11,9 @@ import sakuin.search.index;
 export namespace sakuin::api {
 
 // Serializes a status snapshot using the Prometheus text exposition format.
-// Labels are deliberately limited to service state and address family so that
-// operational errors and network peers cannot create unbounded cardinality.
+// Labels are deliberately limited to bounded service states, address families,
+// subsystems, and diagnostic enums. Operational error text and network peers
+// must never create unbounded cardinality.
 core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status);
 
 } // namespace sakuin::api
@@ -71,6 +72,19 @@ void family_samples(std::string &output, std::string_view name,
          labels + ",outcome=\"retryable\"", family.metadata_retryable_failures);
   sample(output, "sakuin_dht_metadata_fetch_failures_total",
          labels + ",outcome=\"permanent\"", family.metadata_permanent_failures);
+  const auto failure_reason = [&](std::string_view reason, auto value) {
+    sample(output, "sakuin_dht_metadata_fetch_failure_reasons_total",
+           labels + ",reason=\"" + std::string{reason} + "\"", value);
+  };
+  failure_reason("io", family.metadata_failure_reasons.io);
+  failure_reason("timeout", family.metadata_failure_reasons.timeout);
+  failure_reason("storage_unavailable",
+                 family.metadata_failure_reasons.storage_unavailable);
+  failure_reason("invalid_metadata",
+                 family.metadata_failure_reasons.invalid_metadata);
+  failure_reason("protocol", family.metadata_failure_reasons.protocol);
+  failure_reason("quota", family.metadata_failure_reasons.quota);
+  failure_reason("other", family.metadata_failure_reasons.other);
   sample(output, "sakuin_dht_metadata_sink_succeeded_total", labels,
          family.metadata_sink_succeeded);
   sample(output, "sakuin_dht_metadata_sink_failures_total", labels,
@@ -81,8 +95,16 @@ void family_samples(std::string &output, std::string_view name,
          family.discovery_queries_started);
   sample(output, "sakuin_dht_peer_discovery_queries_started_total", labels,
          family.peer_discovery_queries_started);
+  sample(output, "sakuin_dht_peer_discovery_responses_received_total", labels,
+         family.peer_discovery_responses_received);
+  sample(output, "sakuin_dht_peer_discovery_queries_timed_out_total", labels,
+         family.peer_discovery_queries_timed_out);
+  sample(output, "sakuin_dht_peer_discovery_delivery_failures_total", labels,
+         family.peer_discovery_delivery_failures);
   sample(output, "sakuin_dht_peer_discovery_peers_found_total", labels,
          family.peer_discovery_peers_found);
+  sample(output, "sakuin_dht_peer_discovery_succeeded_total", labels,
+         family.peer_discovery_succeeded);
   sample(output, "sakuin_dht_peer_discovery_exhausted_total", labels,
          family.peer_discovery_exhausted);
   sample(output, "sakuin_dht_metadata_backfill_records_scanned_total", labels,
@@ -241,6 +263,29 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "Time elapsed since the current service run started.", "gauge");
     sample(output, "sakuin_uptime_seconds", {},
            static_cast<double>(status.uptime_ms) / 1000.0);
+    metadata(output, "sakuin_service_errors_total",
+             "Service errors observed during the current process run by "
+             "bounded subsystem.",
+             "counter");
+    metadata(output, "sakuin_service_error_active",
+             "Whether a service subsystem error remains unrecovered.", "gauge");
+    metadata(output, "sakuin_service_error_last_seen_timestamp_seconds",
+             "Unix time when a service subsystem last reported an error.",
+             "gauge");
+    metadata(output, "sakuin_service_error_recovered_timestamp_seconds",
+             "Unix time when a service subsystem most recently recovered.",
+             "gauge");
+    for (const auto &error : status.service_errors) {
+      const auto labels = "source=\"" + escaped_label(error.source) + "\"";
+      sample(output, "sakuin_service_errors_total", labels, error.count);
+      sample(output, "sakuin_service_error_active", labels,
+             error.active ? 1 : 0);
+      sample(output, "sakuin_service_error_last_seen_timestamp_seconds", labels,
+             static_cast<double>(error.last_seen_ms) / 1000.0);
+      if (error.recovered_at_ms)
+        sample(output, "sakuin_service_error_recovered_timestamp_seconds",
+               labels, static_cast<double>(*error.recovered_at_ms) / 1000.0);
+    }
 
     metadata(output, "sakuin_dht_enabled",
              "Whether the DHT address family is enabled.", "gauge");
@@ -261,6 +306,9 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "counter");
     metadata(output, "sakuin_dht_metadata_fetch_failures_total",
              "Metadata acquisition failures by retry outcome.", "counter");
+    metadata(output, "sakuin_dht_metadata_fetch_failure_reasons_total",
+             "Metadata acquisition failures by bounded diagnostic reason.",
+             "counter");
     metadata(output, "sakuin_dht_metadata_sink_succeeded_total",
              "Fetched metadata accepted by the configured result or storage "
              "sink.",
@@ -277,8 +325,21 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "Active get_peers discovery queries started for observed "
              "infohashes.",
              "counter");
+    metadata(output, "sakuin_dht_peer_discovery_responses_received_total",
+             "Active peer-discovery queries that received a response.",
+             "counter");
+    metadata(output, "sakuin_dht_peer_discovery_queries_timed_out_total",
+             "Active peer-discovery queries that expired without a response.",
+             "counter");
+    metadata(output, "sakuin_dht_peer_discovery_delivery_failures_total",
+             "Active peer-discovery queries rejected by local datagram "
+             "delivery.",
+             "counter");
     metadata(output, "sakuin_dht_peer_discovery_peers_found_total",
              "Peer endpoints found by active DHT discovery.", "counter");
+    metadata(output, "sakuin_dht_peer_discovery_succeeded_total",
+             "Infohash discovery traversals completed with at least one peer.",
+             "counter");
     metadata(output, "sakuin_dht_peer_discovery_exhausted_total",
              "Observed infohash discovery traversals exhausted without a "
              "peer.",

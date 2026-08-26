@@ -1,7 +1,13 @@
 # TYPE sakuin_dht_observations_stored_total counter
 sakuin_dht_observations_stored_total{family="ipv4"} 130
+sakuin_dht_peer_discovery_responses_received_total{family="ipv4"} 48
+sakuin_dht_peer_discovery_queries_timed_out_total{family="ipv4"} 15
+sakuin_dht_peer_discovery_delivery_failures_total{family="ipv4"} 2
+sakuin_dht_peer_discovery_succeeded_total{family="ipv4"} 9
 sakuin_dht_metadata_fetches_succeeded_total{family="ipv4"} 2
 sakuin_dht_metadata_fetch_failures_total{family="ipv4",outcome="retryable"} 5
+sakuin_dht_metadata_fetch_failure_reasons_total{family="ipv4",reason="timeout"} 6
+sakuin_dht_metadata_fetch_failure_reasons_total{family="ipv4",reason="protocol"} 1
 sakuin_dht_metadata_sink_succeeded_total{family="ipv4"} 1
 sakuin_dht_metadata_sink_failures_total{family="ipv4"} 1
 sakuin_dht_metadata_backlog{family="ipv4"} 4

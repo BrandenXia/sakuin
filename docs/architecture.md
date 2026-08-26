@@ -253,13 +253,19 @@ aggregate DHT family cycles, bootstrap progress, datagram dispatch, derived
 index generations, materialization, maintenance, active routing discovery, and
 active metadata-peer discovery without exposing runtime or Asio types. Peer
 discovery reports pending hashes, in-flight queries, discovered peers, and
-exhausted traversals per address family. Metadata backfill additionally reports
+exhausted traversals per address family. It also separates received responses,
+network timeouts, local delivery failures, and successful hash traversals so
+operators can compare IPv4 and IPv6 scheduling with time-series deltas.
+Metadata backfill additionally reports
 records scanned, targets offered,
 records already carrying metadata, source generation, and whether a full scan
 is in progress. These counters distinguish a discovery bottleneck from an
 acquisition or storage bottleneck without exposing peer addresses.
 Metadata acquisition exposes attempts, verified fetches, retryable and
 permanent failures, and result/storage-sink outcomes as monotonic counters.
+Fetch failures are further divided into the bounded reasons `io`, `timeout`,
+`storage_unavailable`, `invalid_metadata`, `protocol`, `quota`, and `other`;
+peer endpoints and free-form error text never become metric labels.
 Its backlog gauge is the sum of candidates queued, acquisitions in flight, and
 verified records waiting for their configured sink; the three component gauges
 remain available for locating the congested stage. Inbound
@@ -296,6 +302,13 @@ remain behind the authenticated status and metrics routes.
 text format. Both require an operator credential. Labels are bounded to service
 state and IP address family; peer addresses and error messages are omitted to
 avoid sensitive output and unbounded time-series cardinality.
+Service errors are retained per bounded subsystem with a cumulative count,
+last-seen timestamp, and explicit active or recovered state. Successful
+subsystem callbacks close recoverable incidents without erasing their history;
+`last_service_error` therefore describes the most recent incident rather than
+acting as an indefinitely sticky error string. Prometheus exports the same
+counts, state, and timestamps using subsystem labels while continuing to omit
+error text.
 Operational decisions use deltas or rates across sampled counter values, never
 the absolute magnitude of a cumulative counter. The deployment helper can
 sample the discovery-to-metadata pipeline without an external time-series
