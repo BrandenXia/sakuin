@@ -14,6 +14,16 @@ import sakuin.search.index;
 
 export namespace sakuin::api {
 
+struct MetadataFailureReasonStatus {
+  std::uint64_t io{};
+  std::uint64_t timeout{};
+  std::uint64_t storage_unavailable{};
+  std::uint64_t invalid_metadata{};
+  std::uint64_t protocol{};
+  std::uint64_t quota{};
+  std::uint64_t other{};
+};
+
 struct DhtFamilyStatus {
   bool enabled{};
   bool running{};
@@ -25,12 +35,17 @@ struct DhtFamilyStatus {
   std::uint64_t metadata_fetches_succeeded{};
   std::uint64_t metadata_retryable_failures{};
   std::uint64_t metadata_permanent_failures{};
+  MetadataFailureReasonStatus metadata_failure_reasons;
   std::uint64_t metadata_sink_succeeded{};
   std::uint64_t metadata_sink_failures{};
   std::uint64_t routing_probes_accepted{};
   std::uint64_t discovery_queries_started{};
   std::uint64_t peer_discovery_queries_started{};
+  std::uint64_t peer_discovery_responses_received{};
+  std::uint64_t peer_discovery_queries_timed_out{};
+  std::uint64_t peer_discovery_delivery_failures{};
   std::uint64_t peer_discovery_peers_found{};
+  std::uint64_t peer_discovery_succeeded{};
   std::uint64_t peer_discovery_exhausted{};
   std::uint64_t metadata_backfill_records_scanned{};
   std::uint64_t metadata_backfill_targets_offered{};
@@ -129,12 +144,28 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
       {"metadata_fetches_succeeded", family.metadata_fetches_succeeded},
       {"metadata_retryable_failures", family.metadata_retryable_failures},
       {"metadata_permanent_failures", family.metadata_permanent_failures},
+      {"metadata_failure_reasons",
+       {{"io", family.metadata_failure_reasons.io},
+        {"timeout", family.metadata_failure_reasons.timeout},
+        {"storage_unavailable",
+         family.metadata_failure_reasons.storage_unavailable},
+        {"invalid_metadata", family.metadata_failure_reasons.invalid_metadata},
+        {"protocol", family.metadata_failure_reasons.protocol},
+        {"quota", family.metadata_failure_reasons.quota},
+        {"other", family.metadata_failure_reasons.other}}},
       {"metadata_sink_succeeded", family.metadata_sink_succeeded},
       {"metadata_sink_failures", family.metadata_sink_failures},
       {"routing_probes_accepted", family.routing_probes_accepted},
       {"discovery_queries_started", family.discovery_queries_started},
       {"peer_discovery_queries_started", family.peer_discovery_queries_started},
+      {"peer_discovery_responses_received",
+       family.peer_discovery_responses_received},
+      {"peer_discovery_queries_timed_out",
+       family.peer_discovery_queries_timed_out},
+      {"peer_discovery_delivery_failures",
+       family.peer_discovery_delivery_failures},
       {"peer_discovery_peers_found", family.peer_discovery_peers_found},
+      {"peer_discovery_succeeded", family.peer_discovery_succeeded},
       {"peer_discovery_exhausted", family.peer_discovery_exhausted},
       {"metadata_backfill_records_scanned",
        family.metadata_backfill_records_scanned},

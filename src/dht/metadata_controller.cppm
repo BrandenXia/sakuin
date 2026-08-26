@@ -24,11 +24,22 @@ struct MetadataControllerOptions {
   std::function<void()> wake_owner;
 };
 
+struct MetadataFailureReasons {
+  std::uint64_t io{};
+  std::uint64_t timeout{};
+  std::uint64_t storage_unavailable{};
+  std::uint64_t invalid_metadata{};
+  std::uint64_t protocol{};
+  std::uint64_t quota{};
+  std::uint64_t other{};
+};
+
 struct MetadataAcquisitionActivity {
   std::uint64_t attempts_started{};
   std::uint64_t fetches_succeeded{};
   std::uint64_t retryable_failures{};
   std::uint64_t permanent_failures{};
+  MetadataFailureReasons failure_reasons;
   std::uint64_t sink_succeeded{};
   std::uint64_t sink_failures{};
 };
@@ -86,7 +97,8 @@ private:
 
   void enqueue(Completion completion) noexcept;
   void report_failure(core::Error error) noexcept;
-  void record_failure(MetadataFetchOutcome outcome) noexcept;
+  void record_failure(MetadataFetchOutcome outcome,
+                      core::ErrorCode reason) noexcept;
   static MetadataFetchOutcome outcome(const core::Error &error) noexcept;
 
   PeerId peer_id_;
@@ -196,11 +208,38 @@ void MetadataAcquisitionController::report_failure(core::Error error) noexcept {
 }
 
 void MetadataAcquisitionController::record_failure(
-    MetadataFetchOutcome value) noexcept {
+    MetadataFetchOutcome value, core::ErrorCode reason) noexcept {
   if (value == MetadataFetchOutcome::RetryableFailure)
     ++activity_.retryable_failures;
   else if (value == MetadataFetchOutcome::PermanentFailure)
     ++activity_.permanent_failures;
+  switch (reason) {
+  case core::ErrorCode::IoError:
+    ++activity_.failure_reasons.io;
+    break;
+  case core::ErrorCode::Timeout:
+    ++activity_.failure_reasons.timeout;
+    break;
+  case core::ErrorCode::StorageUnavailable:
+    ++activity_.failure_reasons.storage_unavailable;
+    break;
+  case core::ErrorCode::CorruptSegment:
+  case core::ErrorCode::ChecksumMismatch:
+  case core::ErrorCode::UnsupportedFormat:
+  case core::ErrorCode::InvalidManifest:
+    ++activity_.failure_reasons.invalid_metadata;
+    break;
+  case core::ErrorCode::InvalidArgument:
+  case core::ErrorCode::InvalidQuery:
+    ++activity_.failure_reasons.protocol;
+    break;
+  case core::ErrorCode::QuotaExceeded:
+    ++activity_.failure_reasons.quota;
+    break;
+  default:
+    ++activity_.failure_reasons.other;
+    break;
+  }
 }
 
 core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
@@ -236,7 +275,7 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
     }
     auto error = std::move(std::get<core::Error>(completion.value));
     const auto fetch_outcome = outcome(error);
-    record_failure(fetch_outcome);
+    record_failure(fetch_outcome, error.code);
     if (auto advanced = queue_->complete(completion.ticket, fetch_outcome, now);
         !advanced && !first_error)
       first_error = advanced.error();
@@ -298,7 +337,7 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
     auto transport = factory_->create(std::move(transport_options));
     if (!transport) {
       const auto fetch_outcome = outcome(transport.error());
-      record_failure(fetch_outcome);
+      record_failure(fetch_outcome, transport.error().code);
       queue_->complete(ticket.id, fetch_outcome, now);
       report_failure(transport.error());
       if (!first_error)
@@ -311,7 +350,7 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
         **transport, *observer, options_.fetch);
     if (!session) {
       const auto fetch_outcome = outcome(session.error());
-      record_failure(fetch_outcome);
+      record_failure(fetch_outcome, session.error().code);
       queue_->complete(ticket.id, fetch_outcome, now);
       report_failure(session.error());
       if (!first_error)
@@ -324,7 +363,7 @@ core::Result<void> MetadataAcquisitionController::poll(core::Timestamp now) {
     auto started = active.session->start();
     if (!started) {
       const auto fetch_outcome = outcome(started.error());
-      record_failure(fetch_outcome);
+      record_failure(fetch_outcome, started.error().code);
       queue_->complete(ticket.id, fetch_outcome, now);
       report_failure(started.error());
       if (!first_error)

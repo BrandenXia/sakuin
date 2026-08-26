@@ -253,13 +253,19 @@ aggregate DHT family cycles, bootstrap progress, datagram dispatch, derived
 index generations, materialization, maintenance, active routing discovery, and
 active metadata-peer discovery without exposing runtime or Asio types. Peer
 discovery reports pending hashes, in-flight queries, discovered peers, and
-exhausted traversals per address family. Metadata backfill additionally reports
+exhausted traversals per address family. It also separates received responses,
+network timeouts, local delivery failures, and successful hash traversals so
+operators can compare IPv4 and IPv6 scheduling with time-series deltas.
+Metadata backfill additionally reports
 records scanned, targets offered,
 records already carrying metadata, source generation, and whether a full scan
 is in progress. These counters distinguish a discovery bottleneck from an
 acquisition or storage bottleneck without exposing peer addresses.
 Metadata acquisition exposes attempts, verified fetches, retryable and
 permanent failures, and result/storage-sink outcomes as monotonic counters.
+Fetch failures are further divided into the bounded reasons `io`, `timeout`,
+`storage_unavailable`, `invalid_metadata`, `protocol`, `quota`, and `other`;
+peer endpoints and free-form error text never become metric labels.
 Its backlog gauge is the sum of candidates queued, acquisitions in flight, and
 verified records waiting for their configured sink; the three component gauges
 remain available for locating the congested stage. Inbound
