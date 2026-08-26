@@ -171,10 +171,12 @@ infohash has independent parallelism and query limits plus a cooldown, so
 improved metadata coverage does not require unbounded DHT fan-out. IPv4 and
 IPv6 traversals remain isolated even when a response contains contacts for both
 families. A persistent round-robin cursor grants at most one new query to a
-hash per scheduling pass, preventing early queue entries and fast responders
-from monopolizing the global discovery window. The default window uses half of
-the DHT node's global outstanding-query allowance, leaving capacity for
-bootstrap and routing maintenance while increasing discovery throughput.
+hash per scheduling pass. Scheduling admits a FIFO working set sized to keep
+the configured query concurrency full at the per-hash parallelism limit. This
+lets iterative traversals reach peers or exhaustion before a large backfill
+queue can dilute every hash to an occasional first-hop query. The default query
+window uses half of the DHT node's global outstanding-query allowance, leaving
+capacity for bootstrap and routing maintenance.
 
 Existing canonical records without fetched metadata are also fed into this
 planner by a bounded backfill scan. The scan starts with a complete keyed view,
@@ -252,12 +254,12 @@ Status snapshots
 aggregate DHT family cycles, bootstrap progress, datagram dispatch, derived
 index generations, materialization, maintenance, active routing discovery, and
 active metadata-peer discovery without exposing runtime or Asio types. Peer
-discovery reports pending hashes, in-flight queries, discovered peers, and
-exhausted traversals per address family. It also separates received responses,
-network timeouts, local delivery failures, and successful hash traversals so
-operators can compare IPv4 and IPv6 scheduling with time-series deltas.
-Metadata backfill additionally reports
-records scanned, targets offered,
+discovery reports pending hashes, the traversals admitted to its active working
+set, in-flight queries, discovered peers, and exhausted traversals per address
+family. It also separates received responses, network timeouts, local delivery
+failures, and successful hash traversals so operators can compare IPv4 and IPv6
+scheduling with time-series deltas.
+Metadata backfill additionally reports records scanned, targets offered,
 records already carrying metadata, source generation, and whether a full scan
 is in progress. These counters distinguish a discovery bottleneck from an
 acquisition or storage bottleneck without exposing peer addresses.
