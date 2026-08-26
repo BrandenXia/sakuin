@@ -77,9 +77,14 @@ fetch_metrics() {
 sample_activity() (
   local token="$1"
   local window_seconds="$2"
-  [[ "${window_seconds}" =~ ^[0-9]+$ ]] &&
-    ((window_seconds >= 1 && window_seconds <= 3600)) ||
+  if [[ ! "${window_seconds}" =~ ^[0-9]+$ ||
+    ${#window_seconds} -gt 4 ]]; then
     fail "activity window must be an integer from 1 to 3600 seconds"
+  fi
+  window_seconds="$((10#${window_seconds}))"
+  if ((window_seconds < 1 || window_seconds > 3600)); then
+    fail "activity window must be an integer from 1 to 3600 seconds"
+  fi
 
   local sample_directory
   sample_directory="$(mktemp -d)"
