@@ -68,6 +68,7 @@ private:
   DhtNode *node_;
   BootstrapOptions options_;
   std::vector<Candidate> candidates_;
+  bool frontier_sealed_{};
 };
 
 } // namespace sakuin::dht
@@ -152,11 +153,19 @@ bool BootstrapPlanner::consume(const DhtActions &actions, core::Timestamp now) {
       found->transaction.clear();
       if (actions.query_completion->protocol_error)
         found->next_attempt = retry_at(now);
-      else
+      else {
         found->completed = true;
+        // A successful bootstrap response has already populated the routing
+        // table. Snapshot that useful first-hop frontier exactly once. Normal
+        // routing discovery owns contacts learned afterward; allowing them to
+        // extend bootstrap would make completion depend on a moving set.
+        if (!frontier_sealed_) {
+          discover_routing_contacts();
+          frontier_sealed_ = true;
+        }
+      }
     }
   }
-  discover_routing_contacts();
   return consumed;
 }
 
@@ -185,7 +194,6 @@ bool BootstrapPlanner::delivery_failed(const DatagramSend &send,
 
 core::Result<BootstrapStep> BootstrapPlanner::poll(core::Timestamp now) {
   BootstrapStep step;
-  discover_routing_contacts();
 
   const auto outstanding = node_->outstanding_queries();
   std::size_t capacity = outstanding >= options_.maximum_in_flight
