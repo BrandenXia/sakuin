@@ -178,6 +178,14 @@ queue can dilute every hash to an occasional first-hop query. The default query
 window uses half of the DHT node's global outstanding-query allowance, leaving
 capacity for bootstrap and routing maintenance.
 
+The runtime action bridge applies its queue limit to ordinary inbound work but
+always preserves query completions. The protocol node removes a completed query
+before publishing that action, so dropping it would strand the corresponding
+owner-thread planner entry without a future response or timeout. Planner and
+dispatch errors collected during a cycle are also forwarded to the service
+observer after the cycle snapshot, keeping operational error state visible
+until a later clean cycle records recovery.
+
 Existing canonical records without fetched metadata are also fed into this
 planner by a bounded backfill scan. The scan starts with a complete keyed view,
 then follows the torrent dataset change stream so an unchanged catalog is not

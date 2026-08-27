@@ -308,6 +308,19 @@ int main() {
       owner_wakeups != 4)
     return 5;
 
+  (*bounded_pump)->on_actions({});
+  (*bounded_pump)
+      ->on_actions(dht::DhtActions{
+          .query_completion = dht::QueryCompletion{
+              .transaction = {std::byte{0x42}},
+              .kind = dht::krpc::QueryKind::Ping,
+              .remote = routing_update.probe->incumbent.endpoint}});
+  auto preserved_completion = (*bounded_pump)->poll({});
+  if (preserved_completion.actions.size() != 1 ||
+      !preserved_completion.actions.front().query_completion ||
+      (*bounded_pump)->pending() != 0)
+    return 36;
+
   (*pump)->on_actions(
       dht::DhtActions{.probes_required = {*routing_update.probe}});
   const auto routing_now = core::Timestamp{std::chrono::seconds{10}};
