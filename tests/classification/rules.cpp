@@ -129,7 +129,7 @@ int main() {
       record("Softwrae Bundle", {FileRecord{"payload.bin", 120'000'000}}));
   if (fuzzy_application.kind != ContentKind::Application ||
       fuzzy_application.kind_confidence != Confidence::Low ||
-      fuzzy_application.algorithm_version != 4 ||
+      fuzzy_application.algorithm_version != 5 ||
       !std::ranges::contains(
           fuzzy_application.evidence,
           sakuin::classification::EvidenceCode::FuzzySemanticToken,
@@ -187,6 +187,31 @@ int main() {
   if (unknown.state != ClassificationState::Unknown ||
       unknown.kind != ContentKind::Unknown)
     return 15;
+
+  ClassifierOptions operator_options;
+  operator_options.operator_rules.push_back(
+      {.id = "workbench-tools",
+       .kind = ContentKind::Application,
+       .match = sakuin::classification::OperatorRuleMatch::All,
+       .tokens = {"workbench", "tool"},
+       .weight = 100});
+  const auto operator_classified =
+      classify(record("Workbench Tool Archive",
+                      {FileRecord{"payload.bin", 120'000'000}}),
+               operator_options);
+  const auto operator_unmatched = classify(
+      record("Workbench Archive", {FileRecord{"payload.bin", 120'000'000}}),
+      operator_options);
+  const auto operator_evidence =
+      std::ranges::find(operator_classified.evidence,
+                        sakuin::classification::EvidenceCode::OperatorRule,
+                        &sakuin::classification::Evidence::code);
+  if (operator_classified.kind != ContentKind::Application ||
+      operator_classified.kind_confidence != Confidence::High ||
+      operator_evidence == operator_classified.evidence.end() ||
+      operator_evidence->rule_id != "workbench-tools" ||
+      operator_unmatched.state != ClassificationState::Unknown)
+    return 22;
 
   return 0;
 }

@@ -12,6 +12,27 @@ enum class StorageBackend { Local, S3 };
 enum class CompressionCodec { None, Zstd };
 enum class AdultContentPolicy { Include, Exclude, Only };
 enum class ClassificationConfidence { Low, Medium, High };
+enum class ClassificationRuleKind {
+  Movie,
+  Series,
+  Music,
+  Audiobook,
+  Ebook,
+  Game,
+  Application
+};
+enum class ClassificationRuleMatch { Any, All };
+
+struct ClassificationRuleConfig {
+  std::string id;
+  ClassificationRuleKind kind{ClassificationRuleKind::Movie};
+  ClassificationRuleMatch match{ClassificationRuleMatch::All};
+  std::vector<std::string> tokens;
+  int weight{100};
+
+  friend bool operator==(const ClassificationRuleConfig &,
+                         const ClassificationRuleConfig &) = default;
+};
 
 struct DhtIdentityConfig {
   DhtIdentityMode mode{DhtIdentityMode::Bep42};
@@ -183,6 +204,7 @@ struct ClassificationConfig {
   std::size_t maximum_files_to_inspect{100'000};
   std::size_t maximum_path_bytes{4'096};
   std::size_t maximum_tokens{16'384};
+  std::vector<ClassificationRuleConfig> rules;
 };
 
 struct IndexingConfig {
@@ -252,6 +274,7 @@ struct AppConfig {
 struct ConfigOverlay {
   std::map<std::string, std::string, std::less<>> scalars;
   std::optional<std::vector<std::string>> bootstrap;
+  std::optional<std::vector<ClassificationRuleConfig>> classification_rules;
 };
 
 AppConfig defaults();
@@ -313,6 +336,24 @@ bool valid_node_id(std::string_view value) {
            return (digit >= '0' && digit <= '9') ||
                   (digit >= 'a' && digit <= 'f') ||
                   (digit >= 'A' && digit <= 'F');
+         });
+}
+
+bool valid_rule_id(std::string_view value) {
+  return !value.empty() && value.size() <= 64 &&
+         std::ranges::all_of(value, [](unsigned char character) {
+           return (character >= 'a' && character <= 'z') ||
+                  (character >= 'A' && character <= 'Z') ||
+                  (character >= '0' && character <= '9') || character == '_' ||
+                  character == '-' || character == '.';
+         });
+}
+
+bool valid_rule_token(std::string_view value) {
+  return !value.empty() && value.size() <= 64 &&
+         std::ranges::all_of(value, [](unsigned char character) {
+           return (character >= 'a' && character <= 'z') ||
+                  (character >= '0' && character <= '9');
          });
 }
 
@@ -991,6 +1032,8 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
   }
   if (overlay.bootstrap)
     config.network.dht.bootstrap = *overlay.bootstrap;
+  if (overlay.classification_rules)
+    config.indexing.classification.rules = *overlay.classification_rules;
   return {};
 }
 
@@ -1152,6 +1195,20 @@ core::Result<void> validate(const AppConfig &config) {
       config.indexing.classification.maximum_tokens > 1'000'000)
     return std::unexpected(
         invalid("Classification inspection limits are invalid"));
+  const auto &classification_rules = config.indexing.classification.rules;
+  if (classification_rules.size() > 128)
+    return std::unexpected(
+        invalid("At most 128 operator classification rules are allowed"));
+  std::set<std::string_view> classification_rule_ids;
+  for (const auto &rule : classification_rules) {
+    if (!valid_rule_id(rule.id) || rule.tokens.empty() ||
+        rule.tokens.size() > 32 || rule.weight <= 0 || rule.weight > 200 ||
+        !std::ranges::all_of(rule.tokens, valid_rule_token) ||
+        !classification_rule_ids.insert(rule.id).second)
+      return std::unexpected(invalid(
+          "Operator classification rules require unique bounded IDs, one to "
+          "32 lowercase alphanumeric tokens, and weights from 1 to 200"));
+  }
   if (config.indexing.classification.adult_content_policy !=
           AdultContentPolicy::Include &&
       (!config.indexing.classification.enabled ||

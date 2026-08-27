@@ -107,6 +107,31 @@ int main() {
       exact_verification_index.search({.text = "abcd", .limit = 10});
   if (!split_match || split_match->total_matches != 0)
     return 31;
+
+  search::SearchClassificationOptions operator_search_options;
+  operator_search_options.classifier.operator_rules.push_back(
+      {.id = "workbench-tools",
+       .kind = classification::ContentKind::Application,
+       .tokens = {"workbench", "tool"},
+       .weight = 100});
+  search::InMemorySearchIndex operator_index(
+      std::move(operator_search_options));
+  auto operator_rebuild = operator_index.begin_rebuild(1);
+  const auto operator_record =
+      torrent(31, "Workbench Tool Archive", 100'000'000, {"payload.bin"}, 1);
+  if (!operator_rebuild || !(*operator_rebuild)->append(operator_record) ||
+      !(*operator_rebuild)->commit())
+    return 32;
+  auto operator_result =
+      operator_index.search({.text = "workbench", .limit = 10});
+  if (!operator_result || operator_result->total_matches != 1 ||
+      operator_result->hits.front().classification.kind !=
+          classification::ContentKind::Application ||
+      !std::ranges::contains(
+          operator_result->hits.front().classification.evidence,
+          classification::EvidenceCode::OperatorRule,
+          &classification::Evidence::code))
+    return 33;
   auto filtered = index.search({.text = "mp4",
                                 .minimum_size = 7'000,
                                 .maximum_size = 9'000,

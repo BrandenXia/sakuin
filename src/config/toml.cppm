@@ -604,12 +604,13 @@ core::Result<void> parse_indexing(const toml::table &table,
     return std::unexpected(classification.error());
   if (!*classification)
     return {};
-  if (auto checked = check_keys(
-          **classification,
-          {"enabled", "learned_fallback_enabled", "adult_detection_enabled",
-           "adult_content_policy", "adult_minimum_confidence",
-           "maximum_files_to_inspect", "maximum_path_bytes", "maximum_tokens"},
-          "indexing.classification.");
+  if (auto checked =
+          check_keys(**classification,
+                     {"enabled", "learned_fallback_enabled",
+                      "adult_detection_enabled", "adult_content_policy",
+                      "adult_minimum_confidence", "maximum_files_to_inspect",
+                      "maximum_path_bytes", "maximum_tokens", "rules"},
+                     "indexing.classification.");
       !checked)
     return checked;
   for (auto result :
@@ -638,6 +639,81 @@ core::Result<void> parse_indexing(const toml::table &table,
                              overlay)})
     if (!result)
       return result;
+
+  const auto rules_view = (**classification)["rules"];
+  if (!rules_view)
+    return {};
+  const auto *rules = rules_view.as_array();
+  if (!rules)
+    return std::unexpected(invalid(
+        "indexing.classification.rules must be an array of TOML tables"));
+  std::vector<ClassificationRuleConfig> parsed_rules;
+  parsed_rules.reserve(rules->size());
+  for (std::size_t index = 0; index < rules->size(); ++index) {
+    const auto *rule = (*rules)[index].as_table();
+    const auto prefix =
+        "indexing.classification.rules[" + std::to_string(index) + "].";
+    if (!rule)
+      return std::unexpected(invalid(prefix + "value must be a TOML table"));
+    if (auto checked = check_keys(
+            *rule, {"id", "kind", "match", "tokens", "weight"}, prefix);
+        !checked)
+      return checked;
+    const auto id = (*rule)["id"].value<std::string>();
+    const auto kind = (*rule)["kind"].value<std::string>();
+    const auto *tokens = (*rule)["tokens"].as_array();
+    if (!id || !kind || !tokens)
+      return std::unexpected(
+          invalid(prefix + "id, kind, and tokens are required"));
+
+    ClassificationRuleConfig parsed{.id = *id};
+    if (*kind == "movie")
+      parsed.kind = ClassificationRuleKind::Movie;
+    else if (*kind == "series")
+      parsed.kind = ClassificationRuleKind::Series;
+    else if (*kind == "music")
+      parsed.kind = ClassificationRuleKind::Music;
+    else if (*kind == "audiobook")
+      parsed.kind = ClassificationRuleKind::Audiobook;
+    else if (*kind == "ebook")
+      parsed.kind = ClassificationRuleKind::Ebook;
+    else if (*kind == "game")
+      parsed.kind = ClassificationRuleKind::Game;
+    else if (*kind == "application")
+      parsed.kind = ClassificationRuleKind::Application;
+    else
+      return std::unexpected(invalid(
+          prefix +
+          "kind must be movie, series, music, audiobook, ebook, game, or "
+          "application"));
+
+    const auto match_view = (*rule)["match"];
+    if (match_view) {
+      const auto match = match_view.value<std::string>();
+      if (!match || (*match != "any" && *match != "all"))
+        return std::unexpected(invalid(prefix + "match must be any or all"));
+      parsed.match = *match == "any" ? ClassificationRuleMatch::Any
+                                     : ClassificationRuleMatch::All;
+    }
+    const auto weight_view = (*rule)["weight"];
+    if (weight_view) {
+      const auto weight = weight_view.value<std::int64_t>();
+      if (!weight || *weight < std::numeric_limits<int>::min() ||
+          *weight > std::numeric_limits<int>::max())
+        return std::unexpected(invalid(prefix + "weight must be an integer"));
+      parsed.weight = static_cast<int>(*weight);
+    }
+    parsed.tokens.reserve(tokens->size());
+    for (const auto &token : *tokens) {
+      const auto value = token.value<std::string>();
+      if (!value)
+        return std::unexpected(
+            invalid(prefix + "tokens must contain only strings"));
+      parsed.tokens.push_back(*value);
+    }
+    parsed_rules.push_back(std::move(parsed));
+  }
+  overlay.classification_rules = std::move(parsed_rules);
   return {};
 }
 

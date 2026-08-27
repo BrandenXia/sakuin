@@ -444,6 +444,33 @@ Classification classify(const model::TorrentRecord &record,
     add(ContentKind::Application, 45, EvidenceCode::FuzzySemanticToken);
   }
 
+  constexpr std::size_t MaximumOperatorRules = 128;
+  constexpr std::size_t MaximumOperatorTokensPerRule = 32;
+  const auto operator_rule_count =
+      std::min(options.operator_rules.size(), MaximumOperatorRules);
+  for (std::size_t rule_index = 0; rule_index < operator_rule_count;
+       ++rule_index) {
+    const auto &rule = options.operator_rules[rule_index];
+    if (rule.id.empty() || rule.id.size() > 64 || rule.tokens.empty() ||
+        rule.tokens.size() > MaximumOperatorTokensPerRule || rule.weight <= 0 ||
+        rule.weight > 200 || rule.kind == ContentKind::Unknown ||
+        rule.kind == ContentKind::Mixed)
+      continue;
+    const auto matches = [&](const auto &token) {
+      return !token.empty() && has_token(tokens, token);
+    };
+    const bool matched = rule.match == OperatorRuleMatch::Any
+                             ? std::ranges::any_of(rule.tokens, matches)
+                             : std::ranges::all_of(rule.tokens, matches);
+    if (!matched)
+      continue;
+    scores[index(rule.kind)] += rule.weight;
+    result.evidence.push_back({.code = EvidenceCode::OperatorRule,
+                               .subject = subject(rule.kind),
+                               .weight = rule.weight,
+                               .rule_id = rule.id});
+  }
+
   constexpr std::array anime_tokens{"anime", "hentai", "subsplease"};
   if (has_any_token(tokens, anime_tokens)) {
     const int anime_score = has_token(tokens, "subsplease") ? 45 : 60;

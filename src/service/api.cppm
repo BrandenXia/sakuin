@@ -160,13 +160,43 @@ search::SearchClassificationOptions search_classification_options(
     }
     std::unreachable();
   }();
+  classification::ClassifierOptions classifier{
+      .adult_detection_enabled = configuration.adult_detection_enabled,
+      .maximum_files_to_inspect = configuration.maximum_files_to_inspect,
+      .maximum_path_bytes = configuration.maximum_path_bytes,
+      .maximum_tokens = configuration.maximum_tokens};
+  classifier.operator_rules.reserve(configuration.rules.size());
+  for (const auto &configured : configuration.rules) {
+    const auto kind = [&] {
+      switch (configured.kind) {
+      case config::ClassificationRuleKind::Movie:
+        return classification::ContentKind::Movie;
+      case config::ClassificationRuleKind::Series:
+        return classification::ContentKind::Series;
+      case config::ClassificationRuleKind::Music:
+        return classification::ContentKind::Music;
+      case config::ClassificationRuleKind::Audiobook:
+        return classification::ContentKind::Audiobook;
+      case config::ClassificationRuleKind::Ebook:
+        return classification::ContentKind::Ebook;
+      case config::ClassificationRuleKind::Game:
+        return classification::ContentKind::Game;
+      case config::ClassificationRuleKind::Application:
+        return classification::ContentKind::Application;
+      }
+      std::unreachable();
+    }();
+    classifier.operator_rules.push_back(
+        {.id = configured.id,
+         .kind = kind,
+         .match = configured.match == config::ClassificationRuleMatch::Any
+                      ? classification::OperatorRuleMatch::Any
+                      : classification::OperatorRuleMatch::All,
+         .tokens = configured.tokens,
+         .weight = configured.weight});
+  }
   return {.enabled = configuration.enabled,
-          .classifier = {.adult_detection_enabled =
-                             configuration.adult_detection_enabled,
-                         .maximum_files_to_inspect =
-                             configuration.maximum_files_to_inspect,
-                         .maximum_path_bytes = configuration.maximum_path_bytes,
-                         .maximum_tokens = configuration.maximum_tokens},
+          .classifier = std::move(classifier),
           .learned = {.enabled = configuration.learned_fallback_enabled},
           .adult_minimum = adult_minimum};
 }
