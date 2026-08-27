@@ -139,6 +139,9 @@ operator setting and defaults to including every result. Native JSON search
 also returns bounded rule evidence so classifications can be audited.
 Strong content-kind hints tolerate simple one-character misspellings out of the
 box, while sensitive labels remain exact-token-only.
+Optional exact-token rules in `sakuin.toml` let operators teach local release
+vocabulary without replacing the built-in classifier; matched rule IDs appear
+in native API evidence.
 For metadata-complete results that deterministic rules still leave unknown or
 ambiguous, an enabled-by-default local learned fallback adapts to recurring
 content-kind vocabulary in the node's own high-confidence records. Its

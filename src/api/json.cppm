@@ -265,6 +265,8 @@ std::string_view name(classification::EvidenceCode value) {
     return "fuzzy_semantic_token";
   case LearnedContentModel:
     return "learned_content_model";
+  case OperatorRule:
+    return "operator_rule";
   case AdultToken:
     return "adult_token";
   case AnimeToken:
@@ -284,10 +286,14 @@ nlohmann::json classification_json(const search::SearchHit &hit) {
   for (const auto category : hit.categories)
     categories.push_back(name(category));
   nlohmann::json evidence = nlohmann::json::array();
-  for (const auto &item : hit.classification.evidence)
-    evidence.push_back({{"code", name(item.code)},
-                        {"subject", name(item.subject)},
-                        {"weight", item.weight}});
+  for (const auto &item : hit.classification.evidence) {
+    nlohmann::json entry{{"code", name(item.code)},
+                         {"subject", name(item.subject)},
+                         {"weight", item.weight}};
+    if (item.rule_id)
+      entry["rule_id"] = *item.rule_id;
+    evidence.push_back(std::move(entry));
+  }
   nlohmann::json result{
       {"state", name(hit.classification.state)},
       {"kind", name(hit.classification.kind)},

@@ -44,6 +44,9 @@ private:
   struct State {
     std::uint64_t source_generation{};
     std::vector<IndexedRecord> records;
+    // Disposable candidate lookup. Exact substring matching and scoring remain
+    // authoritative after candidate selection.
+    std::unordered_map<std::uint32_t, std::vector<std::size_t>> trigrams;
     ClassificationIndexStats classification;
   };
 
@@ -52,6 +55,7 @@ private:
   publish_updates(std::uint64_t source_generation,
                   std::span<const model::TorrentRecord> updates);
   void rebuild_classification(State &state) const;
+  void rebuild_text_candidates(State &state) const;
   ClassificationIndexStats summarize(
       std::span<const IndexedRecord> records,
       const classification::LearnedClassifierStats &learned) const noexcept;
@@ -97,6 +101,54 @@ std::vector<std::string> terms(std::string_view input) {
   }
   if (!current.empty())
     result.push_back(std::move(current));
+  return result;
+}
+
+std::uint32_t trigram(std::string_view value, std::size_t offset) {
+  return (static_cast<std::uint32_t>(static_cast<unsigned char>(value[offset]))
+          << 16U) |
+         (static_cast<std::uint32_t>(
+              static_cast<unsigned char>(value[offset + 1]))
+          << 8U) |
+         static_cast<std::uint32_t>(
+             static_cast<unsigned char>(value[offset + 2]));
+}
+
+void add_trigrams(std::string_view value,
+                  std::unordered_set<std::uint32_t> &result) {
+  if (value.size() < 3)
+    return;
+  for (std::size_t offset = 0; offset + 2 < value.size(); ++offset)
+    result.insert(trigram(value, offset));
+}
+
+std::optional<std::vector<std::size_t>> candidate_ordinals(
+    const std::unordered_map<std::uint32_t, std::vector<std::size_t>> &index,
+    std::span<const std::string> query_terms) {
+  std::unordered_set<std::uint32_t> required;
+  for (const auto &term : query_terms)
+    add_trigrams(term, required);
+  if (required.empty())
+    return std::nullopt;
+
+  std::vector<const std::vector<std::size_t> *> postings;
+  postings.reserve(required.size());
+  for (const auto key : required) {
+    const auto found = index.find(key);
+    if (found == index.end())
+      return std::vector<std::size_t>{};
+    postings.push_back(&found->second);
+  }
+  std::ranges::sort(postings, {},
+                    [](const auto *posting) { return posting->size(); });
+  auto result = *postings.front();
+  for (std::size_t posting_index = 1;
+       posting_index < postings.size() && !result.empty(); ++posting_index) {
+    const auto &posting = *postings[posting_index];
+    std::erase_if(result, [&](const auto ordinal) {
+      return !std::ranges::binary_search(posting, ordinal);
+    });
+  }
   return result;
 }
 
@@ -265,8 +317,9 @@ core::Result<void> InMemorySearchIndex::publish_updates(
     return std::unexpected(core::Error{
         core::ErrorCode::Conflict,
         "Search update cannot replace a newer canonical generation"});
-  auto replacement = std::make_shared<State>(*state_);
+  auto replacement = std::make_shared<State>();
   replacement->source_generation = source_generation;
+  replacement->records = state_->records;
   for (const auto &update : updates) {
     const auto existing =
         std::ranges::find_if(replacement->records, [&](const auto &indexed) {
@@ -279,6 +332,7 @@ core::Result<void> InMemorySearchIndex::publish_updates(
       *existing = std::move(indexed);
   }
   rebuild_classification(*replacement);
+  rebuild_text_candidates(*replacement);
   state_ = std::move(replacement);
   return {};
 }
@@ -297,6 +351,7 @@ core::Result<void> MemoryRebuildSession::commit() {
         InMemorySearchIndex::IndexedRecord{.record = std::move(record)});
   }
   owner_->rebuild_classification(*state);
+  owner_->rebuild_text_candidates(*state);
   return owner_->publish(std::move(state));
 }
 
@@ -323,6 +378,22 @@ void InMemorySearchIndex::rebuild_classification(State &state) const {
         options_.adult_minimum);
   }
   state.classification = summarize(state.records, learned.stats());
+}
+
+void InMemorySearchIndex::rebuild_text_candidates(State &state) const {
+  state.trigrams.clear();
+  std::unordered_set<std::uint32_t> record_trigrams;
+  for (std::size_t ordinal = 0; ordinal < state.records.size(); ++ordinal) {
+    record_trigrams.clear();
+    const auto &record = state.records[ordinal].record;
+    add_trigrams(hex(record.info_hash), record_trigrams);
+    if (record.name)
+      add_trigrams(folded(*record.name), record_trigrams);
+    for (const auto &file : record.files)
+      add_trigrams(folded(file.path), record_trigrams);
+    for (const auto key : record_trigrams)
+      state.trigrams[key].push_back(ordinal);
+  }
 }
 
 ClassificationIndexStats InMemorySearchIndex::summarize(
@@ -377,14 +448,16 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
   }
 
   std::vector<SearchHit> matches;
-  for (const auto &indexed : state->records) {
+  const auto candidates = candidate_ordinals(state->trigrams, query_terms);
+  const auto visit = [&](std::size_t ordinal) {
+    const auto &indexed = state->records[ordinal];
     const auto &record = indexed.record;
     // Observation materialization creates records before BEP 9 metadata is
     // available. Keep those placeholders in the derived index for later
     // enrichment and operational accounting, but do not expose an unknown
     // size as a real zero-byte torrent through native or Torznab search.
     if (!record.name || record.files.empty())
-      continue;
+      return;
     const bool adult = contains_category(indexed.categories,
                                          classification::MediaCategory::Adult);
     if ((query.minimum_size && record.total_size < *query.minimum_size) ||
@@ -412,10 +485,10 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
          !std::ranges::any_of(query.categories, [&](const auto category) {
            return contains_category(indexed.categories, category);
          })))
-      continue;
+      return;
     const auto score = match_score(record, query_terms);
     if (!score)
-      continue;
+      return;
     matches.push_back(SearchHit{.info_hash = record.info_hash,
                                 .name = record.name,
                                 .total_size = record.total_size,
@@ -425,6 +498,13 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
                                 .score = *score,
                                 .classification = indexed.classification,
                                 .categories = indexed.categories});
+  };
+  if (candidates) {
+    for (const auto ordinal : *candidates)
+      visit(ordinal);
+  } else {
+    for (std::size_t ordinal = 0; ordinal < state->records.size(); ++ordinal)
+      visit(ordinal);
   }
   std::ranges::sort(matches, [](const auto &left, const auto &right) {
     if (left.score != right.score)

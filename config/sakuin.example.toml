@@ -141,6 +141,16 @@ maximum_files_to_inspect = 100000
 maximum_path_bytes = 4096
 maximum_tokens = 16384
 
+# Optional exact-token rules add bounded content-kind evidence to the built-in
+# classifier. Omit this section for the out-of-box defaults. "match" is "all"
+# by default; weight defaults to 100 and must be between 1 and 200.
+# [[indexing.classification.rules]]
+# id = "my-release-group"
+# kind = "series"
+# match = "all"
+# tokens = ["mygroup", "episode"]
+# weight = 120
+
 [api]
 enabled = true
 credential_store_directory = "./data/operational/api"

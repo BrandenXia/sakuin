@@ -117,6 +117,19 @@ maximum_files_to_inspect = 50000
 maximum_path_bytes = 2048
 maximum_tokens = 8192
 
+[[indexing.classification.rules]]
+id = "workbench-tools"
+kind = "application"
+match = "all"
+tokens = ["workbench", "tool"]
+weight = 110
+
+[[indexing.classification.rules]]
+id = "episodic-groups"
+kind = "series"
+match = "any"
+tokens = ["examplegroup", "anothergroup"]
+
 [api]
 credential_store_directory = "/srv/sakuin/api-credentials"
 listen_address = "::1"
@@ -350,6 +363,18 @@ tls_server_name = "coordinator.internal"
       loaded.indexing.classification.maximum_files_to_inspect != 50'000 ||
       loaded.indexing.classification.maximum_path_bytes != 2'048 ||
       loaded.indexing.classification.maximum_tokens != 8'192 ||
+      loaded.indexing.classification.rules.size() != 2 ||
+      loaded.indexing.classification.rules[0].id != "workbench-tools" ||
+      loaded.indexing.classification.rules[0].kind !=
+          config::ClassificationRuleKind::Application ||
+      loaded.indexing.classification.rules[0].match !=
+          config::ClassificationRuleMatch::All ||
+      loaded.indexing.classification.rules[0].tokens !=
+          std::vector<std::string>{"workbench", "tool"} ||
+      loaded.indexing.classification.rules[0].weight != 110 ||
+      loaded.indexing.classification.rules[1].match !=
+          config::ClassificationRuleMatch::Any ||
+      loaded.indexing.classification.rules[1].weight != 100 ||
       loaded.api.credential_store_directory !=
           "/var/lib/sakuin/api-credentials" ||
       loaded.api.listen_address != "::1" || loaded.api.listen_port != 9001 ||
@@ -456,6 +481,16 @@ tls_server_name = "coordinator.internal"
   invalid_tiering.storage.compaction_warm_block_target_bytes = 1024;
   if (config::validate(invalid_tiering))
     return 13;
+  auto invalid_classification_rules = config::defaults();
+  invalid_classification_rules.indexing.classification.rules = {
+      {.id = "duplicate", .tokens = {"valid"}},
+      {.id = "duplicate", .tokens = {"alsovalid"}}};
+  if (config::validate(invalid_classification_rules))
+    return 24;
+  if (config::parse_toml(
+          "[[indexing.classification.rules]]\n"
+          "id = \"bad\"\nkind = \"unknown\"\ntokens = [\"token\"]\n"))
+    return 25;
   auto invalid_s3 = config::defaults();
   invalid_s3.storage.backend = config::StorageBackend::S3;
   if (config::validate(invalid_s3))

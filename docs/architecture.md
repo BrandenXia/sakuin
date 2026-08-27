@@ -251,6 +251,11 @@ count, observation timestamps, and derived classifications. It supports text,
 structured metadata filters, semantic categories, and optional classifier
 state, kind, confidence, and label facets with bounded pagination. Classifier
 facets do not override the independently configured Adult visibility policy.
+Text queries of at least three characters use an in-memory trigram posting
+index over names, paths, and infohashes to select candidates before applying the
+authoritative exact substring matcher and scorer. Short and filter-only queries
+fall back to scanning the derived records. The posting index is disposable and
+is rebuilt from the local projection after restart or refresh.
 
 Duplicate detection publishes three explicitly versioned fingerprints: an
 exact sorted file-layout identity, a normalized name/path identity, and a
@@ -383,8 +388,11 @@ substitution, or adjacent transposition using a bounded deterministic matcher.
 Fuzzy evidence is weighted below an exact token and is exposed separately for
 auditing. Short signals, structured episode/resolution tokens, and Adult or
 Anime labels remain exact-only to limit false positives. The built-in rules
-require no operator setup; optional custom rule packs can layer on this model
-later without becoming required configuration.
+require no operator setup. Operators may optionally add bounded exact-token
+content-kind rules in TOML. A rule uses `any` or `all` matching, contributes a
+bounded weight to the same scorer instead of forcibly replacing its decision,
+and exposes its configured ID as `operator_rule` evidence. Operator rules do
+not assign Adult or Anime labels and cannot change visibility policy.
 TV evidence covers compact season/episode forms, explicit TV/series words,
 season packs, and hyphenated two- or three-digit absolute episode numbers. This
 evidence outranks the generic single-video movie prior, which exists only as a
@@ -530,6 +538,6 @@ xmake run sakuin-storage-benchmark 100000 65536
 - Duplicate matching uses exact content IDs, normalized metadata, and renamed
   payload-layout fingerprints; it does not yet perform probabilistic semantic
   similarity.
-- There is currently no browser UI. Classification is deterministic and
-  metadata-based. Strong kind hints have bounded typo tolerance, but there are
-  no learned models or operator-defined classifier rules yet.
+- There is currently no browser UI. Classification is metadata-based and
+  combines built-in deterministic evidence with optional operator-defined
+  content-kind rules and an optional locally learned fallback.
