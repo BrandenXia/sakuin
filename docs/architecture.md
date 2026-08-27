@@ -385,6 +385,10 @@ auditing. Short signals, structured episode/resolution tokens, and Adult or
 Anime labels remain exact-only to limit false positives. The built-in rules
 require no operator setup; optional custom rule packs can layer on this model
 later without becoming required configuration.
+TV evidence covers compact season/episode forms, explicit TV/series words,
+season packs, and hyphenated two- or three-digit absolute episode numbers. This
+evidence outranks the generic single-video movie prior, which exists only as a
+fallback when no episodic signal is present.
 
 Classifier changes are checked against a version-controlled regression corpus
 with explicit expected state, kind, minimum confidence, label requirements, and

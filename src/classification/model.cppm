@@ -6,7 +6,7 @@ import sakuin.core.ids;
 
 export namespace sakuin::classification {
 
-inline constexpr std::uint32_t AlgorithmVersion{3};
+inline constexpr std::uint32_t AlgorithmVersion{4};
 
 enum class ContentKind {
   Unknown,

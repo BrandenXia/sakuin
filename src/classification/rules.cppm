@@ -200,7 +200,7 @@ bool has_fuzzy_semantic_token(const TokenProfile &tokens,
 }
 
 bool season_episode_token(std::string_view token) {
-  if (token.size() >= 6 && token.front() == 's') {
+  if (token.size() >= 4 && token.front() == 's') {
     const auto episode = token.find('e', 2);
     if (episode != std::string_view::npos && episode + 1 < token.size() &&
         std::ranges::all_of(
@@ -220,6 +220,50 @@ bool season_episode_token(std::string_view token) {
          std::ranges::all_of(
              token.substr(separator + 1),
              [](unsigned char value) { return std::isdigit(value); });
+}
+
+bool prefixed_number_token(std::string_view token, std::string_view prefix,
+                           std::size_t minimum_digits,
+                           std::size_t maximum_digits) {
+  if (!token.starts_with(prefix))
+    return false;
+  const auto number = token.substr(prefix.size());
+  return number.size() >= minimum_digits && number.size() <= maximum_digits &&
+         std::ranges::all_of(
+             number, [](unsigned char value) { return std::isdigit(value); });
+}
+
+bool season_or_episode_token(std::string_view token) {
+  return prefixed_number_token(token, "s", 2, 3) ||
+         prefixed_number_token(token, "e", 2, 4) ||
+         prefixed_number_token(token, "ep", 1, 4);
+}
+
+// Absolute-numbered episode releases commonly use "Title - 01" without an
+// SxxExx marker. Requiring a hyphen and two or three digits avoids treating a
+// sequel number or four-digit release year as an episode.
+bool absolute_episode_notation(std::string_view source,
+                               std::size_t maximum_bytes) {
+  source = source.substr(0, std::min(source.size(), maximum_bytes));
+  for (std::size_t index = 0; index < source.size(); ++index) {
+    if (source[index] != '-')
+      continue;
+    auto cursor = index + 1;
+    while (cursor < source.size() &&
+           std::isspace(static_cast<unsigned char>(source[cursor])))
+      ++cursor;
+    const auto first_digit = cursor;
+    while (cursor < source.size() &&
+           std::isdigit(static_cast<unsigned char>(source[cursor])) &&
+           cursor - first_digit < 4)
+      ++cursor;
+    const auto digits = cursor - first_digit;
+    if (digits >= 2 && digits <= 3 &&
+        (cursor == source.size() ||
+         !std::isalnum(static_cast<unsigned char>(source[cursor]))))
+      return true;
+  }
+  return false;
 }
 
 bool release_year_token(std::string_view token) {
@@ -298,8 +342,12 @@ Classification classify(const model::TorrentRecord &record,
 
   PayloadProfile payload;
   TokenProfile tokens;
-  if (record.name)
+  bool absolute_episode{};
+  if (record.name) {
     add_tokens(*record.name, options, tokens);
+    absolute_episode =
+        absolute_episode_notation(*record.name, options.maximum_path_bytes);
+  }
   const auto inspected =
       std::min(record.files.size(), options.maximum_files_to_inspect);
   result.input_truncated = inspected != record.files.size();
@@ -313,6 +361,9 @@ Classification classify(const model::TorrentRecord &record,
       payload.considered_bytes =
           saturated_add(payload.considered_bytes, file.size);
     add_tokens(file.path, options, tokens);
+    absolute_episode =
+        absolute_episode ||
+        absolute_episode_notation(file.path, options.maximum_path_bytes);
   }
   result.input_truncated = result.input_truncated || tokens.truncated;
 
@@ -352,7 +403,17 @@ Classification classify(const model::TorrentRecord &record,
   if (application_dominant)
     add(ContentKind::Application, 90, EvidenceCode::ApplicationPayloadDominant);
 
-  if (std::ranges::any_of(tokens.values, season_episode_token))
+  constexpr std::array series_tokens{
+      "tv", "television", "series", "season", "seasons", "episode", "episodes"};
+  const bool structured_episode =
+      std::ranges::any_of(tokens.values, season_episode_token) ||
+      std::ranges::any_of(tokens.values, season_or_episode_token);
+  const bool explicit_series = has_any_token(tokens, series_tokens);
+  const bool episodic_release = has_token(tokens, "subsplease");
+  if (structured_episode)
+    add(ContentKind::Series, 120, EvidenceCode::SeasonEpisodeToken);
+  else if (video_dominant &&
+           (explicit_series || episodic_release || absolute_episode))
     add(ContentKind::Series, 120, EvidenceCode::SeasonEpisodeToken);
   if (video_dominant && std::ranges::any_of(tokens.values, release_year_token))
     add(ContentKind::Movie, 25, EvidenceCode::ReleaseYearToken);
