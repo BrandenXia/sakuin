@@ -251,6 +251,11 @@ count, observation timestamps, and derived classifications. It supports text,
 structured metadata filters, semantic categories, and optional classifier
 state, kind, confidence, and label facets with bounded pagination. Classifier
 facets do not override the independently configured Adult visibility policy.
+Text queries of at least three characters use an in-memory trigram posting
+index over names, paths, and infohashes to select candidates before applying the
+authoritative exact substring matcher and scorer. Short and filter-only queries
+fall back to scanning the derived records. The posting index is disposable and
+is rebuilt from the local projection after restart or refresh.
 
 Duplicate detection publishes three explicitly versioned fingerprints: an
 exact sorted file-layout identity, a normalized name/path identity, and a
