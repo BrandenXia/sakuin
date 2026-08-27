@@ -44,15 +44,21 @@ public:
 
   bool wait() {
     std::unique_lock lock{mutex_};
-    return condition_.wait_for(lock, std::chrono::seconds{3}, [&] {
-      return actions_.has_value() || error_.has_value();
-    }) &&
+    return condition_.wait_for(
+               lock, std::chrono::seconds{3},
+               [&] { return actions_.has_value() || error_.has_value(); }) &&
            actions_.has_value() && !error_;
   }
 
   std::optional<sakuin::dht::DhtActions> actions() {
     std::scoped_lock lock{mutex_};
     return actions_;
+  }
+
+  void reset() {
+    std::scoped_lock lock{mutex_};
+    actions_.reset();
+    error_.reset();
   }
 
 private:
@@ -150,8 +156,8 @@ int main() {
                                .sender = node(1),
                                .info_hash = wanted};
   auto packet = dht::krpc::encode(query);
-  if (!packet || !(*client)->send((*server)->local_endpoint(),
-                                  std::move(*packet)))
+  if (!packet ||
+      !(*client)->send((*server)->local_endpoint(), std::move(*packet)))
     return 4;
   auto response_datagram = client_events.wait();
   if (!response_datagram || !server_events.wait())
@@ -166,9 +172,22 @@ int main() {
       !actions->observation || actions->observation->info_hash != wanted ||
       actions->observation->observed_at != fixed_time ||
       !actions->sends.empty() || traffic.inbound != 1 ||
-      traffic.outbound != 1 || traffic.inbound_class != dht::traffic_class::inbound ||
+      traffic.outbound != 1 ||
+      traffic.inbound_class != dht::traffic_class::inbound ||
       traffic.outbound_class != dht::traffic_class::protocol_response)
     return 6;
+
+  server_events.reset();
+  if (!(*client)->send((*server)->local_endpoint(),
+                       bytes("d1:ri0e1:t2:aa1:y1:re")) ||
+      !server_events.wait())
+    return 8;
+  auto malformed_actions = server_events.actions();
+  if (!malformed_actions || !malformed_actions->inbound_message ||
+      malformed_actions->inbound_message->type !=
+          dht::InboundMessageType::ProtocolError ||
+      traffic.inbound != 2 || traffic.outbound != 1)
+    return 9;
 
   (*client)->stop();
   driver.stop();
