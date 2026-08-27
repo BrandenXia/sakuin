@@ -62,6 +62,12 @@ public:
     });
   }
 
+  bool wait_for_worker_errors(std::size_t wanted) {
+    std::unique_lock lock{mutex};
+    return condition.wait_for(lock, std::chrono::seconds{2},
+                              [&] { return worker_errors >= wanted; });
+  }
+
   std::mutex mutex;
   std::condition_variable condition;
   std::size_t cycles{};
@@ -115,7 +121,7 @@ int main() {
 
   (*pump)->on_error(
       core::Error{core::ErrorCode::IoError, "Synthetic callback error"});
-  if (!observer.wait_for(2, 1))
+  if (!observer.wait_for(2, 1) || !observer.wait_for_worker_errors(1))
     return 5;
 
   auto remote_address = runtime::IpAddress::loopback_v4();
