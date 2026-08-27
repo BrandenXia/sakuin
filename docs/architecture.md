@@ -279,6 +279,11 @@ set, in-flight queries, discovered peers, and exhausted traversals per address
 family. It also separates received responses, network timeouts, local delivery
 failures, and successful hash traversals so operators can compare IPv4 and IPv6
 scheduling with time-series deltas.
+Reaching the bounded pending-hash limit is normal backpressure: newly stored
+observations remain canonical and the metadata backfill offers them later.
+Malformed packets from public peers increment inbound protocol-error telemetry
+without becoming service incidents or error-level logs; transport, storage,
+and internal failures still follow the service-error path.
 Metadata backfill additionally reports records scanned, targets offered,
 records already carrying metadata, source generation, and whether a full scan
 is in progress. These counters distinguish a discovery bottleneck from an

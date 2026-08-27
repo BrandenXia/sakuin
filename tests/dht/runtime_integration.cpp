@@ -291,6 +291,45 @@ int main() {
       missing_metadata ||
       missing_metadata.error().code != core::ErrorCode::InvalidArgument)
     return 3;
+
+  ObservationSink saturated_observations;
+  saturated_observations.fail_once = false;
+  dht::DhtNode saturated_node{local_node,
+                              *tokens,
+                              {.query_timeout = std::chrono::seconds{2},
+                               .address_family = runtime::AddressFamily::IPv4}};
+  for (std::uint8_t index = 0; index < dht::k_bucket_size; ++index)
+    saturated_node.routing_table().observe(routing_contact(index));
+  auto saturated_discovery = dht::PeerDiscoveryPlanner::create(
+      saturated_node, {.maximum_pending = 1,
+                       .maximum_in_flight = 1,
+                       .parallelism_per_hash = 1,
+                       .maximum_queries_per_hash = 1,
+                       .retry_delay = std::chrono::minutes{5}});
+  const auto saturation_now = core::Timestamp{std::chrono::seconds{5}};
+  auto saturated_pump =
+      saturated_discovery
+          ? integration::DhtRuntimeActionPump::create(
+                saturated_observations,
+                {.metadata = controller->get(),
+                 .node = &saturated_node,
+                 .peer_discovery = saturated_discovery->get()})
+          : core::Result<std::unique_ptr<integration::DhtRuntimeActionPump>>{
+                std::unexpected(saturated_discovery.error())};
+  if (!saturated_discovery ||
+      !(*saturated_discovery)->offer(hash(70), saturation_now) ||
+      !saturated_pump)
+    return 46;
+  (*saturated_pump)
+      ->on_actions(dht::DhtActions{
+          .observation = model::ObservationRecord{
+              .info_hash = hash(71), .observed_at = saturation_now}});
+  auto saturated = (*saturated_pump)->poll(saturation_now);
+  if (saturated.observations_stored != 1 || !saturated.errors.empty() ||
+      saturated_observations.records.size() != 1 ||
+      (*saturated_discovery)->pending() != 1)
+    return 47;
+
   std::size_t owner_wakeups{};
   auto bounded_pump = integration::DhtRuntimeActionPump::create(
       observations, {},

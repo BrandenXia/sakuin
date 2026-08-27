@@ -334,7 +334,11 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
             auto offered =
                 peer_discovery_->offer(actions.observation->info_hash,
                                        actions.observation->observed_at);
-            if (!offered)
+            // A stored observation remains available to the canonical
+            // metadata backfill. Saturating this bounded derived queue is
+            // ordinary backpressure, not a service failure.
+            if (!offered &&
+                offered.error().code != core::ErrorCode::QuotaExceeded)
               result.errors.push_back(offered.error());
           }
           actions.observation.reset();
