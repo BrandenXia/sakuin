@@ -68,6 +68,20 @@ int main() {
       series.kind_confidence != Confidence::High ||
       series.resolution != VideoResolution::Hd1080)
     return 3;
+  const auto short_series = classify(
+      record("Example.Show.S1E2.1080p",
+             {FileRecord{"Example.Show.S1E2.1080p.mkv", 2'000'000'000}}));
+  const auto absolute_series = classify(record(
+      "[SubsPlease] Example Show - 07 (1080p)",
+      {FileRecord{"[SubsPlease] Example Show - 07.mkv", 2'000'000'000}}));
+  if (short_series.kind != ContentKind::Series ||
+      short_series.kind_confidence != Confidence::High ||
+      absolute_series.kind != ContentKind::Series ||
+      absolute_series.kind_confidence != Confidence::High ||
+      !std::ranges::contains(
+          sakuin::classification::media_categories(absolute_series),
+          MediaCategory::SeriesHd))
+    return 21;
 
   std::vector<FileRecord> album_files;
   for (int track = 1; track <= 10; ++track)
@@ -115,7 +129,7 @@ int main() {
       record("Softwrae Bundle", {FileRecord{"payload.bin", 120'000'000}}));
   if (fuzzy_application.kind != ContentKind::Application ||
       fuzzy_application.kind_confidence != Confidence::Low ||
-      fuzzy_application.algorithm_version != 3 ||
+      fuzzy_application.algorithm_version != 4 ||
       !std::ranges::contains(
           fuzzy_application.evidence,
           sakuin::classification::EvidenceCode::FuzzySemanticToken,

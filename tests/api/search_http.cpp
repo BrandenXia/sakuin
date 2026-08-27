@@ -78,8 +78,16 @@ int main() {
   movie.last_seen = core::Timestamp{std::chrono::milliseconds{40}};
   movie.files.push_back(
       {.path = "Example.Anime.Movie.2024.1080p.mkv", .size = 1'000'000});
+  model::TorrentRecord series;
+  series.info_hash.bytes.fill(0x44);
+  series.name = "Example Show S1E2 1080p";
+  series.total_size = 1'000'000;
+  series.first_seen = core::Timestamp{std::chrono::milliseconds{50}};
+  series.last_seen = core::Timestamp{std::chrono::milliseconds{60}};
+  series.files.push_back(
+      {.path = "Example.Show.S1E2.1080p.mkv", .size = 1'000'000});
   if (!(*rebuild)->append(record) || !(*rebuild)->append(movie) ||
-      !(*rebuild)->commit())
+      !(*rebuild)->append(series) || !(*rebuild)->commit())
     return 4;
 
   Duplicates duplicates;
@@ -457,6 +465,16 @@ int main() {
       !body(*torznab_movie).contains("name=\"category\" value=\"2040\"") ||
       !body(*torznab_movie).contains("total=\"1\""))
     return 36;
+  auto torznab_series = handler.handle(
+      {.method = api::HttpMethod::Get,
+       .target = "/api?t=tvsearch&q=example&limit=10&apikey=" + token});
+  if (!torznab_series ||
+      !body(*torznab_series).contains("<category>5000</category>") ||
+      !body(*torznab_series).contains("<category>5040</category>") ||
+      !body(*torznab_series).contains("name=\"category\" value=\"5000\"") ||
+      !body(*torznab_series).contains("name=\"category\" value=\"5040\"") ||
+      !body(*torznab_series).contains("total=\"1\""))
+    return 48;
   auto unknown_category = handler.handle(
       {.method = api::HttpMethod::Get,
        .target = "/api?t=search&cat=9999&limit=10&apikey=" + token});
@@ -503,11 +521,11 @@ int main() {
       !body(*operator_status).contains("\"peer_discovery_succeeded\":3") ||
       !body(*operator_status).contains("\"metadata_sink_succeeded\":7") ||
       !body(*operator_status).contains("\"bootstrap_exhausted\":false") ||
-      !body(*operator_status).contains("\"total_records\":2") ||
+      !body(*operator_status).contains("\"total_records\":3") ||
       !body(*operator_status).contains("\"adult_labeled\":0") ||
       !body(*operator_status).contains("\"movie\":1") ||
       !body(*operator_status).contains("\"learned\":{") ||
-      !body(*operator_status).contains("\"training_records\":1") ||
+      !body(*operator_status).contains("\"training_records\":2") ||
       !body(*operator_status).contains("\"service_errors\":{") ||
       !body(*operator_status).contains("\"active\":0") ||
       !body(*operator_status).contains("\"count\":2") ||
@@ -619,12 +637,16 @@ int main() {
       !body(*operator_metrics)
            .contains("sakuin_classification_learned_ready 0\n") ||
       !body(*operator_metrics)
-           .contains("sakuin_classification_learned_training_records 1\n") ||
+           .contains("sakuin_classification_learned_training_records 2\n") ||
       !body(*operator_metrics)
            .contains("sakuin_classification_adult_labeled_records 0\n") ||
       !body(*operator_metrics)
            .contains(
                "sakuin_classification_category_records{category=\"movie\"} "
+               "1\n") ||
+      !body(*operator_metrics)
+           .contains(
+               "sakuin_classification_category_records{category=\"series\"} "
                "1\n"))
     return 39;
   if (!body(*operator_metrics).contains("sakuin_service_ready 1\n"))
