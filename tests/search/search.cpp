@@ -84,6 +84,29 @@ int main() {
     std::cerr << '\n';
     return 4;
   }
+  auto substring = index.search({.text = "inu", .limit = 10});
+  auto short_query = index.search({.text = "li", .limit = 10});
+  auto multiple_terms = index.search({.text = "linux iso", .limit = 10});
+  auto by_hash = index.search({.text = "010101", .limit = 10});
+  auto absent = index.search({.text = "definitely-absent", .limit = 10});
+  if (!substring || substring->total_matches != 2 || !short_query ||
+      short_query->total_matches != 2 || !multiple_terms ||
+      multiple_terms->total_matches != 1 ||
+      multiple_terms->hits.front().name != "Linux Distribution" || !by_hash ||
+      by_hash->total_matches != 1 || !absent || absent->total_matches != 0)
+    return 29;
+
+  search::InMemorySearchIndex exact_verification_index;
+  auto exact_verification_rebuild = exact_verification_index.begin_rebuild(1);
+  const auto split_trigrams = torrent(30, "abc", 1'000, {"bcd"}, 1);
+  if (!exact_verification_rebuild ||
+      !(*exact_verification_rebuild)->append(split_trigrams) ||
+      !(*exact_verification_rebuild)->commit())
+    return 30;
+  auto split_match =
+      exact_verification_index.search({.text = "abcd", .limit = 10});
+  if (!split_match || split_match->total_matches != 0)
+    return 31;
   auto filtered = index.search({.text = "mp4",
                                 .minimum_size = 7'000,
                                 .maximum_size = 9'000,

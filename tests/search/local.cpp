@@ -71,7 +71,9 @@ int main() {
          .minimum_label_confidence = classification::Confidence::High,
          .limit = 10});
     const auto stats = (*index)->classification_stats();
-    if (!found || found->total_matches != 1 || !classified ||
+    auto substring = (*index)->search({.text = "inux", .limit = 10});
+    if (!found || found->total_matches != 1 || !substring ||
+        substring->total_matches != 1 || !classified ||
         classified->total_matches != 1 ||
         classified->hits.front().name != "Example Anime Movie 2024" ||
         stats.total_records != 3)
@@ -86,8 +88,10 @@ int main() {
     if (!index || (*index)->source_generation() != 8)
       return 6;
     auto found = (*index)->search({.text = "kernel", .limit = 10});
+    auto stale = (*index)->search({.text = "linux", .limit = 10});
     if (!found || found->total_matches != 1 ||
-        found->hits.front().total_size != 300)
+        found->hits.front().total_size != 300 || !stale ||
+        stale->total_matches != 0)
       return 7;
   }
 
