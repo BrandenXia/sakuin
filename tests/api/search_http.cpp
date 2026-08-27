@@ -59,6 +59,25 @@ int main() {
            ->put("operator", admin_secret, {api::Permission::Admin}))
     return 15;
 
+  search::SearchResult operator_rule_result;
+  search::SearchHit operator_rule_hit;
+  operator_rule_hit.classification.evidence.push_back(
+      {.code = classification::EvidenceCode::OperatorRule,
+       .subject = classification::EvidenceSubject::Application,
+       .weight = 100,
+       .rule_id = "workbench-tools"});
+  operator_rule_result.hits.push_back(std::move(operator_rule_hit));
+  auto operator_rule_json = api::json_search_result(operator_rule_result);
+  const std::string operator_rule_body =
+      operator_rule_json ? std::string{reinterpret_cast<const char *>(
+                                           operator_rule_json->data()),
+                                       operator_rule_json->size()}
+                         : std::string{};
+  if (!operator_rule_json ||
+      !operator_rule_body.contains("\"code\":\"operator_rule\"") ||
+      !operator_rule_body.contains("\"rule_id\":\"workbench-tools\""))
+    return 49;
+
   search::InMemorySearchIndex index;
   auto rebuild = index.begin_rebuild(7);
   if (!rebuild)
@@ -198,6 +217,8 @@ int main() {
       !body(*openapi).contains("\"/v1/search\"") ||
       !body(*openapi).contains("\"classification_state\"") ||
       !body(*openapi).contains("learned_content_model") ||
+      !body(*openapi).contains("operator_rule") ||
+      !body(*openapi).contains("rule_id") ||
       !body(*openapi).contains("\"minimum_label_confidence\"") ||
       !body(*openapi).contains("payload_layout_v1") ||
       !body(*openapi).contains("ServiceErrorStatus") ||

@@ -6,7 +6,7 @@ import sakuin.core.ids;
 
 export namespace sakuin::classification {
 
-inline constexpr std::uint32_t AlgorithmVersion{4};
+inline constexpr std::uint32_t AlgorithmVersion{5};
 
 enum class ContentKind {
   Unknown,
@@ -32,6 +32,21 @@ enum class Confidence { Unknown, Low, Medium, High };
 enum class ContentLabel { Adult, Anime };
 
 enum class VideoResolution { Sd, Hd720, Hd1080, Uhd2160 };
+
+enum class OperatorRuleMatch { Any, All };
+
+struct OperatorRule {
+  // IDs are exposed with matching evidence. Configuration validates IDs and
+  // tokens as bounded lowercase ASCII identifiers before they reach the
+  // classifier.
+  std::string id;
+  ContentKind kind{ContentKind::Unknown};
+  OperatorRuleMatch match{OperatorRuleMatch::All};
+  std::vector<std::string> tokens;
+  int weight{100};
+
+  friend bool operator==(const OperatorRule &, const OperatorRule &) = default;
+};
 
 // Semantic categories are independent of any wire protocol. Adapters such as
 // Torznab map these to their own identifiers without leaking those identifiers
@@ -87,6 +102,7 @@ enum class EvidenceCode {
   ApplicationToken,
   FuzzySemanticToken,
   LearnedContentModel,
+  OperatorRule,
   AdultToken,
   AnimeToken,
   ResolutionToken,
@@ -96,6 +112,7 @@ struct Evidence {
   EvidenceCode code;
   EvidenceSubject subject;
   int weight;
+  std::optional<std::string> rule_id;
 
   friend bool operator==(const Evidence &, const Evidence &) = default;
 };
@@ -115,6 +132,7 @@ struct ClassifierOptions {
   std::size_t maximum_files_to_inspect{100'000};
   std::size_t maximum_path_bytes{4'096};
   std::size_t maximum_tokens{16'384};
+  std::vector<OperatorRule> operator_rules;
 };
 
 struct Classification {
