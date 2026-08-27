@@ -133,6 +133,13 @@ replacement segments and publishes a new manifest, while existing snapshots
 continue reading the old objects. Garbage collection removes an object only
 after it is unreachable from every live pinned generation.
 
+Concurrent canonical writers use optimistic publication. A generation change
+is normal contention rather than corruption: torrent materialization rebases
+its already-aggregated observation ranges, and retention or compaction rebuilds
+from a fresh manifest. Each path retries a bounded number of times before
+reporting an operational error, so sustained contention remains visible while
+short-lived races do not leave the service in a failed state.
+
 The optional S3 backend moves immutable content-addressed blobs behind the
 `BlobStore` boundary. It deliberately leaves manifests, the single-writer
 lock, derived indexes, and operational state under `storage.local_root`, so the
