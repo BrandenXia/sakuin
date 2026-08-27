@@ -93,6 +93,16 @@ struct AsioDatagramTransport::Impl {
     }
   }
 
+  void report_delivery_failure(DatagramDeliveryFailure failure) noexcept {
+    if (!receiver)
+      return;
+    try {
+      receiver->on_datagram_delivery_failure(std::move(failure));
+    } catch (...) {
+      // User callbacks may not unwind through the runtime thread.
+    }
+  }
+
   void receive() {
     if (!active.load(std::memory_order_acquire))
       return;
@@ -187,14 +197,17 @@ core::Result<void> AsioDatagramTransport::send(DatagramEndpoint destination,
   if (!endpoint)
     return std::unexpected(endpoint.error());
   auto owned = std::make_shared<core::ByteBuffer>(std::move(payload));
-  asio::post(impl_->context, [impl = impl_.get(), endpoint = *endpoint, owned] {
+  asio::post(impl_->context, [impl = impl_.get(), destination,
+                              endpoint = *endpoint, owned] {
     if (!impl->active.load(std::memory_order_acquire))
       return;
     impl->socket.async_send_to(
         asio::buffer(*owned), endpoint,
-        [impl, owned](const asio::error_code &error, std::size_t) {
+        [impl, destination, owned](const asio::error_code &error, std::size_t) {
           if (error && error != asio::error::operation_aborted)
-            impl->report(network_error("UDP send failed", error));
+            impl->report_delivery_failure(
+                {.destination = destination,
+                 .error = network_error("UDP send failed", error)});
         });
   });
   return {};

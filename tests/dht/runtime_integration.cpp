@@ -330,6 +330,22 @@ int main() {
       (*saturated_discovery)->pending() != 1)
     return 47;
 
+  const auto delivery_failure_at = core::Timestamp{std::chrono::seconds{6}};
+  (*pump)->on_actions(
+      dht::DhtActions{.delivery_failure = dht::DatagramDeliveryFailureReport{
+                          .destination = routing_contact(1).endpoint,
+                          .error = {core::ErrorCode::IoError,
+                                    "UDP send failed: Network is unreachable"},
+                          .failed_at = delivery_failure_at}});
+  auto delivery_failure = (*pump)->poll(delivery_failure_at);
+  if (delivery_failure.datagrams_failed != 1 ||
+      !delivery_failure.last_datagram_failure ||
+      delivery_failure.last_datagram_failure->code !=
+          core::ErrorCode::IoError ||
+      delivery_failure.last_datagram_failure_at != delivery_failure_at ||
+      !delivery_failure.errors.empty())
+    return 48;
+
   std::size_t owner_wakeups{};
   auto bounded_pump = integration::DhtRuntimeActionPump::create(
       observations, {},

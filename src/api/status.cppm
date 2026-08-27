@@ -63,6 +63,8 @@ struct DhtFamilyStatus {
   std::uint64_t datagrams_attempted{};
   std::uint64_t datagrams_accepted{};
   std::uint64_t datagrams_failed{};
+  std::optional<std::int64_t> last_datagram_failure_ms;
+  std::optional<std::string> last_datagram_failure;
   std::size_t routing_nodes{};
   std::size_t outstanding_queries{};
   std::size_t discovery_in_flight{};
@@ -216,6 +218,14 @@ nlohmann::json family_json(const DhtFamilyStatus &family) {
   result["last_inbound_query_ms"] =
       family.last_inbound_query_ms
           ? nlohmann::json(*family.last_inbound_query_ms)
+          : nlohmann::json(nullptr);
+  result["last_datagram_failure_ms"] =
+      family.last_datagram_failure_ms
+          ? nlohmann::json(*family.last_datagram_failure_ms)
+          : nlohmann::json(nullptr);
+  result["last_datagram_failure"] =
+      family.last_datagram_failure
+          ? nlohmann::json(*family.last_datagram_failure)
           : nlohmann::json(nullptr);
   result["last_error_ms"] = family.last_error_ms
                                 ? nlohmann::json(*family.last_error_ms)
