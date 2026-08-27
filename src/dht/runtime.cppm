@@ -52,6 +52,8 @@ public:
 
 private:
   void on_datagram(runtime::Datagram datagram) override;
+  void on_datagram_delivery_failure(
+      runtime::DatagramDeliveryFailure failure) override;
   void on_transport_error(core::Error error) override;
   void report(core::Error error) noexcept;
   void publish(DhtActions actions) noexcept;
@@ -114,7 +116,8 @@ void DhtRuntimeDriver::report(core::Error error) noexcept {
 void DhtRuntimeDriver::publish(DhtActions actions) noexcept {
   if (!actions.observation && actions.probes_required.empty() &&
       !actions.metadata_candidate && !actions.query_completion &&
-      !actions.observed_address && !actions.inbound_message)
+      !actions.observed_address && !actions.inbound_message &&
+      !actions.delivery_failure)
     return;
   try {
     events_->on_actions(std::move(actions));
@@ -205,6 +208,19 @@ void DhtRuntimeDriver::on_datagram(runtime::Datagram datagram) {
 
 void DhtRuntimeDriver::on_transport_error(core::Error error) {
   report(std::move(error));
+}
+
+void DhtRuntimeDriver::on_datagram_delivery_failure(
+    runtime::DatagramDeliveryFailure failure) {
+  auto current = now();
+  if (!current) {
+    report(current.error());
+    return;
+  }
+  publish(DhtActions{.delivery_failure = DatagramDeliveryFailureReport{
+                         .destination = failure.destination,
+                         .error = std::move(failure.error),
+                         .failed_at = *current}});
 }
 
 } // namespace sakuin::dht

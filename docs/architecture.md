@@ -282,8 +282,14 @@ scheduling with time-series deltas.
 Reaching the bounded pending-hash limit is normal backpressure: newly stored
 observations remain canonical and the metadata backfill offers them later.
 Malformed packets from public peers increment inbound protocol-error telemetry
-without becoming service incidents or error-level logs; transport, storage,
-and internal failures still follow the service-error path.
+without becoming service incidents or error-level logs; socket/runtime,
+storage, and internal failures still follow the service-error path.
+Destination-specific asynchronous UDP failures are likewise delivery telemetry:
+they increment `datagrams_failed` and retain the latest delivery error in the
+status API. Socket and receive failures remain service errors. This distinction
+keeps an unreachable public IPv6 contact from impersonating a family-wide
+runtime outage while still exposing persistent local routing problems through
+time-series failure ratios.
 Metadata backfill additionally reports records scanned, targets offered,
 records already carrying metadata, source generation, and whether a full scan
 is in progress. These counters distinguish a discovery bottleneck from an
