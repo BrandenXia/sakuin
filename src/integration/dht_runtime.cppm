@@ -213,10 +213,16 @@ DhtRuntimeActionPump::create(dht::ObservationSink &observations,
 void DhtRuntimeActionPump::on_actions(dht::DhtActions actions) {
   {
     std::lock_guard lock{incoming_mutex_};
-    if (pending_count_.load(std::memory_order_relaxed) >=
-        options_.maximum_pending_actions) {
+    const bool completion = actions.query_completion.has_value();
+    if (!completion && pending_count_.load(std::memory_order_relaxed) >=
+                           options_.maximum_pending_actions) {
       ++dropped_actions_;
     } else {
+      // DhtNode transfers query ownership by removing a pending query before
+      // publishing its completion. Losing that completion would leave the
+      // owner-thread planner permanently in flight, so completions may exceed
+      // the ordinary inbound-action bound. Their population is independently
+      // bounded by the planners' outstanding-query limits.
       incoming_actions_.push_back(std::move(actions));
       pending_count_.fetch_add(1, std::memory_order_release);
     }

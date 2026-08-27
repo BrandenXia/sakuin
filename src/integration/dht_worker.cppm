@@ -246,6 +246,9 @@ void DhtRuntimeWorker::run(std::stop_token stop) noexcept {
     try {
       auto poll = pump_->poll(*current);
       auto dispatch = dispatch_dht_runtime(poll, *driver_, *pump_, *current);
+      std::vector<core::Error> cycle_errors = poll.errors;
+      cycle_errors.insert(cycle_errors.end(), dispatch.errors.begin(),
+                          dispatch.errors.end());
       auto deadline = poll.next_wakeup;
       if (scheduling_.coordinator) {
         const auto heartbeat_at =
@@ -265,6 +268,8 @@ void DhtRuntimeWorker::run(std::stop_token stop) noexcept {
         report(core::Error{core::ErrorCode::Internal,
                            "DHT owner observer threw an unknown exception"});
       }
+      for (auto &error : cycle_errors)
+        report(std::move(error));
       if (stop.stop_requested())
         break;
       wakeup_->wait(observed, deadline, stop);
