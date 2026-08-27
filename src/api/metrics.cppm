@@ -372,7 +372,9 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
     metadata(output, "sakuin_dht_datagrams_accepted_total",
              "DHT datagrams accepted by the transport.", "counter");
     metadata(output, "sakuin_dht_datagrams_failed_total",
-             "DHT datagrams rejected or failed by the transport.", "counter");
+             "DHT datagrams rejected immediately or failed during asynchronous "
+             "transport delivery.",
+             "counter");
     metadata(output, "sakuin_dht_routing_nodes",
              "Nodes currently present in the routing table.", "gauge");
     metadata(output, "sakuin_dht_outstanding_queries",

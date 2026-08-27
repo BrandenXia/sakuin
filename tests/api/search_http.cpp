@@ -161,6 +161,10 @@ int main() {
   status.snapshot.ipv4.inbound_queries = 12;
   status.snapshot.ipv4.inbound_get_peers_queries = 7;
   status.snapshot.ipv4.last_inbound_query_ms = 12'000;
+  status.snapshot.ipv4.datagrams_failed = 2;
+  status.snapshot.ipv4.last_datagram_failure_ms = 12'500;
+  status.snapshot.ipv4.last_datagram_failure =
+      "UDP send failed: Network is unreachable";
   status.snapshot.ipv4.bootstrap_complete = true;
   status.snapshot.ipv4.bootstrap_exhausted = false;
   status.snapshot.search_source_generation = 7;
@@ -525,6 +529,11 @@ int main() {
       !body(*operator_status).contains("\"routing_nodes\":13") ||
       !body(*operator_status).contains("\"inbound_queries\":12") ||
       !body(*operator_status).contains("\"inbound_get_peers_queries\":7") ||
+      !body(*operator_status).contains("\"datagrams_failed\":2") ||
+      !body(*operator_status).contains("\"last_datagram_failure_ms\":12500") ||
+      !body(*operator_status)
+           .contains("\"last_datagram_failure\":\"UDP send failed: Network "
+                     "is unreachable\"") ||
       !body(*operator_status).contains("\"discovery_in_flight\":1") ||
       !body(*operator_status).contains("\"peer_discovery_pending\":9") ||
       !body(*operator_status).contains("\"peer_discovery_active\":4") ||
@@ -580,6 +589,9 @@ int main() {
            .contains("# TYPE sakuin_dht_cycles_total counter\n") ||
       !body(*operator_metrics)
            .contains("sakuin_dht_cycles_total{family=\"ipv4\"} 42\n") ||
+      !body(*operator_metrics)
+           .contains("sakuin_dht_datagrams_failed_total{family=\"ipv4\"} "
+                     "2\n") ||
       !body(*operator_metrics)
            .contains(
                "sakuin_dht_observations_stored_total{family=\"ipv4\"} 99\n") ||

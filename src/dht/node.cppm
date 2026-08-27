@@ -65,6 +65,12 @@ struct InboundMessageReport {
   core::Timestamp received_at;
 };
 
+struct DatagramDeliveryFailureReport {
+  runtime::DatagramEndpoint destination;
+  core::Error error;
+  core::Timestamp failed_at;
+};
+
 struct DhtActions {
   std::vector<DatagramSend> sends;
   std::optional<model::ObservationRecord> observation;
@@ -73,6 +79,7 @@ struct DhtActions {
   std::optional<QueryCompletion> query_completion;
   std::optional<ObservedAddressReport> observed_address;
   std::optional<InboundMessageReport> inbound_message;
+  std::optional<DatagramDeliveryFailureReport> delivery_failure;
 };
 
 class DhtNode {

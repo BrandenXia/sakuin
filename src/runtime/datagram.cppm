@@ -37,6 +37,11 @@ struct Datagram {
   core::ByteBuffer payload;
 };
 
+struct DatagramDeliveryFailure {
+  DatagramEndpoint destination;
+  core::Error error;
+};
+
 struct DatagramTransportOptions {
   DatagramEndpoint bind_to{};
   std::size_t maximum_datagram_size{65'507};
@@ -49,6 +54,12 @@ public:
   // Invoked on a runtime-owned execution thread. The receiver must outlive the
   // transport until stop() returns.
   virtual void on_datagram(Datagram datagram) = 0;
+  // A destination-specific asynchronous send failure is distinct from a
+  // socket/runtime failure. Existing receivers retain the conservative error
+  // behavior unless they opt into delivery telemetry explicitly.
+  virtual void on_datagram_delivery_failure(DatagramDeliveryFailure failure) {
+    on_transport_error(std::move(failure.error));
+  }
   virtual void on_transport_error(core::Error error) = 0;
 };
 

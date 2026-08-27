@@ -65,6 +65,9 @@ struct DhtRuntimePoll {
   std::size_t inbound_unknown_queries{};
   std::size_t inbound_responses{};
   std::size_t inbound_protocol_errors{};
+  std::size_t datagrams_failed{};
+  std::optional<core::Error> last_datagram_failure;
+  std::optional<core::Timestamp> last_datagram_failure_at;
   std::optional<core::Timestamp> last_inbound_query;
   // Point-in-time gauges captured on the DHT owner thread.
   std::size_t routing_nodes{};
@@ -324,6 +327,17 @@ DhtRuntimePoll DhtRuntimeActionPump::poll(core::Timestamp now) {
         break;
       }
       actions.inbound_message.reset();
+    }
+
+    if (actions.delivery_failure) {
+      ++result.datagrams_failed;
+      if (!result.last_datagram_failure_at ||
+          actions.delivery_failure->failed_at >=
+              *result.last_datagram_failure_at) {
+        result.last_datagram_failure = actions.delivery_failure->error;
+        result.last_datagram_failure_at = actions.delivery_failure->failed_at;
+      }
+      actions.delivery_failure.reset();
     }
 
     if (actions.observation) {

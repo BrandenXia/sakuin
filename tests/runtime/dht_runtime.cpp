@@ -122,6 +122,33 @@ public:
   std::atomic<sakuin::runtime::TrafficClassId> outbound_class{};
 };
 
+class DeliveryFailingTransport final
+    : public sakuin::runtime::DatagramTransport {
+public:
+  sakuin::core::Result<void>
+  start(sakuin::runtime::DatagramReceiver &receiver) override {
+    receiver_ = &receiver;
+    return {};
+  }
+
+  sakuin::core::Result<void> send(sakuin::runtime::DatagramEndpoint destination,
+                                  sakuin::core::ByteBuffer) override {
+    receiver_->on_datagram_delivery_failure(
+        {.destination = destination,
+         .error = {sakuin::core::ErrorCode::IoError,
+                   "UDP send failed: Network is unreachable"}});
+    return {};
+  }
+
+  sakuin::runtime::DatagramEndpoint local_endpoint() const noexcept override {
+    return {};
+  }
+  void stop() noexcept override {}
+
+private:
+  sakuin::runtime::DatagramReceiver *receiver_{};
+};
+
 } // namespace
 
 int main() {
@@ -193,5 +220,26 @@ int main() {
   driver.stop();
   if (driver.running())
     return 7;
+
+  EventCollector delivery_events;
+  DeliveryFailingTransport delivery_transport;
+  dht::DhtRuntimeDriver delivery_driver{node_engine, delivery_transport,
+                                        delivery_events,
+                                        [fixed_time] { return fixed_time; }};
+  const runtime::DatagramEndpoint unreachable{
+      .address = runtime::IpAddress::loopback_v4(), .port = 6'881};
+  if (!delivery_driver.start() ||
+      !delivery_driver.send(
+          {.destination = unreachable, .payload = bytes("delivery")}) ||
+      !delivery_events.wait())
+    return 10;
+  auto delivery_actions = delivery_events.actions();
+  if (!delivery_actions || !delivery_actions->delivery_failure ||
+      delivery_actions->delivery_failure->destination != unreachable ||
+      delivery_actions->delivery_failure->error.code !=
+          core::ErrorCode::IoError ||
+      delivery_actions->delivery_failure->failed_at != fixed_time)
+    return 11;
+  delivery_driver.stop();
   return 0;
 }

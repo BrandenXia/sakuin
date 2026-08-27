@@ -192,7 +192,16 @@ public:
     status.queries_expired += cycle.poll.queries_expired;
     status.datagrams_attempted += cycle.dispatch.attempted;
     status.datagrams_accepted += cycle.dispatch.accepted;
-    status.datagrams_failed += cycle.dispatch.failed;
+    status.datagrams_failed +=
+        cycle.dispatch.failed + cycle.poll.datagrams_failed;
+    if (cycle.poll.last_datagram_failure &&
+        cycle.poll.last_datagram_failure_at) {
+      status.last_datagram_failure = cycle.poll.last_datagram_failure->message;
+      status.last_datagram_failure_ms =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              cycle.poll.last_datagram_failure_at->time_since_epoch())
+              .count();
+    }
     status.routing_nodes = cycle.poll.routing_nodes;
     status.outstanding_queries = cycle.poll.outstanding_queries;
     status.discovery_in_flight =
