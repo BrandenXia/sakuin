@@ -88,6 +88,26 @@ private:
 } // namespace sakuin::service
 
 namespace sakuin::service {
+namespace {
+
+// Canonical writers use optimistic manifest publication. A concurrent append
+// is ordinary contention, so maintenance rebases a bounded number of times
+// before exposing the conflict as an operational failure.
+template <typename Operation> auto retry_conflicts(Operation &&operation) {
+  constexpr std::size_t maximum_attempts = 8;
+  using Result = std::invoke_result_t<Operation &>;
+  Result result = std::invoke(operation);
+  for (std::size_t attempt = 1;
+       !result && result.error().code == core::ErrorCode::Conflict &&
+       attempt < maximum_attempts;
+       ++attempt) {
+    std::this_thread::yield();
+    result = std::invoke(operation);
+  }
+  return result;
+}
+
+} // namespace
 
 StorageMaintenanceCoordinator::StorageMaintenanceCoordinator(
     LocalCanonicalStorage &storage,
@@ -168,8 +188,9 @@ void StorageMaintenanceCoordinator::run_once(bool perform_verification) {
                                 LocalDataset::WorkResults};
   for (const auto dataset : datasets) {
     if (dataset == LocalDataset::Observations) {
-      auto retained =
-          storage_.retain_observations(std::chrono::system_clock::now());
+      const auto retention_time = std::chrono::system_clock::now();
+      auto retained = retry_conflicts(
+          [&] { return storage_.retain_observations(retention_time); });
       if (!retained)
         notify_error(dataset, MaintenanceOperation::Retention,
                      retained.error());
@@ -196,7 +217,7 @@ void StorageMaintenanceCoordinator::run_once(bool perform_verification) {
       }
     }
 
-    auto compacted = storage_.compact(dataset);
+    auto compacted = retry_conflicts([&] { return storage_.compact(dataset); });
     if (!compacted)
       notify_error(dataset, MaintenanceOperation::Compaction,
                    compacted.error());

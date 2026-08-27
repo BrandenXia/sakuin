@@ -185,7 +185,22 @@ core::Result<IncrementalMaterializationResult> ObservationMaterializer::advance(
                        .last_seen = range.last});
   std::ranges::sort(updates, {},
                     [](const auto &entry) { return entry.info_hash.bytes; });
-  auto committed = destination.merge_observations(updates);
+  // Metadata enrichment and maintenance publish to the same optimistic
+  // catalog. Rebase the already-aggregated observation ranges when one of
+  // those writers wins the generation race; rescanning the observation
+  // history is unnecessary and an older checkpoint remains safe to replay.
+  constexpr std::size_t maximum_conflict_attempts = 8;
+  core::Result<storage::TorrentObservationMergeResult> committed =
+      std::unexpected(core::Error{core::ErrorCode::Internal,
+                                  "Materialization retry loop did not run"});
+  for (std::size_t attempt = 0; attempt < maximum_conflict_attempts;
+       ++attempt) {
+    committed = destination.merge_observations(updates);
+    if (committed || committed.error().code != core::ErrorCode::Conflict ||
+        attempt + 1 == maximum_conflict_attempts)
+      break;
+    std::this_thread::yield();
+  }
   if (!committed)
     return std::unexpected(committed.error());
   result.torrents_updated = committed->records_written;
