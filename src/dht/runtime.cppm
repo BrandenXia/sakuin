@@ -184,7 +184,15 @@ void DhtRuntimeDriver::on_datagram(runtime::Datagram datagram) {
   }
   auto actions = node_->handle(std::move(datagram), *current);
   if (!actions) {
-    report(actions.error());
+    // Invalid peer input is expected on the public DHT. Keep it observable as
+    // protocol telemetry without turning an untrusted packet into a service
+    // incident or an error-level log entry.
+    if (actions.error().code == core::ErrorCode::InvalidArgument)
+      publish(DhtActions{.inbound_message = InboundMessageReport{
+                             .type = InboundMessageType::ProtocolError,
+                             .received_at = *current}});
+    else
+      report(actions.error());
     return;
   }
   for (auto &outbound : actions->sends) {
