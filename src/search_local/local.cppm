@@ -309,6 +309,11 @@ public:
       return std::unexpected(
           core::Error{core::ErrorCode::InvalidArgument,
                       "Local search rebuild session is no longer active"});
+    // Keep the durable rebuild buffer bounded to the records which can enter
+    // the search projection. The in-memory backend applies the same filter,
+    // but waiting until replace() would retain a second placeholder copy.
+    if (!record.name || record.files.empty())
+      return {};
     records_.push_back(record);
     return {};
   }

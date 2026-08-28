@@ -235,6 +235,11 @@ public:
       return std::unexpected(
           core::Error{core::ErrorCode::InvalidArgument,
                       "Search rebuild session is no longer active"});
+    // Observation-only materializations cannot be searched or classified.
+    // Exclude them before copying so a rebuild's working set is proportional
+    // to metadata-complete records rather than the full DHT observation set.
+    if (!record.name || record.files.empty())
+      return {};
     records_.push_back(record);
     return {};
   }

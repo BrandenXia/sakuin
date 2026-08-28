@@ -119,7 +119,9 @@ int main() {
   if (!exchange)
     return 1;
   auto prepared = prepare(**exchange, hash, encoded.size());
-  if (!prepared || prepared->sends.size() != 2)
+  if (!prepared || prepared->sends.size() != 2 ||
+      (*exchange)->metadata_size() != encoded.size() ||
+      (*exchange)->buffered_metadata_bytes() != 0)
     return 2;
   for (const auto &request : prepared->sends)
     if (request.size() < 7 || request[4] != std::byte{20} ||
@@ -129,13 +131,22 @@ int main() {
   constexpr std::size_t piece_size = 16U * 1024U;
   auto last = (*exchange)->consume(
       data_frame(1, encoded.size(), std::span{encoded}.subspan(piece_size)));
-  if (!last || last->metadata || (*exchange)->complete())
+  if (!last || last->metadata || (*exchange)->complete() ||
+      (*exchange)->buffered_metadata_bytes() != encoded.size() - piece_size)
     return 4;
   auto first = (*exchange)->consume(
       data_frame(0, encoded.size(), std::span{encoded}.first(piece_size)));
   if (!first || !first->metadata || *first->metadata != encoded ||
-      !(*exchange)->complete())
+      !(*exchange)->complete() || (*exchange)->buffered_metadata_bytes() != 0)
     return 5;
+
+  // A peer may advertise the configured maximum and then stall. Preparing
+  // that exchange should retain only piece bookkeeping, not a 4 MiB payload.
+  auto stalled = dht::MetadataExchange::create(hash, peer_id);
+  if (!stalled || !prepare(**stalled, hash, 4U * 1024U * 1024U) ||
+      (*stalled)->metadata_size() != 4U * 1024U * 1024U ||
+      (*stalled)->buffered_metadata_bytes() != 0)
+    return 11;
 
   auto corrupt = dht::MetadataExchange::create(
       hash, peer_id, {.maximum_outstanding_requests = 2});

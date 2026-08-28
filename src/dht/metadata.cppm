@@ -39,6 +39,11 @@ public:
   std::optional<std::size_t> metadata_size() const noexcept {
     return metadata_size_;
   }
+  // Bytes retained from pieces received so far. Merely advertising a large
+  // metadata_size must not reserve that amount for a peer which then stalls.
+  std::size_t buffered_metadata_bytes() const noexcept {
+    return buffered_metadata_bytes_;
+  }
 
 private:
   MetadataExchange(core::InfoHash info_hash, PeerId peer_id,
@@ -59,13 +64,14 @@ private:
   PeerId peer_id_;
   MetadataExchangeOptions options_;
   core::ByteBuffer input_;
-  core::ByteBuffer metadata_;
+  std::vector<core::ByteBuffer> metadata_pieces_;
   std::vector<bool> requested_;
   std::vector<bool> received_;
   std::optional<std::size_t> metadata_size_;
   std::optional<std::uint8_t> remote_metadata_extension_id_;
   std::size_t outstanding_{};
   std::size_t received_count_{};
+  std::size_t buffered_metadata_bytes_{};
   bool started_{};
   bool handshake_received_{};
   bool complete_{};
@@ -254,9 +260,9 @@ MetadataExchange::handle_extension_handshake(core::ByteView payload,
           protocol_error("Peer changed metadata_size during exchange"));
     if (!metadata_size_) {
       metadata_size_ = new_size;
-      metadata_.resize(new_size);
       const auto pieces =
           (new_size + metadata_piece_bytes - 1) / metadata_piece_bytes;
+      metadata_pieces_.resize(pieces);
       requested_.assign(pieces, false);
       received_.assign(pieces, false);
     }
@@ -292,9 +298,20 @@ MetadataExchange::queue_requests(MetadataExchangeOutput &output) {
 }
 
 core::Result<void> MetadataExchange::finish(MetadataExchangeOutput &output) {
+  core::ByteBuffer metadata;
+  metadata.reserve(*metadata_size_);
+  for (const auto &piece : metadata_pieces_)
+    metadata.insert(metadata.end(), piece.begin(), piece.end());
+  if (metadata.size() != *metadata_size_)
+    return std::unexpected(core::Error{
+        core::ErrorCode::Internal,
+        "Buffered metadata size does not match peer metadata_size"});
+  std::vector<core::ByteBuffer>{}.swap(metadata_pieces_);
+  buffered_metadata_bytes_ = 0;
+
   core::Hash160 digest;
   try {
-    digest = core::sha1(metadata_);
+    digest = core::sha1(metadata);
   } catch (const std::exception &exception) {
     return std::unexpected(
         core::Error{core::ErrorCode::Internal,
@@ -306,7 +323,7 @@ core::Result<void> MetadataExchange::finish(MetadataExchangeOutput &output) {
         core::Error{core::ErrorCode::ChecksumMismatch,
                     "Torrent metadata does not match the requested infohash"});
   complete_ = true;
-  output.metadata = std::move(metadata_);
+  output.metadata = std::move(metadata);
   return {};
 }
 
@@ -365,13 +382,13 @@ MetadataExchange::handle_metadata(core::ByteView payload,
     return std::unexpected(
         protocol_error("Metadata piece has an invalid byte length"));
   if (received_[piece]) {
-    if (!std::ranges::equal(data,
-                            std::span{metadata_}.subspan(offset, expected)))
+    if (!std::ranges::equal(data, metadata_pieces_[piece]))
       return std::unexpected(
           protocol_error("Peer sent conflicting duplicate metadata"));
     return {};
   }
-  std::ranges::copy(data, metadata_.begin() + offset);
+  metadata_pieces_[piece].assign(data.begin(), data.end());
+  buffered_metadata_bytes_ += data.size();
   received_[piece] = true;
   ++received_count_;
   --outstanding_;
