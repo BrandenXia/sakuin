@@ -104,9 +104,17 @@ int main() {
       return 12;
     auto rebuild = (*index)->begin_rebuild(9);
     const auto replacement = record(4, "Fresh Base", 400);
-    if (!rebuild || !(*rebuild)->append(replacement) || !(*rebuild)->commit() ||
+    auto placeholder = record(5, std::string(1024U * 1024U, 'x'), 0);
+    placeholder.name.reset();
+    placeholder.files.clear();
+    if (!rebuild || !(*rebuild)->append(placeholder) ||
+        !(*rebuild)->append(replacement) || !(*rebuild)->commit() ||
         std::filesystem::exists(updates_path))
       return 13;
+    const auto all = (*index)->search({.limit = 10});
+    if (!all || all->total_matches != 1 ||
+        all->hits.front().name != "Fresh Base")
+      return 14;
   }
 
   storage::TorrentChangeCursor cursor{

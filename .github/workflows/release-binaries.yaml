@@ -43,7 +43,8 @@ jobs:
 
       - name: Validate deployment files
         run: |
-          shellcheck scripts/deploy.sh scripts/package-linux.sh
+          shellcheck scripts/deploy.sh scripts/package-linux.sh scripts/benchmark-deployment.sh
+          ./scripts/benchmark-deployment.sh --help >/dev/null
           python3 scripts/check-docker-config.py
           awk -v window_seconds=10 -f scripts/metrics-delta.awk \
             tests/fixtures/metrics/before.prom \
