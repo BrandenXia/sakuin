@@ -300,6 +300,7 @@ classification_json(const search::ClassificationIndexStats &classification) {
   return {{"enabled", classification.enabled},
           {"algorithm_version", classification.algorithm_version},
           {"total_records", classification.total_records},
+          {"estimated_memory_bytes", classification.estimated_memory_bytes},
           {"states",
            {{"awaiting_metadata", classification.state_count(AwaitingMetadata)},
             {"classified", classification.state_count(Classified)},

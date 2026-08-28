@@ -347,5 +347,56 @@ int main() {
       complete->hits.front().file_count != 1 || !placeholder_by_hash ||
       placeholder_by_hash->total_matches != 0)
     return 23;
+
+  search::InMemorySearchIndex compact_index({.enabled = false});
+  auto compact_rebuild = compact_index.begin_rebuild(1);
+  if (!compact_rebuild)
+    return 34;
+  constexpr std::size_t compact_records = 10'000;
+  for (std::size_t ordinal = 0; ordinal < compact_records; ++ordinal) {
+    std::vector<std::string> paths;
+    for (std::size_t file = 0; file < 8; ++file)
+      paths.push_back("collection/season-01/episode-" +
+                      std::to_string(ordinal) + "-file-" +
+                      std::to_string(file) + ".mkv");
+    auto value = torrent(static_cast<std::uint8_t>(ordinal),
+                         "Compact Search Record " + std::to_string(ordinal),
+                         8'000'000, std::move(paths), ordinal);
+    for (std::size_t byte = 0; byte < sizeof(ordinal); ++byte)
+      value.info_hash.bytes[byte] =
+          static_cast<std::uint8_t>(ordinal >> (byte * 8U));
+    if (!(*compact_rebuild)->append(value))
+      return 35;
+  }
+  if (!(*compact_rebuild)->commit())
+    return 36;
+  const auto compact_stats = compact_index.classification_stats();
+  auto compact_match =
+      compact_index.search({.text = "episode-9999-file-7", .limit = 10});
+  if (compact_stats.total_records != compact_records ||
+      compact_stats.estimated_memory_bytes == 0 ||
+      compact_stats.estimated_memory_bytes > 16U * 1024U * 1024U ||
+      !compact_match || compact_match->total_matches != 1)
+    return 37;
+
+  search::InMemorySearchIndex placeholder_index({.enabled = false});
+  auto placeholder_rebuild = placeholder_index.begin_rebuild(1);
+  if (!placeholder_rebuild)
+    return 38;
+  for (std::size_t ordinal = 0; ordinal < 50'000; ++ordinal) {
+    auto value = torrent(static_cast<std::uint8_t>(ordinal), "placeholder", 0,
+                         {"placeholder"}, ordinal);
+    value.name.reset();
+    value.files.clear();
+    for (std::size_t byte = 0; byte < sizeof(ordinal); ++byte)
+      value.info_hash.bytes[byte] =
+          static_cast<std::uint8_t>(ordinal >> (byte * 8U));
+    if (!(*placeholder_rebuild)->append(value))
+      return 39;
+  }
+  if (!(*placeholder_rebuild)->commit() ||
+      placeholder_index.classification_stats().total_records != 0 ||
+      placeholder_index.classification_stats().estimated_memory_bytes != 0)
+    return 40;
   return 0;
 }

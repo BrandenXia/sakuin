@@ -94,6 +94,20 @@ int main() {
         stale->total_matches != 0)
       return 7;
   }
+  const auto updates_path =
+      std::filesystem::path{index_path.string() + ".updates"};
+  if (!std::filesystem::exists(updates_path))
+    return 11;
+  {
+    auto index = search::LocalSearchIndex::open(index_path);
+    if (!index)
+      return 12;
+    auto rebuild = (*index)->begin_rebuild(9);
+    const auto replacement = record(4, "Fresh Base", 400);
+    if (!rebuild || !(*rebuild)->append(replacement) || !(*rebuild)->commit() ||
+        std::filesystem::exists(updates_path))
+      return 13;
+  }
 
   storage::TorrentChangeCursor cursor{
       .initialized = true, .source_generation = 8, .segment_count = 3};

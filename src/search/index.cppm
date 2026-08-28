@@ -83,6 +83,9 @@ struct ClassificationIndexStats {
   std::uint64_t learned_classified_records{};
   std::uint64_t learned_eligible_kinds{};
   std::uint64_t learned_vocabulary_size{};
+  // Approximate live bytes retained by the compact search projection. This
+  // intentionally excludes allocator metadata and unrelated process memory.
+  std::uint64_t estimated_memory_bytes{};
   std::array<std::uint64_t, MediaCategoryCount> categories{};
 
   std::uint64_t
