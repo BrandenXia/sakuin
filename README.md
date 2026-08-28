@@ -113,6 +113,25 @@ single-file deployment, use the corresponding Compose commands directly:
 Set `SAKUIN_IMAGE=ghcr.io/brandenxia/sakuin:vX.Y.Z` in an adjacent `.env` file
 to pin a release.
 
+After deployment, the read-only benchmark helper measures health, native
+search, Torznab search, status, and metrics latency and throughput. It also
+samples container CPU and memory when it can find the Compose service, and
+reports the search projection's estimated memory separately. Run it without a
+token argument to enter the operator token at the hidden prompt:
+
+```bash
+./scripts/benchmark-deployment.sh
+./scripts/benchmark-deployment.sh --requests 50 --concurrency 8
+./scripts/benchmark-deployment.sh --container sakuin-sakuin-1 --memory-budget 200
+```
+
+For unattended runs, use `--token-file PATH` or `SAKUIN_BENCH_TOKEN`. Results
+are written to standard output as tab-separated sections, so redirecting them
+to a dated file makes deployments easy to compare. Runs above the default API
+rate-limit budget emit a warning instead of changing production configuration.
+The memory budget is an informational comparison and does not make the run
+fail, because retained metadata necessarily scales with the searchable dataset.
+
 The Compose file also supports an optional S3-compatible blob backend. In the
 same `.env` file, set `SAKUIN_STORAGE_BACKEND=s3`,
 `SAKUIN_STORAGE_S3_BUCKET`, and the standard `AWS_ACCESS_KEY_ID` and

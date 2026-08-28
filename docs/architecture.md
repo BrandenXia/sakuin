@@ -548,6 +548,16 @@ xmake build sakuin-storage-benchmark
 xmake run sakuin-storage-benchmark 100000 65536
 ```
 
+`scripts/benchmark-deployment.sh` provides a read-only post-deployment
+benchmark for the public health endpoint, native and Torznab searches, operator
+status, and Prometheus serialization. It reports request throughput and latency
+percentiles, the search projection's estimated retained bytes, and Docker
+memory/CPU samples when the target container is locally visible. Its default
+request volume stays below the deployment's default authenticated API budget;
+larger runs warn when rate limiting may dominate the result. The default
+200 MiB container-memory comparison is informational rather than a fixed
+service limit, since retained metadata scales with the searchable dataset.
+
 ## Known boundaries
 
 - S3-compatible storage currently offloads immutable segment blobs only;
