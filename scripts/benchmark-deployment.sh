@@ -12,6 +12,7 @@ concurrency=4
 warmup=2
 timeout_seconds=30
 memory_budget_mib="${SAKUIN_BENCH_MEMORY_BUDGET_MIB:-200}"
+soak_seconds=0
 selected_target=all
 search_path='/v1/search?q=linux&limit=20'
 container="${SAKUIN_BENCH_CONTAINER:-}"
@@ -19,6 +20,7 @@ docker_enabled=true
 monitor_pid=""
 temporary_directory=""
 benchmark_failed=false
+soak_start_us=""
 
 usage() {
   cat <<'EOF'
@@ -34,6 +36,8 @@ Options:
   --warmup COUNT        Warm-up requests per endpoint (default: 2)
   --timeout SECONDS     Per-request timeout (default: 30)
   --memory-budget MIB   Container-memory comparison budget (default: 200)
+  --soak-seconds COUNT  Observe background container-memory growth after the
+                        request benchmark (default: 0; requires Docker)
   --only TARGET         all, health, search, torznab, status, or metrics
   --search-path PATH    Native search path and encoded query string
   --container NAME      Docker container name or ID to monitor
@@ -120,6 +124,11 @@ while (($# > 0)); do
     memory_budget_mib="$2"
     shift 2
     ;;
+  --soak-seconds)
+    (($# >= 2)) || fail "--soak-seconds requires a value"
+    soak_seconds="$2"
+    shift 2
+    ;;
   --only)
     (($# >= 2)) || fail "--only requires a value"
     selected_target="$2"
@@ -154,6 +163,7 @@ concurrency="$(positive_integer concurrency "${concurrency}" 256)"
 warmup="$(nonnegative_integer warmup "${warmup}" 1000)"
 timeout_seconds="$(positive_integer timeout "${timeout_seconds}" 3600)"
 memory_budget_mib="$(positive_integer memory-budget "${memory_budget_mib}" 1048576)"
+soak_seconds="$(nonnegative_integer soak-seconds "${soak_seconds}" 604800)"
 if ((concurrency > requests)); then
   concurrency="${requests}"
 fi
@@ -252,6 +262,10 @@ if [[ "${docker_enabled}" == true && -n "${container}" ]]; then
     fail "Docker container was not found: ${container}"
 elif [[ "${docker_enabled}" == true ]]; then
   printf 'Docker container not detected; API benchmarks will run without container sampling. Use --container NAME to select it explicitly.\n' >&2
+fi
+if ((soak_seconds > 0)) &&
+  { [[ "${docker_enabled}" != true ]] || [[ -z "${container}" ]]; }; then
+  fail "--soak-seconds requires a detected container or --container NAME"
 fi
 
 now_microseconds() {
@@ -414,6 +428,21 @@ run_selected torznab "/torznab/api?t=search&q=linux&limit=20&apikey=${token}"
 run_selected status '/v1/status'
 run_selected metrics '/metrics'
 
+if ((soak_seconds > 0)); then
+  printf 'Observing background container memory for %s seconds...\n' \
+    "${soak_seconds}" >&2
+  soak_start_us="$(now_microseconds)"
+  sample_container
+  for ((elapsed = 0; elapsed < soak_seconds; ++elapsed)); do
+    sleep 1
+    if (((elapsed + 1) % 60 == 0 && elapsed + 1 < soak_seconds)); then
+      printf 'Memory observation: %s/%s seconds...\n' "$((elapsed + 1))" \
+        "${soak_seconds}" >&2
+    fi
+  done
+  sample_container
+fi
+
 if [[ -n "${monitor_pid}" ]]; then
   kill "${monitor_pid}" >/dev/null 2>&1 || true
   wait "${monitor_pid}" >/dev/null 2>&1 || true
@@ -488,6 +517,48 @@ if [[ "${docker_enabled}" == true && -n "${container}" &&
     }' "${temporary_directory}/container.samples"
 else
   printf '\ncontainer\tunavailable\n'
+fi
+
+if [[ -n "${soak_start_us}" && -s "${temporary_directory}/container.samples" ]]; then
+  printf '\nmemory_soak\tsamples\tobserved_seconds\tmemory_start_mib\tmemory_end_mib\tmemory_growth_mib\tmemory_peak_mib\tslope_mib_per_hour\n'
+  awk -F '|' -v name="${container}" -v start_us="${soak_start_us}" '
+    function memory_mib(value, parts, number, unit) {
+      split(value, parts, " ")
+      match(parts[1], /^[0-9.]+/)
+      number = substr(parts[1], RSTART, RLENGTH) + 0
+      unit = substr(parts[1], RLENGTH + 1)
+      if (unit == "B") return number / 1048576
+      if (unit == "kB" || unit == "KB" || unit == "KiB") return number / 1024
+      if (unit == "MB" || unit == "MiB") return number
+      if (unit == "GB" || unit == "GiB") return number * 1024
+      if (unit == "TB" || unit == "TiB") return number * 1048576
+      return number / 1048576
+    }
+    $1 + 0 >= start_us + 0 {
+      timestamp = ($1 - start_us) / 1000000
+      memory = memory_mib($2)
+      if (count++ == 0) {
+        first_timestamp = timestamp
+        first_memory = memory
+        peak = memory
+      }
+      last_timestamp = timestamp
+      last_memory = memory
+      if (memory > peak) peak = memory
+      sum_x += timestamp
+      sum_y += memory
+      sum_xx += timestamp * timestamp
+      sum_xy += timestamp * memory
+    }
+    END {
+      denominator = count * sum_xx - sum_x * sum_x
+      slope = denominator == 0 ? 0 : (count * sum_xy - sum_x * sum_y) / denominator * 3600
+      observed = count ? last_timestamp - first_timestamp : 0
+      growth = count ? last_memory - first_memory : 0
+      printf "%s\t%d\t%.3f\t%.3f\t%.3f\t%.3f\t%.3f\t%.3f\n",
+             name, count, observed, first_memory, last_memory, growth, peak,
+             slope
+    }' "${temporary_directory}/container.samples"
 fi
 
 if [[ "${benchmark_failed}" == true ]]; then

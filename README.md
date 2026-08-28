@@ -123,7 +123,13 @@ token argument to enter the operator token at the hidden prompt:
 ./scripts/benchmark-deployment.sh
 ./scripts/benchmark-deployment.sh --requests 50 --concurrency 8
 ./scripts/benchmark-deployment.sh --container sakuin-sakuin-1 --memory-budget 200
+./scripts/benchmark-deployment.sh --container sakuin-sakuin-1 --soak-seconds 1800
 ```
+
+The soak option samples background container memory after the request run and
+reports both absolute growth and a least-squares MiB/hour slope. A positive
+slope is a diagnostic signal, not proof of a leak: compare it with the search
+projection and searchable-record deltas while the index is still growing.
 
 For unattended runs, use `--token-file PATH` or `SAKUIN_BENCH_TOKEN`. Results
 are written to standard output as tab-separated sections, so redirecting them

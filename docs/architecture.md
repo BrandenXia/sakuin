@@ -557,6 +557,12 @@ request volume stays below the deployment's default authenticated API budget;
 larger runs warn when rate limiting may dominate the result. The default
 200 MiB container-memory comparison is informational rather than a fixed
 service limit, since retained metadata scales with the searchable dataset.
+For suspected growth, `--soak-seconds` keeps sampling the otherwise normally
+running container and reports start, end, peak, absolute growth, and a
+least-squares MiB/hour slope. That slope must be interpreted alongside the
+search projection and record-count deltas: growth while metadata is being
+indexed is expected, while repeatable unaccounted growth after the projection
+stabilizes warrants a runtime investigation.
 
 ## Known boundaries
 
