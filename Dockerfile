@@ -48,6 +48,11 @@ COPY --chown=root:root config/sakuin.docker.toml /etc/sakuin/sakuin.toml
 
 ENV LD_LIBRARY_PATH=/opt/sakuin/lib
 ENV PATH=/opt/sakuin/bin:$PATH
+# Bound glibc allocator arenas and return freed refresh buffers promptly. The
+# service owns several long-lived runtime threads, so the unconstrained glibc
+# arena policy otherwise retains avoidable RSS after index rebuilds.
+ENV MALLOC_ARENA_MAX=2
+ENV MALLOC_TRIM_THRESHOLD_=131072
 
 USER 10001:10001
 WORKDIR /var/lib/sakuin

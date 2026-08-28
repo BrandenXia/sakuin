@@ -437,6 +437,12 @@ core::Result<core::ByteBuffer> prometheus_metrics(const ServiceStatus &status) {
              "Torrent records processed by search refreshes.", "counter");
     sample(output, "sakuin_search_records_indexed_total", {},
            status.search_records_indexed);
+    metadata(
+        output, "sakuin_search_index_estimated_memory_bytes",
+        "Approximate live bytes retained by the compact search projection.",
+        "gauge");
+    sample(output, "sakuin_search_index_estimated_memory_bytes", {},
+           status.search_classification.estimated_memory_bytes);
     metadata(output, "sakuin_classification_enabled",
              "Whether torrent classification is enabled.", "gauge");
     sample(output, "sakuin_classification_enabled", {},
