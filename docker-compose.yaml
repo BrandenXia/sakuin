@@ -46,6 +46,8 @@ services:
     cap_drop:
       - ALL
     environment:
+      MALLOC_ARENA_MAX: "2"
+      MALLOC_TRIM_THRESHOLD_: "131072"
       SAKUIN_STORAGE_BACKEND: ${SAKUIN_STORAGE_BACKEND:-local}
       SAKUIN_STORAGE_LOCAL_ROOT: /var/lib/sakuin
       SAKUIN_STORAGE_S3_ENDPOINT: ${SAKUIN_STORAGE_S3_ENDPOINT:-https://s3.amazonaws.com}

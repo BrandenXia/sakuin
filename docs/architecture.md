@@ -251,11 +251,18 @@ count, observation timestamps, and derived classifications. It supports text,
 structured metadata filters, semantic categories, and optional classifier
 state, kind, confidence, and label facets with bounded pagination. Classifier
 facets do not override the independently configured Adult visibility policy.
-Text queries of at least three characters use an in-memory trigram posting
-index over names, paths, and infohashes to select candidates before applying the
-authoritative exact substring matcher and scorer. Short and filter-only queries
-fall back to scanning the derived records. The posting index is disposable and
-is rebuilt from the local projection after restart or refresh.
+The in-memory search view is a compact projection rather than a copy of the
+canonical torrent model: it retains display/search text, metadata summaries,
+classification output, and a fixed 128-bit trigram filter per record. The
+filter cheaply rejects impossible candidates while the authoritative substring
+matcher and scorer preserve name, path, and infohash semantics. It replaces the
+unbounded trigram posting map and avoids retaining per-file sizes that search
+does not use. Observation-only placeholders remain canonical and eligible for
+metadata backfill but are omitted from the search projection until metadata
+makes them searchable. Incremental refreshes append a checksummed derived
+update log and mutate the projection under its ownership lock; a full rebuild
+replaces the base file and clears the log. Canonical torrent segments remain
+the source of truth after any derived-index loss.
 
 Duplicate detection publishes three explicitly versioned fingerprints: an
 exact sorted file-layout identity, a normalized name/path identity, and a
@@ -311,8 +318,10 @@ or segment paths.
 
 Classification observability is derived from the currently published search
 snapshot. Status exposes state and category distributions, bounded-input
-truncation, and Adult label counts. Prometheus exports the same data as gauges
-with fixed state/category label sets. Adult label and Adult category counts are
+truncation, Adult label counts, and the projection's estimated retained bytes.
+Prometheus exports the same data, including
+`sakuin_search_index_estimated_memory_bytes`, as gauges with fixed
+state/category label sets. Adult label and Adult category counts are
 descriptive: the latter reflects the configured confidence threshold, while
 neither metric changes the operator-selected visibility policy.
 

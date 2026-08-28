@@ -356,11 +356,12 @@ core::Result<core::ByteBuffer> openapi_document() {
       },
       "ClassificationIndexStats": {
         "type": "object",
-        "required": ["enabled", "algorithm_version", "total_records", "states", "input_truncated", "adult_labeled", "learned", "categories"],
+        "required": ["enabled", "algorithm_version", "total_records", "estimated_memory_bytes", "states", "input_truncated", "adult_labeled", "learned", "categories"],
         "properties": {
           "enabled": {"type": "boolean"},
           "algorithm_version": {"type": "integer", "minimum": 1},
           "total_records": {"type": "integer", "minimum": 0},
+          "estimated_memory_bytes": {"type": "integer", "minimum": 0},
           "states": {
             "type": "object",
             "required": ["awaiting_metadata", "classified", "ambiguous", "unknown"],

@@ -527,6 +527,7 @@ int main() {
            .contains("\"version\":\"" + std::string{core::version} + "\"") ||
       !body(*operator_status).contains("\"cycles\":42") ||
       !body(*operator_status).contains("\"routing_nodes\":13") ||
+      !body(*operator_status).contains("\"estimated_memory_bytes\":") ||
       !body(*operator_status).contains("\"inbound_queries\":12") ||
       !body(*operator_status).contains("\"inbound_get_peers_queries\":7") ||
       !body(*operator_status).contains("\"datagrams_failed\":2") ||
@@ -651,6 +652,9 @@ int main() {
       !body(*operator_metrics)
            .contains("sakuin_search_records_indexed_total 21\n"))
     return 24;
+  if (!body(*operator_metrics)
+           .contains("sakuin_search_index_estimated_memory_bytes "))
+    return 43;
   if (!body(*operator_metrics)
            .contains("sakuin_service_errors_total{source=\"materialization\"} "
                      "2\n") ||

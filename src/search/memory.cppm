@@ -5,6 +5,7 @@ import std;
 import sakuin.classification;
 import sakuin.core.ids;
 import sakuin.core.result;
+import sakuin.core.time;
 import sakuin.model.torrent;
 import sakuin.search.index;
 
@@ -35,34 +36,45 @@ private:
   friend class MemoryUpdateSession;
 
   struct IndexedRecord {
-    model::TorrentRecord record;
-    classification::Classification deterministic;
+    core::InfoHash info_hash;
+    core::Timestamp first_seen;
+    core::Timestamp last_seen;
+    std::optional<std::string> name;
+    std::uint64_t total_size{};
+    std::size_t file_count{};
+    // Folded fields are separated by NUL. The first field is the info hash,
+    // the optional second field is the display name, and the remainder are
+    // file paths. This keeps one allocation instead of retaining the full
+    // canonical file vector and one allocation per path.
+    std::string search_fields;
+    std::array<std::uint64_t, 2> trigram_filter{};
     classification::Classification classification;
-    std::vector<classification::MediaCategory> categories;
+    std::uint32_t category_mask{};
   };
 
   struct State {
     std::uint64_t source_generation{};
     std::vector<IndexedRecord> records;
-    // Disposable candidate lookup. Exact substring matching and scoring remain
-    // authoritative after candidate selection.
-    std::unordered_map<std::uint32_t, std::vector<std::size_t>> trigrams;
+    classification::LearnedContentClassifier learned;
     ClassificationIndexStats classification;
   };
 
-  core::Result<void> publish(std::shared_ptr<const State> replacement);
+  core::Result<void> publish(std::unique_ptr<State> replacement);
   core::Result<void>
   publish_updates(std::uint64_t source_generation,
                   std::span<const model::TorrentRecord> updates);
-  void rebuild_classification(State &state) const;
-  void rebuild_text_candidates(State &state) const;
+  IndexedRecord compact(const model::TorrentRecord &record,
+                        classification::Classification classified) const;
+  void
+  rebuild_classification(State &state,
+                         std::span<const model::TorrentRecord> records) const;
   ClassificationIndexStats summarize(
       std::span<const IndexedRecord> records,
       const classification::LearnedClassifierStats &learned) const noexcept;
 
   mutable std::shared_mutex mutex_;
   SearchClassificationOptions options_;
-  std::shared_ptr<const State> state_;
+  std::unique_ptr<State> state_;
 };
 
 } // namespace sakuin::search
@@ -115,41 +127,27 @@ std::uint32_t trigram(std::string_view value, std::size_t offset) {
 }
 
 void add_trigrams(std::string_view value,
-                  std::unordered_set<std::uint32_t> &result) {
+                  std::array<std::uint64_t, 2> &filter) {
   if (value.size() < 3)
     return;
-  for (std::size_t offset = 0; offset + 2 < value.size(); ++offset)
-    result.insert(trigram(value, offset));
+  for (std::size_t offset = 0; offset + 2 < value.size(); ++offset) {
+    const auto key = static_cast<std::uint64_t>(trigram(value, offset));
+    const auto mixed = key * 0x9e3779b97f4a7c15ULL;
+    for (const auto bit : {mixed & 127U, (mixed >> 17U) & 127U})
+      filter[bit / 64U] |= std::uint64_t{1} << (bit % 64U);
+  }
 }
 
-std::optional<std::vector<std::size_t>> candidate_ordinals(
-    const std::unordered_map<std::uint32_t, std::vector<std::size_t>> &index,
-    std::span<const std::string> query_terms) {
-  std::unordered_set<std::uint32_t> required;
-  for (const auto &term : query_terms)
+bool maybe_contains(const std::array<std::uint64_t, 2> &filter,
+                    std::span<const std::string> query_terms) {
+  for (const auto &term : query_terms) {
+    std::array<std::uint64_t, 2> required{};
     add_trigrams(term, required);
-  if (required.empty())
-    return std::nullopt;
-
-  std::vector<const std::vector<std::size_t> *> postings;
-  postings.reserve(required.size());
-  for (const auto key : required) {
-    const auto found = index.find(key);
-    if (found == index.end())
-      return std::vector<std::size_t>{};
-    postings.push_back(&found->second);
+    if ((filter[0] & required[0]) != required[0] ||
+        (filter[1] & required[1]) != required[1])
+      return false;
   }
-  std::ranges::sort(postings, {},
-                    [](const auto *posting) { return posting->size(); });
-  auto result = *postings.front();
-  for (std::size_t posting_index = 1;
-       posting_index < postings.size() && !result.empty(); ++posting_index) {
-    const auto &posting = *postings[posting_index];
-    std::erase_if(result, [&](const auto ordinal) {
-      return !std::ranges::binary_search(posting, ordinal);
-    });
-  }
-  return result;
+  return true;
 }
 
 std::string hex(const core::InfoHash &hash) {
@@ -164,26 +162,29 @@ std::string hex(const core::InfoHash &hash) {
 }
 
 std::optional<std::uint32_t>
-match_score(const model::TorrentRecord &record,
+match_score(std::string_view fields, bool has_name,
             std::span<const std::string> query_terms) {
   if (query_terms.empty())
     return 0;
-  std::vector<std::string> fields;
-  fields.reserve(record.files.size() + 2);
-  fields.push_back(hex(record.info_hash));
-  if (record.name)
-    fields.push_back(folded(*record.name));
-  for (const auto &file : record.files)
-    fields.push_back(folded(file.path));
 
   std::uint32_t score{};
   for (const auto &term : query_terms) {
     bool found{};
-    for (std::size_t index = 0; index < fields.size(); ++index) {
-      if (fields[index].contains(term)) {
+    std::size_t index{};
+    std::size_t offset{};
+    while (offset < fields.size()) {
+      const auto end = fields.find('\0', offset);
+      const auto field = fields.substr(offset, end == std::string_view::npos
+                                                   ? fields.size() - offset
+                                                   : end - offset);
+      if (field.contains(term)) {
         found = true;
-        score += index == 1 && record.name ? 4U : 1U;
+        score += index == 1 && has_name ? 4U : 1U;
       }
+      ++index;
+      if (end == std::string_view::npos)
+        break;
+      offset = end + 1;
     }
     if (!found)
       return std::nullopt;
@@ -191,10 +192,25 @@ match_score(const model::TorrentRecord &record,
   return score;
 }
 
-bool contains_category(
-    std::span<const classification::MediaCategory> categories,
-    classification::MediaCategory expected) {
-  return std::ranges::find(categories, expected) != categories.end();
+constexpr std::uint32_t
+category_bit(classification::MediaCategory category) noexcept {
+  return std::uint32_t{1} << std::to_underlying(category);
+}
+
+bool contains_category(std::uint32_t categories,
+                       classification::MediaCategory expected) {
+  return (categories & category_bit(expected)) != 0;
+}
+
+std::vector<classification::MediaCategory>
+categories_from_mask(std::uint32_t mask) {
+  std::vector<classification::MediaCategory> result;
+  for (std::size_t value = 0; value < MediaCategoryCount; ++value) {
+    const auto category = static_cast<classification::MediaCategory>(value);
+    if (contains_category(mask, category))
+      result.push_back(category);
+  }
+  return result;
 }
 
 bool contains_labels(const classification::Classification &classified,
@@ -279,7 +295,7 @@ private:
 
 InMemorySearchIndex::InMemorySearchIndex(SearchClassificationOptions options)
     : options_(std::move(options)) {
-  auto initial = std::make_shared<State>();
+  auto initial = std::make_unique<State>();
   initial->classification.enabled = options_.enabled;
   initial->classification.learned_enabled =
       options_.enabled && options_.learned.enabled;
@@ -299,7 +315,7 @@ InMemorySearchIndex::begin_update(std::uint64_t source_generation) {
 }
 
 core::Result<void>
-InMemorySearchIndex::publish(std::shared_ptr<const State> replacement) {
+InMemorySearchIndex::publish(std::unique_ptr<State> replacement) {
   std::unique_lock lock{mutex_};
   if (replacement->source_generation < state_->source_generation)
     return std::unexpected(core::Error{
@@ -317,23 +333,29 @@ core::Result<void> InMemorySearchIndex::publish_updates(
     return std::unexpected(core::Error{
         core::ErrorCode::Conflict,
         "Search update cannot replace a newer canonical generation"});
-  auto replacement = std::make_shared<State>();
-  replacement->source_generation = source_generation;
-  replacement->records = state_->records;
   for (const auto &update : updates) {
     const auto existing =
-        std::ranges::find_if(replacement->records, [&](const auto &indexed) {
-          return indexed.record.info_hash == update.info_hash;
+        std::ranges::find_if(state_->records, [&](const auto &indexed) {
+          return indexed.info_hash == update.info_hash;
         });
-    IndexedRecord indexed{.record = update};
-    if (existing == replacement->records.end())
-      replacement->records.push_back(std::move(indexed));
+    if (!update.name || update.files.empty()) {
+      if (existing != state_->records.end())
+        state_->records.erase(existing);
+      continue;
+    }
+    auto deterministic =
+        classification::Classification{.info_hash = update.info_hash};
+    if (options_.enabled)
+      deterministic = classification::classify(update, options_.classifier);
+    auto classified = state_->learned.apply(update, std::move(deterministic));
+    auto indexed = compact(update, std::move(classified));
+    if (existing == state_->records.end())
+      state_->records.push_back(std::move(indexed));
     else
       *existing = std::move(indexed);
   }
-  rebuild_classification(*replacement);
-  rebuild_text_candidates(*replacement);
-  state_ = std::move(replacement);
+  state_->source_generation = source_generation;
+  state_->classification = summarize(state_->records, state_->learned.stats());
   return {};
 }
 
@@ -343,57 +365,74 @@ core::Result<void> MemoryRebuildSession::commit() {
         core::Error{core::ErrorCode::InvalidArgument,
                     "Search rebuild session is no longer active"});
   active_ = false;
-  auto state = std::make_shared<InMemorySearchIndex::State>();
+  auto state = std::make_unique<InMemorySearchIndex::State>();
   state->source_generation = generation_;
-  state->records.reserve(records_.size());
-  for (auto &record : records_) {
-    state->records.push_back(
-        InMemorySearchIndex::IndexedRecord{.record = std::move(record)});
-  }
-  owner_->rebuild_classification(*state);
-  owner_->rebuild_text_candidates(*state);
+  owner_->rebuild_classification(*state, records_);
   return owner_->publish(std::move(state));
 }
 
-void InMemorySearchIndex::rebuild_classification(State &state) const {
+InMemorySearchIndex::IndexedRecord
+InMemorySearchIndex::compact(const model::TorrentRecord &record,
+                             classification::Classification classified) const {
+  IndexedRecord result{.info_hash = record.info_hash,
+                       .first_seen = record.first_seen,
+                       .last_seen = record.last_seen,
+                       .name = record.name,
+                       .total_size = record.total_size,
+                       .file_count = record.files.size(),
+                       .classification = std::move(classified)};
+  std::size_t text_bytes = record.info_hash.bytes.size() * 2U + 1U;
+  if (record.name)
+    text_bytes += record.name->size() + 1U;
+  for (const auto &file : record.files)
+    text_bytes += file.path.size() + 1U;
+  result.search_fields.reserve(text_bytes);
+  const auto append_field = [&](std::string_view value) {
+    const auto normalized = folded(value);
+    add_trigrams(normalized, result.trigram_filter);
+    result.search_fields.append(normalized);
+    result.search_fields.push_back('\0');
+  };
+  append_field(hex(record.info_hash));
+  if (record.name)
+    append_field(*record.name);
+  for (const auto &file : record.files)
+    append_field(file.path);
+  const auto categories = classification::media_categories(
+      result.classification, options_.category_minimum, options_.adult_minimum);
+  for (const auto category : categories)
+    result.category_mask |= category_bit(category);
+  return result;
+}
+
+void InMemorySearchIndex::rebuild_classification(
+    State &state, std::span<const model::TorrentRecord> records) const {
+  std::vector<classification::Classification> deterministic;
+  deterministic.reserve(records.size());
   std::vector<classification::LearnedTrainingExample> examples;
-  examples.reserve(state.records.size());
-  for (auto &record : state.records) {
-    record.deterministic =
-        classification::Classification{.info_hash = record.record.info_hash};
+  examples.reserve(records.size());
+  for (const auto &record : records) {
+    auto classified =
+        classification::Classification{.info_hash = record.info_hash};
     if (options_.enabled)
-      record.deterministic =
-          classification::classify(record.record, options_.classifier);
+      classified = classification::classify(record, options_.classifier);
+    deterministic.push_back(std::move(classified));
     examples.push_back(
-        {.record = &record.record, .classification = &record.deterministic});
+        {.record = &record, .classification = &deterministic.back()});
   }
   auto learned_options = options_.learned;
   learned_options.enabled = options_.enabled && learned_options.enabled;
-  const auto learned = classification::LearnedContentClassifier::train(
+  state.learned = classification::LearnedContentClassifier::train(
       examples, options_.classifier, learned_options);
-  for (auto &record : state.records) {
-    record.classification = learned.apply(record.record, record.deterministic);
-    record.categories = classification::media_categories(
-        record.classification, options_.category_minimum,
-        options_.adult_minimum);
+  state.records.reserve(records.size());
+  for (std::size_t index = 0; index < records.size(); ++index) {
+    if (!records[index].name || records[index].files.empty())
+      continue;
+    auto classified =
+        state.learned.apply(records[index], std::move(deterministic[index]));
+    state.records.push_back(compact(records[index], std::move(classified)));
   }
-  state.classification = summarize(state.records, learned.stats());
-}
-
-void InMemorySearchIndex::rebuild_text_candidates(State &state) const {
-  state.trigrams.clear();
-  std::unordered_set<std::uint32_t> record_trigrams;
-  for (std::size_t ordinal = 0; ordinal < state.records.size(); ++ordinal) {
-    record_trigrams.clear();
-    const auto &record = state.records[ordinal].record;
-    add_trigrams(hex(record.info_hash), record_trigrams);
-    if (record.name)
-      add_trigrams(folded(*record.name), record_trigrams);
-    for (const auto &file : record.files)
-      add_trigrams(folded(file.path), record_trigrams);
-    for (const auto key : record_trigrams)
-      state.trigrams[key].push_back(ordinal);
-  }
+  state.classification = summarize(state.records, state.learned.stats());
 }
 
 ClassificationIndexStats InMemorySearchIndex::summarize(
@@ -406,8 +445,22 @@ ClassificationIndexStats InMemorySearchIndex::summarize(
       .learned_ready = learned.ready,
       .learned_training_records = learned.training_records,
       .learned_eligible_kinds = learned.eligible_kinds,
-      .learned_vocabulary_size = learned.vocabulary_size};
+      .learned_vocabulary_size = learned.vocabulary_size,
+      .estimated_memory_bytes =
+          static_cast<std::uint64_t>(records.size()) * sizeof(IndexedRecord) +
+          static_cast<std::uint64_t>(learned.vocabulary_size) *
+              (64U + static_cast<std::uint64_t>(learned.eligible_kinds) * 64U)};
   for (const auto &record : records) {
+    result.estimated_memory_bytes += record.search_fields.capacity();
+    if (record.name)
+      result.estimated_memory_bytes += record.name->capacity();
+    result.estimated_memory_bytes += record.classification.labels.capacity() *
+                                     sizeof(classification::LabelAssessment);
+    result.estimated_memory_bytes += record.classification.evidence.capacity() *
+                                     sizeof(classification::Evidence);
+    for (const auto &evidence : record.classification.evidence)
+      if (evidence.rule_id)
+        result.estimated_memory_bytes += evidence.rule_id->capacity();
     ++result.states[std::to_underlying(record.classification.state)];
     if (record.classification.input_truncated)
       ++result.input_truncated;
@@ -418,8 +471,9 @@ ClassificationIndexStats InMemorySearchIndex::summarize(
                               classification::EvidenceCode::LearnedContentModel,
                               &classification::Evidence::code))
       ++result.learned_classified_records;
-    for (const auto category : record.categories)
-      ++result.categories[std::to_underlying(category)];
+    for (std::size_t value = 0; value < MediaCategoryCount; ++value)
+      if (record.category_mask & (std::uint32_t{1} << value))
+        ++result.categories[value];
   }
   return result;
 }
@@ -441,35 +495,34 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
     return std::unexpected(
         invalid("Search first-seen lower bound exceeds last-seen upper bound"));
   const auto query_terms = terms(query.text);
-  std::shared_ptr<const State> state;
-  {
-    std::shared_lock lock{mutex_};
-    state = state_;
-  }
+  std::shared_lock lock{mutex_};
+  const auto &state = *state_;
 
-  std::vector<SearchHit> matches;
-  const auto candidates = candidate_ordinals(state->trigrams, query_terms);
+  struct Match {
+    std::size_t ordinal{};
+    std::uint32_t score{};
+  };
+  std::vector<Match> matches;
   const auto visit = [&](std::size_t ordinal) {
-    const auto &indexed = state->records[ordinal];
-    const auto &record = indexed.record;
-    // Observation materialization creates records before BEP 9 metadata is
-    // available. Keep those placeholders in the derived index for later
-    // enrichment and operational accounting, but do not expose an unknown
+    const auto &indexed = state.records[ordinal];
+    // The projection excludes observation-only placeholders. Keep this guard
+    // defensive so an invalid incremental record cannot expose an unknown
     // size as a real zero-byte torrent through native or Torznab search.
-    if (!record.name || record.files.empty())
+    if (!indexed.name || indexed.file_count == 0 ||
+        !maybe_contains(indexed.trigram_filter, query_terms))
       return;
-    const bool adult = contains_category(indexed.categories,
+    const bool adult = contains_category(indexed.category_mask,
                                          classification::MediaCategory::Adult);
-    if ((query.minimum_size && record.total_size < *query.minimum_size) ||
-        (query.maximum_size && record.total_size > *query.maximum_size) ||
+    if ((query.minimum_size && indexed.total_size < *query.minimum_size) ||
+        (query.maximum_size && indexed.total_size > *query.maximum_size) ||
         (query.minimum_file_count &&
-         record.files.size() < *query.minimum_file_count) ||
+         indexed.file_count < *query.minimum_file_count) ||
         (query.maximum_file_count &&
-         record.files.size() > *query.maximum_file_count) ||
+         indexed.file_count > *query.maximum_file_count) ||
         (query.first_seen_at_or_after &&
-         record.first_seen < *query.first_seen_at_or_after) ||
+         indexed.first_seen < *query.first_seen_at_or_after) ||
         (query.last_seen_at_or_before &&
-         record.last_seen > *query.last_seen_at_or_before) ||
+         indexed.last_seen > *query.last_seen_at_or_before) ||
         (query.classification_state &&
          indexed.classification.state != *query.classification_state) ||
         (query.content_kind &&
@@ -483,44 +536,46 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
         (query.adult_content == AdultContentMode::Only && !adult) ||
         (!query.categories.empty() &&
          !std::ranges::any_of(query.categories, [&](const auto category) {
-           return contains_category(indexed.categories, category);
+           return contains_category(indexed.category_mask, category);
          })))
       return;
-    const auto score = match_score(record, query_terms);
+    const auto score = match_score(indexed.search_fields,
+                                   indexed.name.has_value(), query_terms);
     if (!score)
       return;
-    matches.push_back(SearchHit{.info_hash = record.info_hash,
-                                .name = record.name,
-                                .total_size = record.total_size,
-                                .file_count = record.files.size(),
-                                .first_seen = record.first_seen,
-                                .last_seen = record.last_seen,
-                                .score = *score,
-                                .classification = indexed.classification,
-                                .categories = indexed.categories});
+    matches.push_back({.ordinal = ordinal, .score = *score});
   };
-  if (candidates) {
-    for (const auto ordinal : *candidates)
-      visit(ordinal);
-  } else {
-    for (std::size_t ordinal = 0; ordinal < state->records.size(); ++ordinal)
-      visit(ordinal);
-  }
-  std::ranges::sort(matches, [](const auto &left, const auto &right) {
+  for (std::size_t ordinal = 0; ordinal < state.records.size(); ++ordinal)
+    visit(ordinal);
+  std::ranges::sort(matches, [&](const auto &left, const auto &right) {
     if (left.score != right.score)
       return left.score > right.score;
-    if (left.last_seen != right.last_seen)
-      return left.last_seen > right.last_seen;
-    return left.info_hash.bytes < right.info_hash.bytes;
+    const auto &left_record = state.records[left.ordinal];
+    const auto &right_record = state.records[right.ordinal];
+    if (left_record.last_seen != right_record.last_seen)
+      return left_record.last_seen > right_record.last_seen;
+    return left_record.info_hash.bytes < right_record.info_hash.bytes;
   });
   SearchResult result{.total_matches = matches.size(),
-                      .source_generation = state->source_generation};
+                      .source_generation = state.source_generation};
   if (query.offset < matches.size()) {
     const auto count = std::min(query.limit, matches.size() - query.offset);
-    result.hits.insert(
-        result.hits.end(),
-        matches.begin() + static_cast<std::ptrdiff_t>(query.offset),
-        matches.begin() + static_cast<std::ptrdiff_t>(query.offset + count));
+    result.hits.reserve(count);
+    for (std::size_t match = query.offset; match < query.offset + count;
+         ++match) {
+      const auto &found = matches[match];
+      const auto &indexed = state.records[found.ordinal];
+      result.hits.push_back(
+          {.info_hash = indexed.info_hash,
+           .name = indexed.name,
+           .total_size = indexed.total_size,
+           .file_count = indexed.file_count,
+           .first_seen = indexed.first_seen,
+           .last_seen = indexed.last_seen,
+           .score = found.score,
+           .classification = indexed.classification,
+           .categories = categories_from_mask(indexed.category_mask)});
+    }
   }
   return result;
 }

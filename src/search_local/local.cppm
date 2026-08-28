@@ -63,10 +63,13 @@ private:
   core::Result<void>
   persist(std::uint64_t source_generation,
           std::span<const model::TorrentRecord> records) const;
+  core::Result<void>
+  persist_updates(std::uint64_t source_generation,
+                  std::span<const model::TorrentRecord> updates) const;
+  core::Result<void> clear_updates() const;
 
   std::filesystem::path path_;
   mutable std::mutex mutex_;
-  std::vector<model::TorrentRecord> records_;
   InMemorySearchIndex memory_;
 };
 
@@ -76,6 +79,7 @@ namespace sakuin::search {
 namespace {
 
 constexpr std::string_view Magic{"sakuin-search-index-v1\n"};
+constexpr std::string_view UpdateMagic{"sakuin-search-update-v1\n"};
 constexpr std::uint64_t MaximumRecordBytes = 64U * 1024U * 1024U;
 
 struct StoredState {
@@ -222,6 +226,76 @@ core::Result<StoredState> load(const std::filesystem::path &path) {
   return result;
 }
 
+template <typename Consumer>
+core::Result<void> replay_updates(const std::filesystem::path &path,
+                                  Consumer &&consume) {
+  std::error_code status_error;
+  if (!std::filesystem::exists(path, status_error)) {
+    if (status_error)
+      return std::unexpected(io_error("Could not inspect search updates", path,
+                                      status_error.message()));
+    return {};
+  }
+  const auto file_size = std::filesystem::file_size(path, status_error);
+  if (status_error)
+    return std::unexpected(io_error("Could not size search updates", path,
+                                    status_error.message()));
+  std::ifstream input{path, std::ios::binary};
+  if (!input)
+    return std::unexpected(io_error("Could not open search updates", path));
+  storage::TorrentRecordCodec codec;
+  while (input.peek() != std::char_traits<char>::eof()) {
+    core::Sha256Hasher hash;
+    auto magic = read_bytes(input, UpdateMagic.size(), &hash);
+    if (!magic)
+      return std::unexpected(magic.error());
+    if (!std::ranges::equal(*magic, std::as_bytes(std::span{UpdateMagic})))
+      return std::unexpected(
+          core::Error{core::ErrorCode::UnsupportedFormat,
+                      "Local search-update format is unsupported"});
+    auto generation = read_integer<std::uint64_t>(input, hash);
+    auto count = read_integer<std::uint64_t>(input, hash);
+    if (!generation)
+      return std::unexpected(generation.error());
+    if (!count)
+      return std::unexpected(count.error());
+    if (*count > file_size / sizeof(std::uint32_t))
+      return std::unexpected(
+          core::Error{core::ErrorCode::CorruptSegment,
+                      "Local search-update record count is invalid"});
+    std::vector<model::TorrentRecord> records;
+    records.reserve(static_cast<std::size_t>(*count));
+    for (std::uint64_t index = 0; index < *count; ++index) {
+      auto record_size = read_integer<std::uint32_t>(input, hash);
+      if (!record_size)
+        return std::unexpected(record_size.error());
+      if (*record_size > MaximumRecordBytes)
+        return std::unexpected(
+            core::Error{core::ErrorCode::CorruptSegment,
+                        "Local search update exceeds the safety limit"});
+      auto encoded = read_bytes(input, *record_size, &hash);
+      if (!encoded)
+        return std::unexpected(encoded.error());
+      auto decoded = codec.decode(*encoded);
+      if (!decoded)
+        return std::unexpected(decoded.error());
+      records.push_back(std::move(*decoded));
+    }
+    const auto expected = hash.finalize();
+    auto actual = read_bytes(input, expected.bytes.size());
+    if (!actual)
+      return std::unexpected(actual.error());
+    if (!core::constant_time_equal(std::as_bytes(std::span{expected.bytes}),
+                                   *actual))
+      return std::unexpected(
+          core::Error{core::ErrorCode::ChecksumMismatch,
+                      "Local search-update checksum mismatch"});
+    if (auto consumed = consume(*generation, records); !consumed)
+      return consumed;
+  }
+  return {};
+}
+
 } // namespace
 
 class LocalRebuildSession final : public SearchRebuildSession {
@@ -308,7 +382,23 @@ LocalSearchIndex::open(std::filesystem::path path,
       return std::unexpected(appended.error());
   if (auto committed = (*session)->commit(); !committed)
     return std::unexpected(committed.error());
-  result->records_ = std::move(stored->records);
+  const auto updates_path = result->path_.string() + ".updates";
+  auto replayed = replay_updates(
+      updates_path,
+      [&](std::uint64_t generation,
+          std::span<const model::TorrentRecord> updates) -> core::Result<void> {
+        if (generation <= result->memory_.source_generation())
+          return {};
+        auto update = result->memory_.begin_update(generation);
+        if (!update)
+          return std::unexpected(update.error());
+        for (const auto &record : updates)
+          if (auto applied = (*update)->upsert(record); !applied)
+            return std::unexpected(applied.error());
+        return (*update)->commit();
+      });
+  if (!replayed)
+    return std::unexpected(replayed.error());
   return result;
 }
 
@@ -352,37 +442,22 @@ LocalSearchIndex::replace(std::uint64_t source_generation,
     return std::unexpected(committed.error());
   if (auto saved = persist(source_generation, records); !saved)
     return saved;
-  records_ = std::move(records);
-  return {};
+  return clear_updates();
 }
 
 core::Result<void>
 LocalSearchIndex::apply(std::uint64_t source_generation,
                         std::span<const model::TorrentRecord> updates) {
   std::lock_guard lock{mutex_};
-  auto replacement = records_;
-  for (const auto &update : updates) {
-    const auto existing =
-        std::ranges::find_if(replacement, [&](const auto &record) {
-          return record.info_hash == update.info_hash;
-        });
-    if (existing == replacement.end())
-      replacement.push_back(update);
-    else
-      *existing = update;
-  }
   auto session = memory_.begin_update(source_generation);
   if (!session)
     return std::unexpected(session.error());
   for (const auto &update : updates)
     if (auto applied = (*session)->upsert(update); !applied)
       return std::unexpected(applied.error());
-  if (auto committed = (*session)->commit(); !committed)
-    return std::unexpected(committed.error());
-  if (auto saved = persist(source_generation, replacement); !saved)
+  if (auto saved = persist_updates(source_generation, updates); !saved)
     return saved;
-  records_ = std::move(replacement);
-  return {};
+  return (*session)->commit();
 }
 
 core::Result<void>
@@ -405,12 +480,18 @@ LocalSearchIndex::persist(std::uint64_t source_generation,
     return written;
   if (auto written = write_integer(output, hash, source_generation); !written)
     return written;
-  if (auto written = write_integer(output, hash,
-                                   static_cast<std::uint64_t>(records.size()));
+  const auto searchable_records =
+      std::ranges::count_if(records, [](const auto &record) {
+        return record.name.has_value() && !record.files.empty();
+      });
+  if (auto written = write_integer(
+          output, hash, static_cast<std::uint64_t>(searchable_records));
       !written)
     return written;
   storage::TorrentRecordCodec codec;
   for (const auto &record : records) {
+    if (!record.name || record.files.empty())
+      continue;
     core::ByteBuffer encoded;
     if (auto encoded_result = codec.encode(record, encoded); !encoded_result)
       return encoded_result;
@@ -441,6 +522,78 @@ LocalSearchIndex::persist(std::uint64_t source_generation,
     return std::unexpected(io_error("Could not publish local search index",
                                     path_, rename_error.message()));
   return sync_path(path_.parent_path(), true);
+}
+
+core::Result<void> LocalSearchIndex::persist_updates(
+    std::uint64_t source_generation,
+    std::span<const model::TorrentRecord> updates) const {
+  if (updates.empty())
+    return {};
+  const auto searchable_updates =
+      std::ranges::count_if(updates, [](const auto &record) {
+        return record.name.has_value() && !record.files.empty();
+      });
+  if (searchable_updates == 0)
+    return {};
+  std::error_code directory_error;
+  std::filesystem::create_directories(path_.parent_path(), directory_error);
+  if (directory_error)
+    return std::unexpected(io_error("Could not create search-index directory",
+                                    path_.parent_path(),
+                                    directory_error.message()));
+  const auto updates_path = path_.string() + ".updates";
+  std::ofstream output{updates_path, std::ios::binary | std::ios::app};
+  if (!output)
+    return std::unexpected(
+        io_error("Could not append local search updates", updates_path));
+  core::Sha256Hasher hash;
+  if (auto written =
+          write_bytes(output, hash, std::as_bytes(std::span{UpdateMagic}));
+      !written)
+    return written;
+  if (auto written = write_integer(output, hash, source_generation); !written)
+    return written;
+  if (auto written = write_integer(
+          output, hash, static_cast<std::uint64_t>(searchable_updates));
+      !written)
+    return written;
+  storage::TorrentRecordCodec codec;
+  for (const auto &record : updates) {
+    if (!record.name || record.files.empty())
+      continue;
+    core::ByteBuffer encoded;
+    if (auto encoded_result = codec.encode(record, encoded); !encoded_result)
+      return encoded_result;
+    if (encoded.size() > std::numeric_limits<std::uint32_t>::max())
+      return std::unexpected(core::Error{
+          core::ErrorCode::InvalidArgument,
+          "Torrent record is too large for the local search update log"});
+    if (auto written = write_integer(
+            output, hash, static_cast<std::uint32_t>(encoded.size()));
+        !written)
+      return written;
+    if (auto written = write_bytes(output, hash, encoded); !written)
+      return written;
+  }
+  const auto digest = hash.finalize();
+  output.write(reinterpret_cast<const char *>(digest.bytes.data()),
+               static_cast<std::streamsize>(digest.bytes.size()));
+  output.flush();
+  if (!output)
+    return std::unexpected(
+        io_error("Could not finish local search updates", updates_path));
+  output.close();
+  return sync_path(updates_path, false);
+}
+
+core::Result<void> LocalSearchIndex::clear_updates() const {
+  const auto updates_path = std::filesystem::path{path_.string() + ".updates"};
+  std::error_code remove_error;
+  const auto removed = std::filesystem::remove(updates_path, remove_error);
+  if (remove_error)
+    return std::unexpected(io_error("Could not clear local search updates",
+                                    updates_path, remove_error.message()));
+  return removed ? sync_path(path_.parent_path(), true) : core::Result<void>{};
 }
 
 } // namespace sakuin::search
