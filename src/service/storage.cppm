@@ -183,6 +183,9 @@ LocalCanonicalStorage::open(const config::StorageConfig &configuration) {
          .request_timeout =
              std::chrono::duration_cast<std::chrono::milliseconds>(
                  configuration.s3.request_timeout),
+         .maximum_attempts = configuration.s3.maximum_attempts,
+         .retry_delay = std::chrono::duration_cast<std::chrono::milliseconds>(
+             configuration.s3.retry_delay),
          .verify_tls = configuration.s3.verify_tls});
     if (!remote)
       return std::unexpected(remote.error());

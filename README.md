@@ -145,7 +145,9 @@ same `.env` file, set `SAKUIN_STORAGE_BACKEND=s3`,
 `AWS_SECRET_ACCESS_KEY` variables; set the endpoint and region variables for a
 non-default provider. Keep the data volume: manifests, locks, derived indexes,
 and bounded transfer staging remain local. Temporary AWS session credentials
-can include `AWS_SESSION_TOKEN`.
+can include `AWS_SESSION_TOKEN`. Transient object-store failures are retried
+three times by default; `SAKUIN_STORAGE_S3_MAXIMUM_ATTEMPTS` and
+`SAKUIN_STORAGE_S3_RETRY_DELAY_MS` tune that bounded retry policy.
 
 Torznab clients can use `http://127.0.0.1:8080/torznab/api` as the indexer URL
 and the complete `sakuin_...` reader token as `apikey`. In Prowlarr's Generic

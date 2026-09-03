@@ -57,6 +57,12 @@ public:
 
   std::uint16_t port() const noexcept { return port_; }
   bool observed_signed_request() const noexcept { return signed_.load(); }
+  std::size_t put_requests() const noexcept { return put_requests_.load(); }
+  std::size_t head_requests() const noexcept { return head_requests_.load(); }
+
+  void fail_next_puts(std::size_t count) noexcept {
+    transient_put_failures_.store(count);
+  }
 
   void corrupt(std::string value) {
     std::scoped_lock lock{mutex_};
@@ -136,9 +142,16 @@ private:
     {
       std::scoped_lock lock{mutex_};
       if (method == "PUT") {
-        objects_[target] = std::move(body);
-        status = 200;
+        put_requests_.fetch_add(1);
+        if (transient_put_failures_.load() > 0) {
+          transient_put_failures_.fetch_sub(1);
+          status = 503;
+        } else {
+          objects_[target] = std::move(body);
+          status = 200;
+        }
       } else if (method == "HEAD") {
+        head_requests_.fetch_add(1);
         const auto found = objects_.find(target);
         if (found == objects_.end())
           status = 404;
@@ -164,6 +177,7 @@ private:
     const auto reason = status == 200   ? "OK"
                         : status == 204 ? "No Content"
                         : status == 404 ? "Not Found"
+                        : status == 503 ? "Service Unavailable"
                                         : "Method Not Allowed";
     auto response =
         "HTTP/1.1 " + std::to_string(status) + " " + reason +
@@ -179,6 +193,9 @@ private:
   std::thread thread_;
   std::atomic<bool> stopped_{};
   std::atomic<bool> signed_{};
+  std::atomic<std::size_t> put_requests_{};
+  std::atomic<std::size_t> head_requests_{};
+  std::atomic<std::size_t> transient_put_failures_{};
   std::mutex mutex_;
   std::unordered_map<std::string, std::string> objects_;
 };
@@ -201,6 +218,8 @@ int main() {
        .access_key_id = "test-access-key",
        .secret_access_key = "test-secret-key",
        .session_token = "test-session-token",
+       .maximum_attempts = 3,
+       .retry_delay = std::chrono::milliseconds::zero(),
        .verify_tls = false});
   if (!store)
     return 1;
@@ -210,8 +229,9 @@ int main() {
   auto writer = (*store)->create();
   if (!writer || !(*writer)->write(payload))
     return 2;
+  server.fail_next_puts(2);
   auto id = (*writer)->finalize();
-  if (!id || !server.observed_signed_request())
+  if (!id || !server.observed_signed_request() || server.put_requests() != 3)
     return 3;
   auto found = (*store)->exists(*id);
   if (!found || !*found)
@@ -240,8 +260,10 @@ int main() {
   found = (*store)->exists(*id);
   if (!found || *found)
     return 9;
+  const auto head_requests = server.head_requests();
   auto missing = (*store)->open(*id);
-  if (missing || missing.error().code != core::ErrorCode::NotFound)
+  if (missing || missing.error().code != core::ErrorCode::NotFound ||
+      server.head_requests() != head_requests + 1)
     return 10;
   return 0;
 }

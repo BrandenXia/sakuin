@@ -382,11 +382,12 @@ core::Result<void> parse_storage(const toml::table &table,
   if (!s3)
     return std::unexpected(s3.error());
   if (*s3) {
-    if (auto checked = check_keys(**s3,
-                                  {"endpoint", "bucket", "region", "prefix",
-                                   "connect_timeout_ms", "request_timeout_ms",
-                                   "verify_tls"},
-                                  "storage.s3.");
+    if (auto checked =
+            check_keys(**s3,
+                       {"endpoint", "bucket", "region", "prefix",
+                        "connect_timeout_ms", "request_timeout_ms",
+                        "maximum_attempts", "retry_delay_ms", "verify_tls"},
+                       "storage.s3.");
         !checked)
       return checked;
     for (auto result :
@@ -398,6 +399,10 @@ core::Result<void> parse_storage(const toml::table &table,
                                "storage.s3.connect_timeout_ms", overlay),
           scalar<std::int64_t>(**s3, "request_timeout_ms",
                                "storage.s3.request_timeout_ms", overlay),
+          scalar<std::int64_t>(**s3, "maximum_attempts",
+                               "storage.s3.maximum_attempts", overlay),
+          scalar<std::int64_t>(**s3, "retry_delay_ms",
+                               "storage.s3.retry_delay_ms", overlay),
           scalar<bool>(**s3, "verify_tls", "storage.s3.verify_tls", overlay)})
       if (!result)
         return result;
@@ -1033,6 +1038,8 @@ core::Result<ConfigOverlay> environment_overlay(
       {"SAKUIN_STORAGE_S3_PREFIX", "storage.s3.prefix"},
       {"SAKUIN_STORAGE_S3_CONNECT_TIMEOUT_MS", "storage.s3.connect_timeout_ms"},
       {"SAKUIN_STORAGE_S3_REQUEST_TIMEOUT_MS", "storage.s3.request_timeout_ms"},
+      {"SAKUIN_STORAGE_S3_MAXIMUM_ATTEMPTS", "storage.s3.maximum_attempts"},
+      {"SAKUIN_STORAGE_S3_RETRY_DELAY_MS", "storage.s3.retry_delay_ms"},
       {"SAKUIN_STORAGE_S3_VERIFY_TLS", "storage.s3.verify_tls"},
       {"SAKUIN_STORAGE_BLOCK_TARGET_BYTES", "storage.block_target_bytes"},
       {"SAKUIN_STORAGE_SEGMENT_TARGET_BYTES", "storage.segment_target_bytes"},

@@ -28,6 +28,8 @@ struct S3BlobStoreOptions {
   std::string session_token;
   std::chrono::milliseconds connect_timeout{std::chrono::seconds{10}};
   std::chrono::milliseconds request_timeout{std::chrono::minutes{5}};
+  std::size_t maximum_attempts{3};
+  std::chrono::milliseconds retry_delay{std::chrono::milliseconds{200}};
   bool verify_tls{true};
 };
 
@@ -109,9 +111,16 @@ core::Error curl_error(std::string operation, CURLcode code,
                        std::string_view detail) {
   auto message = "S3 " + std::move(operation) + " failed: ";
   message += detail.empty() ? curl_easy_strerror(code) : detail;
-  const auto error_code = code == CURLE_OPERATION_TIMEDOUT
-                              ? core::ErrorCode::Timeout
-                              : core::ErrorCode::StorageUnavailable;
+  auto error_code = core::ErrorCode::StorageUnavailable;
+  if (code == CURLE_OPERATION_TIMEDOUT)
+    error_code = core::ErrorCode::Timeout;
+  else if (code == CURLE_URL_MALFORMAT || code == CURLE_UNSUPPORTED_PROTOCOL)
+    error_code = core::ErrorCode::InvalidArgument;
+  else if (code == CURLE_READ_ERROR || code == CURLE_WRITE_ERROR)
+    error_code = core::ErrorCode::IoError;
+  else if (code == CURLE_FAILED_INIT || code == CURLE_OUT_OF_MEMORY ||
+           code == CURLE_BAD_FUNCTION_ARGUMENT)
+    error_code = core::ErrorCode::Internal;
   return {error_code, std::move(message)};
 }
 
@@ -243,9 +252,9 @@ struct S3BlobStore::State {
   }
 
   core::Result<Response>
-  request(std::string_view method, core::ObjectId id,
-          const std::filesystem::path *upload = nullptr,
-          const std::filesystem::path *download = nullptr) const {
+  request_once(std::string_view method, core::ObjectId id,
+               const std::filesystem::path *upload = nullptr,
+               const std::filesystem::path *download = nullptr) const {
     static const auto initialized = curl_global_init(CURL_GLOBAL_DEFAULT);
     if (initialized != CURLE_OK)
       return std::unexpected(
@@ -361,6 +370,28 @@ struct S3BlobStore::State {
                             : static_cast<std::uint64_t>(content_length)};
   }
 
+  core::Result<Response>
+  request(std::string_view method, core::ObjectId id,
+          const std::filesystem::path *upload = nullptr,
+          const std::filesystem::path *download = nullptr) const {
+    for (std::size_t attempt = 0; attempt < options.maximum_attempts;
+         ++attempt) {
+      auto response = request_once(method, id, upload, download);
+      const bool retryable =
+          response
+              ? (response->status == 408 || response->status == 425 ||
+                 response->status == 429 ||
+                 (response->status >= 500 && response->status < 600))
+              : (response.error().code == core::ErrorCode::Timeout ||
+                 response.error().code == core::ErrorCode::StorageUnavailable);
+      if (!retryable || attempt + 1 == options.maximum_attempts)
+        return response;
+      std::this_thread::sleep_for(options.retry_delay *
+                                  (std::size_t{1} << attempt));
+    }
+    std::unreachable();
+  }
+
   S3BlobStoreOptions options;
 };
 
@@ -445,12 +476,13 @@ S3BlobStore::open(S3BlobStoreOptions options) {
       options.bucket.empty() || options.region.empty() ||
       options.staging_directory.empty() ||
       options.connect_timeout.count() <= 0 ||
-      options.request_timeout.count() <= 0 || options.access_key_id.empty() ||
-      options.secret_access_key.empty())
+      options.request_timeout.count() <= 0 || options.maximum_attempts == 0 ||
+      options.maximum_attempts > 10 || options.retry_delay.count() < 0 ||
+      options.access_key_id.empty() || options.secret_access_key.empty())
     return std::unexpected(core::Error{
         core::ErrorCode::InvalidArgument,
         "S3 blob storage requires an HTTP(S) endpoint, bucket, region, staging "
-        "directory, timeouts, and credentials"});
+        "directory, timeouts, bounded retry settings, and credentials"});
   std::error_code directory_error;
   std::filesystem::create_directories(options.staging_directory,
                                       directory_error);
