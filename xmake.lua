@@ -176,6 +176,12 @@ target("sakuin-storage-benchmark")
   add_deps("sakuin-core", "sakuin-model", "sakuin-storage",
            "sakuin-model-codecs")
 
+target("sakuin-search-benchmark")
+  set_kind("binary")
+  set_default(false)
+  add_files("benchmarks/search.cpp")
+  add_deps("sakuin-core", "sakuin-model", "sakuin-search")
+
 target("sakuin-storage-value-tests")
   set_kind("binary")
   add_files("tests/storage/value_types.cpp")

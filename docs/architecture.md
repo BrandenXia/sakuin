@@ -548,6 +548,15 @@ xmake build sakuin-storage-benchmark
 xmake run sakuin-storage-benchmark 100000 65536
 ```
 
+The search microbenchmark builds a path-heavy compact projection and compares
+absent, sparse-hit, and common-term query costs. Optional arguments select the
+record and query counts:
+
+```bash
+xmake build sakuin-search-benchmark
+xmake run sakuin-search-benchmark 5000 100
+```
+
 `scripts/benchmark-deployment.sh` provides a read-only post-deployment
 benchmark for the public health endpoint, native and Torznab searches, operator
 status, and Prometheus serialization. It reports request throughput and latency
