@@ -66,6 +66,8 @@ algorithm_name(index::DuplicateFingerprintAlgorithm algorithm) {
     return "normalized_metadata_v1";
   case index::DuplicateFingerprintAlgorithm::PayloadLayoutV1:
     return "payload_layout_v1";
+  case index::DuplicateFingerprintAlgorithm::ReleaseIdentityV1:
+    return "release_identity_v1";
   }
   std::unreachable();
 }

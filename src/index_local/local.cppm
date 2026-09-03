@@ -75,10 +75,10 @@ private:
 namespace sakuin::index {
 namespace {
 
-// V2 adds the payload-layout fingerprint. The projection is disposable, so an
+// V3 adds the release-identity fingerprint. The projection is disposable, so an
 // older file is intentionally rejected and rebuilt instead of being accepted
 // with silently incomplete memberships.
-constexpr std::string_view Magic{"sakuin-duplicate-index-v2\n"};
+constexpr std::string_view Magic{"sakuin-duplicate-index-v3\n"};
 constexpr std::uint64_t MinimumEntryBytes = 1U + 32U + 8U + 20U;
 
 core::Error io_error(std::string action, const std::filesystem::path &path,
@@ -258,7 +258,7 @@ core::Result<StoredIndex> load(const std::filesystem::path &path) {
     if (!member_count)
       return std::unexpected(member_count.error());
     if (*algorithm > static_cast<std::uint8_t>(
-                         DuplicateFingerprintAlgorithm::PayloadLayoutV1))
+                         DuplicateFingerprintAlgorithm::ReleaseIdentityV1))
       return std::unexpected(
           core::Error{core::ErrorCode::UnsupportedFormat,
                       "Local duplicate index uses an unknown algorithm"});

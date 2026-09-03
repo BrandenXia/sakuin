@@ -563,11 +563,13 @@ duplicate_groups_query(std::string_view encoded) {
         index::DuplicateFingerprintAlgorithm::NormalizedMetadataV1;
   else if (algorithm->second == "payload_layout_v1")
     result.algorithm = index::DuplicateFingerprintAlgorithm::PayloadLayoutV1;
+  else if (algorithm->second == "release_identity_v1")
+    result.algorithm = index::DuplicateFingerprintAlgorithm::ReleaseIdentityV1;
   else
     return std::unexpected(core::Error{
         core::ErrorCode::InvalidQuery,
         "algorithm must be exact_file_layout_v1, normalized_metadata_v1, or "
-        "payload_layout_v1"});
+        "payload_layout_v1, or release_identity_v1"});
 
   auto minimum = optional_number<std::size_t>(*parameters, "min_members");
   auto offset = optional_number<std::size_t>(*parameters, "offset");

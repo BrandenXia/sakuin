@@ -126,7 +126,7 @@ core::Result<core::ByteBuffer> openapi_document() {
             "name": "algorithm",
             "in": "query",
             "required": true,
-            "schema": {"type": "string", "enum": ["exact_file_layout_v1", "normalized_metadata_v1", "payload_layout_v1"]}
+            "schema": {"type": "string", "enum": ["exact_file_layout_v1", "normalized_metadata_v1", "payload_layout_v1", "release_identity_v1"]}
           },
           {"name": "min_members", "in": "query", "schema": {"type": "integer", "minimum": 2, "default": 2}},
           {"$ref": "#/components/parameters/Offset"},
