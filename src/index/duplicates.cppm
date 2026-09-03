@@ -19,7 +19,8 @@ export namespace sakuin::index {
 enum class DuplicateFingerprintAlgorithm : std::uint8_t {
   ExactFileLayoutV1,
   NormalizedMetadataV1,
-  PayloadLayoutV1
+  PayloadLayoutV1,
+  ReleaseIdentityV1
 };
 
 struct DuplicateFingerprint {
@@ -111,7 +112,8 @@ namespace {
 constexpr std::array DuplicateFingerprintAlgorithms{
     DuplicateFingerprintAlgorithm::ExactFileLayoutV1,
     DuplicateFingerprintAlgorithm::NormalizedMetadataV1,
-    DuplicateFingerprintAlgorithm::PayloadLayoutV1};
+    DuplicateFingerprintAlgorithm::PayloadLayoutV1,
+    DuplicateFingerprintAlgorithm::ReleaseIdentityV1};
 
 // A tiny single file does not carry enough structure for name-independent
 // matching. Large files retain enough entropy in their exact byte length to
@@ -164,6 +166,101 @@ std::string normalized_extension(std::string_view path) {
   return normalized_text(path.substr(dot + 1), false);
 }
 
+bool release_noise(std::string_view token) {
+  static constexpr std::array values{
+      std::string_view{"480p"},    std::string_view{"576p"},
+      std::string_view{"720p"},    std::string_view{"1080p"},
+      std::string_view{"1080i"},   std::string_view{"2160p"},
+      std::string_view{"4320p"},   std::string_view{"4k"},
+      std::string_view{"8k"},      std::string_view{"bluray"},
+      std::string_view{"bdrip"},   std::string_view{"brrip"},
+      std::string_view{"webrip"},  std::string_view{"webdl"},
+      std::string_view{"web"},     std::string_view{"dl"},
+      std::string_view{"hdtv"},    std::string_view{"dvdrip"},
+      std::string_view{"remux"},   std::string_view{"x264"},
+      std::string_view{"x265"},    std::string_view{"h264"},
+      std::string_view{"h265"},    std::string_view{"avc"},
+      std::string_view{"hevc"},    std::string_view{"av1"},
+      std::string_view{"xvid"},    std::string_view{"10bit"},
+      std::string_view{"8bit"},    std::string_view{"hdr"},
+      std::string_view{"hdr10"},   std::string_view{"dv"},
+      std::string_view{"dolby"},   std::string_view{"vision"},
+      std::string_view{"aac"},     std::string_view{"ac3"},
+      std::string_view{"eac3"},    std::string_view{"ddp"},
+      std::string_view{"dts"},     std::string_view{"truehd"},
+      std::string_view{"atmos"},   std::string_view{"flac"},
+      std::string_view{"proper"},  std::string_view{"repack"},
+      std::string_view{"internal"}};
+  return std::ranges::find(values, token) != values.end();
+}
+
+std::optional<std::string> release_identity(std::string_view name) {
+  std::string_view identity_source = name;
+  const auto group_separator = name.find_last_of('-');
+  if (group_separator != std::string_view::npos) {
+    const auto suffix = name.substr(group_separator + 1);
+    const bool plausible_group =
+        suffix.size() >= 2 && suffix.size() <= 20 &&
+        std::ranges::all_of(suffix, [](const auto character) {
+          return std::isalnum(static_cast<unsigned char>(character));
+        });
+    bool packaging_marker{};
+    std::string candidate;
+    const auto inspect = [&] {
+      if (!candidate.empty() && release_noise(candidate))
+        packaging_marker = true;
+      candidate.clear();
+    };
+    if (plausible_group) {
+      for (const auto character : name.substr(0, group_separator)) {
+        const auto byte = static_cast<unsigned char>(character);
+        if (byte < 128 && std::isalnum(byte))
+          candidate.push_back(static_cast<char>(std::tolower(byte)));
+        else
+          inspect();
+      }
+      inspect();
+    }
+    if (packaging_marker)
+      identity_source = name.substr(0, group_separator);
+  }
+
+  std::vector<std::string> tokens;
+  std::string token;
+  const auto flush = [&] {
+    if (token.empty())
+      return;
+    if (!release_noise(token))
+      tokens.push_back(std::move(token));
+    token.clear();
+  };
+  for (const auto character : identity_source) {
+    const auto byte = static_cast<unsigned char>(character);
+    if (byte >= 128)
+      token.push_back(character);
+    else if (std::isalnum(byte))
+      token.push_back(static_cast<char>(std::tolower(byte)));
+    else
+      flush();
+  }
+  flush();
+  if (tokens.size() < 2 || std::ranges::none_of(tokens, [](const auto &value) {
+        return value.size() >= 3 &&
+               std::ranges::any_of(value, [](const auto character) {
+                 const auto byte = static_cast<unsigned char>(character);
+                 return byte >= 128 || std::isalpha(byte);
+               });
+      }))
+    return std::nullopt;
+  std::string result;
+  for (const auto &value : tokens) {
+    if (!result.empty())
+      result.push_back(' ');
+    result += value;
+  }
+  return result;
+}
+
 core::ByteBuffer fingerprint_material(const model::TorrentRecord &record,
                                       DuplicateFingerprintAlgorithm algorithm) {
   core::ByteBuffer result;
@@ -175,10 +272,19 @@ core::ByteBuffer fingerprint_material(const model::TorrentRecord &record,
       return std::string_view{"sakuin.duplicate.normalized-metadata.v1"};
     case DuplicateFingerprintAlgorithm::PayloadLayoutV1:
       return std::string_view{"sakuin.duplicate.payload-layout.v1"};
+    case DuplicateFingerprintAlgorithm::ReleaseIdentityV1:
+      return std::string_view{"sakuin.duplicate.release-identity.v1"};
     }
     std::unreachable();
   }();
   append_string(result, domain);
+  if (algorithm == DuplicateFingerprintAlgorithm::ReleaseIdentityV1) {
+    const auto identity = record.name ? release_identity(*record.name)
+                                      : std::optional<std::string>{};
+    if (identity)
+      append_string(result, *identity);
+    return result;
+  }
   append_u64(result, record.total_size);
 
   std::vector<std::pair<std::string, std::uint64_t>> files;
@@ -195,6 +301,8 @@ core::ByteBuffer fingerprint_material(const model::TorrentRecord &record,
     case DuplicateFingerprintAlgorithm::PayloadLayoutV1:
       identity = normalized_extension(file.path);
       break;
+    case DuplicateFingerprintAlgorithm::ReleaseIdentityV1:
+      std::unreachable();
     }
     files.emplace_back(std::move(identity), file.size);
   }
@@ -217,7 +325,8 @@ duplicate_fingerprint(const model::TorrentRecord &record,
                       DuplicateFingerprintAlgorithm algorithm) {
   if (algorithm != DuplicateFingerprintAlgorithm::ExactFileLayoutV1 &&
       algorithm != DuplicateFingerprintAlgorithm::NormalizedMetadataV1 &&
-      algorithm != DuplicateFingerprintAlgorithm::PayloadLayoutV1)
+      algorithm != DuplicateFingerprintAlgorithm::PayloadLayoutV1 &&
+      algorithm != DuplicateFingerprintAlgorithm::ReleaseIdentityV1)
     return std::unexpected(
         core::Error{core::ErrorCode::InvalidArgument,
                     "Unknown duplicate fingerprint algorithm"});
@@ -228,6 +337,9 @@ duplicate_fingerprint(const model::TorrentRecord &record,
   if (algorithm == DuplicateFingerprintAlgorithm::PayloadLayoutV1 &&
       record.files.size() == 1 &&
       record.files.front().size < MinimumSingleFilePayloadBytes)
+    return std::optional<DuplicateFingerprint>{};
+  if (algorithm == DuplicateFingerprintAlgorithm::ReleaseIdentityV1 &&
+      (!record.name || !release_identity(*record.name)))
     return std::optional<DuplicateFingerprint>{};
   auto material = fingerprint_material(record, algorithm);
   return std::optional<DuplicateFingerprint>{DuplicateFingerprint{
@@ -366,7 +478,9 @@ DuplicateIndex::from_state(DuplicateIndexState state) {
         entry.fingerprint.algorithm !=
             DuplicateFingerprintAlgorithm::NormalizedMetadataV1 &&
         entry.fingerprint.algorithm !=
-            DuplicateFingerprintAlgorithm::PayloadLayoutV1)
+            DuplicateFingerprintAlgorithm::PayloadLayoutV1 &&
+        entry.fingerprint.algorithm !=
+            DuplicateFingerprintAlgorithm::ReleaseIdentityV1)
       return std::unexpected(
           core::Error{core::ErrorCode::UnsupportedFormat,
                       "Duplicate index uses an unknown algorithm"});

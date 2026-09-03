@@ -266,14 +266,20 @@ the source of truth after any derived-index loss. Query evaluation counts every
 match for exact API totals but retains and sorts only the best `offset + limit`
 matches, bounding the transient working set for normal first-page searches.
 
-Duplicate detection publishes three explicitly versioned fingerprints: an
-exact sorted file-layout identity, a normalized name/path identity, and a
-conservative payload-layout similarity signature. The latter ignores names and
-directories while retaining exact file sizes and normalized extensions, so it
-can group renamed or reorganized payloads. Small single-file torrents are
-excluded from that signature because their layout is not discriminative enough.
-These are likely-duplicate signals rather than content hashes. Versioning the
-algorithms avoids silently changing group semantics as detection expands.
+Duplicate detection publishes four explicitly versioned fingerprints: an exact
+sorted file-layout identity, a normalized name/path identity, a conservative
+payload-layout similarity signature, and a fuzzy release identity. The payload
+signature ignores names and directories while retaining exact file sizes and
+normalized extensions, so it can group renamed or reorganized payloads. Small
+single-file torrents are excluded from that signature because their layout is
+not discriminative enough. Release identity normalizes separators and ignores
+a deliberately narrow vocabulary of resolution, source, codec, audio, and
+repack markers. A trailing alphanumeric release-group suffix is ignored only
+when one of those packaging markers precedes it, while titles, years, episode
+IDs, and versions remain significant. Weak single-token identities are
+excluded. These are likely-duplicate signals rather than content hashes.
+Versioning the algorithms avoids silently changing group semantics as detection
+expands.
 
 ## API and credentials
 
@@ -582,9 +588,9 @@ stabilizes warrants a runtime investigation.
 - The search engine is a local derived implementation rather than an external
   cluster.
 - Coordinator recovery is durable on one host but not replicated.
-- Duplicate matching uses exact content IDs, normalized metadata, and renamed
-  payload-layout fingerprints; it does not yet perform probabilistic semantic
-  similarity.
+- Duplicate matching uses exact content IDs, normalized metadata, renamed
+  payload-layout fingerprints, and conservative fuzzy release identities; it
+  does not yet perform probabilistic cross-title semantic similarity.
 - There is currently no browser UI. Classification is metadata-based and
   combines built-in deterministic evidence with optional operator-defined
   content-kind rules and an optional locally learned fallback.

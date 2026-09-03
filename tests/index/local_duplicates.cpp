@@ -32,12 +32,12 @@ sakuin::model::TorrentRecord record(std::uint8_t hash, std::string name,
           .files = {{.path = std::move(path), .size = 42}}};
 }
 
-sakuin::model::TorrentRecord payload_record(std::uint8_t hash,
+sakuin::model::TorrentRecord payload_record(std::uint8_t hash, std::string name,
                                             std::string prefix) {
   return {.info_hash = info_hash(hash),
           .first_seen = {},
           .last_seen = {},
-          .name = prefix,
+          .name = std::move(name),
           .total_size = 100,
           .files = {{.path = prefix + "/document.txt", .size = 10},
                     {.path = prefix + "/archive.bin", .size = 90}}};
@@ -57,12 +57,13 @@ int main() {
   if (!catalog)
     return 1;
   storage::TorrentDataset torrents{blobs, **catalog};
-  const std::array records{record(1, "Example", "payload.bin"),
-                           record(2, "Other", "payload.bin"),
-                           record(3, " example ", "PAYLOAD.BIN"),
-                           record(4, "Unique", "different.bin"),
-                           payload_record(6, "first"),
-                           payload_record(7, "renamed")};
+  const std::array records{
+      record(1, "Example", "payload.bin"),
+      record(2, "Other", "payload.bin"),
+      record(3, " example ", "PAYLOAD.BIN"),
+      record(4, "Unique", "different.bin"),
+      payload_record(6, "Example Show S01E02 1080p WEB-DL", "first"),
+      payload_record(7, "example.show.s01e02.2160p.bluray", "renamed")};
   auto write = torrents.begin_write();
   if (!write || !(*write)->append(records) || !(*write)->commit())
     return 2;
@@ -74,7 +75,7 @@ int main() {
   auto rebuilt = index::LocalDuplicateIndex::rebuild(path, **snapshot);
   if (!rebuilt || (*rebuilt)->stats().source_generation != 1 ||
       (*rebuilt)->stats().records_indexed != 6 ||
-      (*rebuilt)->stats().fingerprints != 14 || (*rebuilt)->stats().groups != 3)
+      (*rebuilt)->stats().fingerprints != 16 || (*rebuilt)->stats().groups != 4)
     return 4;
   auto exact = (*rebuilt)->groups(
       index::DuplicateFingerprintAlgorithm::ExactFileLayoutV1);
@@ -84,13 +85,17 @@ int main() {
       (*rebuilt)->groups(index::DuplicateFingerprintAlgorithm::PayloadLayoutV1);
   if (!payload || payload->size() != 1 || payload->front().torrents.size() != 2)
     return 5;
+  auto release = (*rebuilt)->groups(
+      index::DuplicateFingerprintAlgorithm::ReleaseIdentityV1);
+  if (!release || release->size() != 1 || release->front().torrents.size() != 2)
+    return 5;
 
   rebuilt->reset();
   auto reopened = index::LocalDuplicateIndex::open(path);
   if (!reopened || (*reopened)->stats().source_generation != 1 ||
       (*reopened)->matches(info_hash(1)).size() != 2 ||
       (*reopened)->matches(info_hash(4)).size() != 0 ||
-      (*reopened)->matches(info_hash(6)).size() != 1)
+      (*reopened)->matches(info_hash(6)).size() != 2)
     return 6;
 
   {

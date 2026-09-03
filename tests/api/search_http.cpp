@@ -117,8 +117,15 @@ int main() {
       .torrents = {record.info_hash, core::InfoHash{}}};
   duplicate_group.fingerprint.digest.bytes.fill(0xab);
   duplicate_group.torrents[1].bytes.fill(0x22);
+  index::DuplicateGroup release_group{
+      .fingerprint =
+          {.algorithm =
+               index::DuplicateFingerprintAlgorithm::ReleaseIdentityV1},
+      .torrents = {movie.info_hash, series.info_hash}};
+  release_group.fingerprint.digest.bytes.fill(0xcd);
   duplicates.state.stats.source_generation = 7;
   duplicates.state.entries.push_back(std::move(duplicate_group));
+  duplicates.state.entries.push_back(std::move(release_group));
 
   Status status;
   status.snapshot.state = "running";
@@ -225,6 +232,7 @@ int main() {
       !body(*openapi).contains("rule_id") ||
       !body(*openapi).contains("\"minimum_label_confidence\"") ||
       !body(*openapi).contains("payload_layout_v1") ||
+      !body(*openapi).contains("release_identity_v1") ||
       !body(*openapi).contains("ServiceErrorStatus") ||
       !body(*openapi).contains("\"bearerAuth\"") ||
       body(*openapi).contains("sakuin_reader_"))
@@ -374,6 +382,19 @@ int main() {
       handler.handle(std::move(payload_duplicate_query));
   if (!payload_duplicate_groups || payload_duplicate_groups->status != 200 ||
       !body(*payload_duplicate_groups).contains("\"total_groups\":0"))
+    return 9;
+
+  api::HttpRequest release_duplicate_query{
+      .method = api::HttpMethod::Get,
+      .target = "/v1/duplicates?algorithm=release_identity_v1&limit=10",
+      .headers = {{"authorization", credential("reader", secret)}}};
+  auto release_duplicate_groups =
+      handler.handle(std::move(release_duplicate_query));
+  if (!release_duplicate_groups || release_duplicate_groups->status != 200 ||
+      !body(*release_duplicate_groups).contains("\"total_groups\":1") ||
+      !body(*release_duplicate_groups)
+           .contains("\"algorithm\":\"release_identity_v1\"") ||
+      !body(*release_duplicate_groups).contains("cdcdcdcdcdcdcdcd"))
     return 9;
 
   api::HttpRequest duplicate_match{
