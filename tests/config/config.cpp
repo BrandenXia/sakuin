@@ -75,6 +75,8 @@ region = "us-test-1"
 prefix = "production/catalog"
 connect_timeout_ms = 4000
 request_timeout_ms = 120000
+maximum_attempts = 4
+retry_delay_ms = 350
 verify_tls = true
 
 [storage.compression]
@@ -221,6 +223,10 @@ tls_server_name = "coordinator.internal"
                 std::string{"8"}},
       std::pair{std::string{"SAKUIN_STORAGE_S3_BUCKET"},
                 std::string{"sakuin-data-override"}},
+      std::pair{std::string{"SAKUIN_STORAGE_S3_MAXIMUM_ATTEMPTS"},
+                std::string{"5"}},
+      std::pair{std::string{"SAKUIN_STORAGE_S3_RETRY_DELAY_MS"},
+                std::string{"450"}},
       std::pair{std::string{"SAKUIN_STORAGE_COMPACTION_MAXIMUM_WARM_SEGMENTS"},
                 std::string{"5"}},
       std::pair{
@@ -332,6 +338,8 @@ tls_server_name = "coordinator.internal"
       loaded.storage.s3.prefix != "production/catalog" ||
       loaded.storage.s3.connect_timeout != std::chrono::seconds{4} ||
       loaded.storage.s3.request_timeout != std::chrono::minutes{2} ||
+      loaded.storage.s3.maximum_attempts != 5 ||
+      loaded.storage.s3.retry_delay != std::chrono::milliseconds{450} ||
       !loaded.storage.s3.verify_tls || loaded.storage.compression_level != 5 ||
       loaded.storage.compaction_minimum_segments != 8 ||
       loaded.storage.compaction_maximum_warm_segments != 5 ||
@@ -495,6 +503,10 @@ tls_server_name = "coordinator.internal"
   invalid_s3.storage.backend = config::StorageBackend::S3;
   if (config::validate(invalid_s3))
     return 17;
+  invalid_s3.storage.s3.bucket = "configured";
+  invalid_s3.storage.s3.maximum_attempts = 11;
+  if (config::validate(invalid_s3))
+    return 27;
   auto invalid_retention = config::defaults();
   invalid_retention.storage.retention.enabled = true;
   invalid_retention.storage.retention.observation_max_age =

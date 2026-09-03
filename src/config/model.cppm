@@ -121,6 +121,8 @@ struct StorageConfig {
     std::string prefix{"sakuin"};
     core::Duration connect_timeout{std::chrono::seconds{10}};
     core::Duration request_timeout{std::chrono::minutes{5}};
+    std::size_t maximum_attempts{3};
+    core::Duration retry_delay{std::chrono::milliseconds{200}};
     bool verify_tls{true};
   };
 
@@ -626,6 +628,16 @@ core::Result<void> apply(AppConfig &config, const ConfigOverlay &overlay) {
       if (!value)
         return std::unexpected(value.error());
       config.storage.s3.request_timeout = *value;
+    } else if (name == "storage.s3.maximum_attempts") {
+      auto value = unsigned_value<std::size_t>(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.s3.maximum_attempts = *value;
+    } else if (name == "storage.s3.retry_delay_ms") {
+      auto value = duration_ms(text, name);
+      if (!value)
+        return std::unexpected(value.error());
+      config.storage.s3.retry_delay = *value;
     } else if (name == "storage.s3.verify_tls") {
       auto value = boolean_value(text, name);
       if (!value)
@@ -1141,10 +1153,13 @@ core::Result<void> validate(const AppConfig &config) {
         !config.storage.s3.endpoint.starts_with("http://")) ||
        config.storage.s3.bucket.empty() || config.storage.s3.region.empty() ||
        config.storage.s3.connect_timeout <= core::Duration::zero() ||
-       config.storage.s3.request_timeout <= core::Duration::zero()))
+       config.storage.s3.request_timeout <= core::Duration::zero() ||
+       config.storage.s3.maximum_attempts == 0 ||
+       config.storage.s3.maximum_attempts > 10 ||
+       config.storage.s3.retry_delay < core::Duration::zero()))
     return std::unexpected(invalid(
         "S3 storage requires an HTTP(S) endpoint, bucket, region, and positive "
-        "timeouts"));
+        "timeouts and one to ten request attempts"));
   if (config.storage.compaction_minimum_segments < 2)
     return std::unexpected(
         invalid("Compaction requires at least two input segments"));

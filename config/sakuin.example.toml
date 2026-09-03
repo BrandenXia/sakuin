@@ -90,6 +90,8 @@ segment_target_bytes = 134217728
 # prefix = "catalog"
 # connect_timeout_ms = 10000
 # request_timeout_ms = 300000
+# maximum_attempts = 3
+# retry_delay_ms = 200
 # verify_tls = true
 
 [storage.compression]

@@ -148,7 +148,10 @@ use bounded local staging; a downloaded object is size-checked and hashed
 before a reader can observe it. Requests use SigV4 with credentials supplied
 through `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and the optional
 `AWS_SESSION_TOKEN`. Path-style bucket URLs support AWS S3 and compatible
-endpoints without adding provider-specific configuration.
+endpoints without adding provider-specific configuration. Timeout and
+transport-unavailable failures, HTTP 408/425/429, and 5xx responses use a
+bounded exponential retry policy. Authentication, authorization, missing
+objects, checksum failures, and local I/O errors are not retried.
 
 ### Compaction and retention
 
