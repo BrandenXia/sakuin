@@ -47,7 +47,11 @@ private:
     // file paths. This keeps one allocation instead of retaining the full
     // canonical file vector and one allocation per path.
     std::string search_fields;
-    std::array<std::uint64_t, 2> trigram_filter{};
+    // A fixed-size Bloom filter rejects most text misses without retaining an
+    // unbounded posting list. Four Ki-bits remains predictable per record and
+    // avoids the near-total saturation caused by the former 128-bit filter on
+    // torrents with many file paths.
+    std::array<std::uint64_t, 64> trigram_filter{};
     classification::Classification classification;
     std::uint32_t category_mask{};
   };
@@ -126,27 +130,27 @@ std::uint32_t trigram(std::string_view value, std::size_t offset) {
              static_cast<unsigned char>(value[offset + 2]));
 }
 
+template <std::size_t Words>
 void add_trigrams(std::string_view value,
-                  std::array<std::uint64_t, 2> &filter) {
+                  std::array<std::uint64_t, Words> &filter) {
+  static_assert(std::has_single_bit(Words * 64U));
   if (value.size() < 3)
     return;
+  constexpr auto mask = Words * 64U - 1U;
   for (std::size_t offset = 0; offset + 2 < value.size(); ++offset) {
     const auto key = static_cast<std::uint64_t>(trigram(value, offset));
     const auto mixed = key * 0x9e3779b97f4a7c15ULL;
-    for (const auto bit : {mixed & 127U, (mixed >> 17U) & 127U})
+    for (const auto bit : {mixed & mask, (mixed >> 17U) & mask})
       filter[bit / 64U] |= std::uint64_t{1} << (bit % 64U);
   }
 }
 
-bool maybe_contains(const std::array<std::uint64_t, 2> &filter,
-                    std::span<const std::string> query_terms) {
-  for (const auto &term : query_terms) {
-    std::array<std::uint64_t, 2> required{};
-    add_trigrams(term, required);
-    if ((filter[0] & required[0]) != required[0] ||
-        (filter[1] & required[1]) != required[1])
+template <std::size_t Words>
+bool maybe_contains(const std::array<std::uint64_t, Words> &filter,
+                    const std::array<std::uint64_t, Words> &required) {
+  for (std::size_t word = 0; word < Words; ++word)
+    if ((filter[word] & required[word]) != required[word])
       return false;
-  }
   return true;
 }
 
@@ -500,6 +504,9 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
     return std::unexpected(
         invalid("Search first-seen lower bound exceeds last-seen upper bound"));
   const auto query_terms = terms(query.text);
+  std::array<std::uint64_t, 64> required_trigrams{};
+  for (const auto &term : query_terms)
+    add_trigrams(term, required_trigrams);
   std::shared_lock lock{mutex_};
   const auto &state = *state_;
 
@@ -514,7 +521,7 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
     // defensive so an invalid incremental record cannot expose an unknown
     // size as a real zero-byte torrent through native or Torznab search.
     if (!indexed.name || indexed.file_count == 0 ||
-        !maybe_contains(indexed.trigram_filter, query_terms))
+        !maybe_contains(indexed.trigram_filter, required_trigrams))
       return;
     const bool adult = contains_category(indexed.category_mask,
                                          classification::MediaCategory::Adult);
