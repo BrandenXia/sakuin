@@ -253,7 +253,7 @@ state, kind, confidence, and label facets with bounded pagination. Classifier
 facets do not override the independently configured Adult visibility policy.
 The in-memory search view is a compact projection rather than a copy of the
 canonical torrent model: it retains display/search text, metadata summaries,
-classification output, and a fixed 128-bit trigram filter per record. The
+classification output, and a fixed 4096-bit trigram filter per record. The
 filter cheaply rejects impossible candidates while the authoritative substring
 matcher and scorer preserve name, path, and infohash semantics. It replaces the
 unbounded trigram posting map and avoids retaining per-file sizes that search
@@ -262,7 +262,9 @@ metadata backfill but are omitted from the search projection until metadata
 makes them searchable. Incremental refreshes append a checksummed derived
 update log and mutate the projection under its ownership lock; a full rebuild
 replaces the base file and clears the log. Canonical torrent segments remain
-the source of truth after any derived-index loss.
+the source of truth after any derived-index loss. Query evaluation counts every
+match for exact API totals but retains and sorts only the best `offset + limit`
+matches, bounding the transient working set for normal first-page searches.
 
 Duplicate detection publishes three explicitly versioned fingerprints: an
 exact sorted file-layout identity, a normalized name/path identity, and a
@@ -549,8 +551,8 @@ xmake run sakuin-storage-benchmark 100000 65536
 ```
 
 The search microbenchmark builds a path-heavy compact projection and compares
-absent, sparse-hit, and common-term query costs. Optional arguments select the
-record and query counts:
+broad browsing, absent, sparse-hit, and common-term query costs. Optional
+arguments select the record and query counts:
 
 ```bash
 xmake build sakuin-search-benchmark

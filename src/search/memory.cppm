@@ -515,6 +515,22 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
     std::uint32_t score{};
   };
   std::vector<Match> matches;
+  const auto retained_matches =
+      query.offset >= state.records.size()
+          ? 0U
+          : query.offset +
+                std::min(query.limit, state.records.size() - query.offset);
+  matches.reserve(retained_matches);
+  std::uint64_t total_matches{};
+  const auto better = [&](const auto &left, const auto &right) {
+    if (left.score != right.score)
+      return left.score > right.score;
+    const auto &left_record = state.records[left.ordinal];
+    const auto &right_record = state.records[right.ordinal];
+    if (left_record.last_seen != right_record.last_seen)
+      return left_record.last_seen > right_record.last_seen;
+    return left_record.info_hash.bytes < right_record.info_hash.bytes;
+  };
   const auto visit = [&](std::size_t ordinal) {
     const auto &indexed = state.records[ordinal];
     // The projection excludes observation-only placeholders. Keep this guard
@@ -555,20 +571,23 @@ InMemorySearchIndex::search(const SearchQuery &query) const {
                                    indexed.name.has_value(), query_terms);
     if (!score)
       return;
-    matches.push_back({.ordinal = ordinal, .score = *score});
+    ++total_matches;
+    if (retained_matches == 0)
+      return;
+    Match match{.ordinal = ordinal, .score = *score};
+    if (matches.size() < retained_matches) {
+      matches.push_back(match);
+      std::ranges::push_heap(matches, better);
+    } else if (better(match, matches.front())) {
+      std::ranges::pop_heap(matches, better);
+      matches.back() = match;
+      std::ranges::push_heap(matches, better);
+    }
   };
   for (std::size_t ordinal = 0; ordinal < state.records.size(); ++ordinal)
     visit(ordinal);
-  std::ranges::sort(matches, [&](const auto &left, const auto &right) {
-    if (left.score != right.score)
-      return left.score > right.score;
-    const auto &left_record = state.records[left.ordinal];
-    const auto &right_record = state.records[right.ordinal];
-    if (left_record.last_seen != right_record.last_seen)
-      return left_record.last_seen > right_record.last_seen;
-    return left_record.info_hash.bytes < right_record.info_hash.bytes;
-  });
-  SearchResult result{.total_matches = matches.size(),
+  std::ranges::sort(matches, better);
+  SearchResult result{.total_matches = total_matches,
                       .source_generation = state.source_generation};
   if (query.offset < matches.size()) {
     const auto count = std::min(query.limit, matches.size() - query.offset);

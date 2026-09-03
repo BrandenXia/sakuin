@@ -126,7 +126,8 @@ int main(int argc, char **argv) {
             << "rebuild_seconds=" << rebuild_seconds << '\n';
 
   std::uint64_t checksum{};
-  if (!run_queries(index, "absent", "definitely-absent-token", query_count, 0,
+  if (!run_queries(index, "browse", "", query_count, record_count, checksum) ||
+      !run_queries(index, "absent", "definitely-absent-token", query_count, 0,
                    checksum) ||
       !run_queries(index, "sparse", "needle", query_count, 1, checksum) ||
       !run_queries(index, "common", "episode", query_count, record_count,
