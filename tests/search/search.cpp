@@ -373,11 +373,29 @@ int main() {
   const auto compact_stats = compact_index.classification_stats();
   auto compact_match =
       compact_index.search({.text = "episode-9999-file-7", .limit = 10});
+  auto compact_first_page = compact_index.search({.limit = 10});
+  auto compact_deep_page =
+      compact_index.search({.offset = compact_records - 10, .limit = 10});
+  auto compact_past_end =
+      compact_index.search({.offset = compact_records + 1, .limit = 10});
   if (compact_stats.total_records != compact_records ||
       compact_stats.estimated_memory_bytes == 0 ||
       compact_stats.estimated_memory_bytes > 16U * 1024U * 1024U ||
       !compact_match || compact_match->total_matches != 1)
     return 37;
+  if (!compact_first_page ||
+      compact_first_page->total_matches != compact_records ||
+      compact_first_page->hits.size() != 10 ||
+      compact_first_page->hits.front().name != "Compact Search Record 9999" ||
+      compact_first_page->hits.back().name != "Compact Search Record 9990" ||
+      !compact_deep_page ||
+      compact_deep_page->total_matches != compact_records ||
+      compact_deep_page->hits.size() != 10 ||
+      compact_deep_page->hits.front().name != "Compact Search Record 9" ||
+      compact_deep_page->hits.back().name != "Compact Search Record 0" ||
+      !compact_past_end || compact_past_end->total_matches != compact_records ||
+      !compact_past_end->hits.empty())
+    return 41;
 
   search::InMemorySearchIndex placeholder_index({.enabled = false});
   auto placeholder_rebuild = placeholder_index.begin_rebuild(1);
